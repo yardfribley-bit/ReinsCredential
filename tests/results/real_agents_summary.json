@@ -1,0 +1,628 @@
+{
+  "run_id": "db396633-7e6c-47b4-b494-b7f33169096f",
+  "test_kind": "real_agent_acceptance",
+  "synthetic_only": true,
+  "limits": [
+    "polling can miss short-lived activity",
+    "descriptor presence is not proof of read or upload",
+    "real client invocation may fail due to auth, network or sandbox policy"
+  ],
+  "clients": {
+    "codex_cli": {
+      "client_pid": 96302,
+      "exit_code": -15,
+      "root_process_observed": true,
+      "failure_category": "client_network_or_mcp_startup_timeout",
+      "probe_proof_valid": false,
+      "tool_action_verified": false,
+      "model_invocation_attempted": true,
+      "failure_categories": [
+        "client_network_or_mcp_startup_timeout"
+      ]
+    },
+    "cursor_cli": {
+      "client_pid": 96303,
+      "exit_code": 1,
+      "root_process_observed": true,
+      "failure_category": "login_required",
+      "probe_proof_valid": false,
+      "tool_action_verified": false,
+      "model_invocation_attempted": true,
+      "failure_categories": [
+        "login_required"
+      ]
+    },
+    "workbuddy_ai_cli": {
+      "client_pid": 96304,
+      "exit_code": 0,
+      "root_process_observed": true,
+      "failure_category": "login_required",
+      "probe_proof_valid": false,
+      "tool_action_verified": false,
+      "model_invocation_attempted": true,
+      "failure_categories": [
+        "login_required",
+        "client_proxy_initialization_error"
+      ]
+    },
+    "current_codex_tool": {
+      "client_pid": 96305,
+      "exit_code": 0,
+      "root_process_observed": true,
+      "failure_category": "none",
+      "probe_proof_valid": true,
+      "probe_pid": 96305,
+      "probe_completed": true,
+      "sensitive_fd_observed": true,
+      "root_in_observed_ancestor_chain": true,
+      "loopback_probe_connected": true,
+      "loopback_independently_received": true,
+      "sanitized_evidence": [
+        {
+          "event_id": "0bff272c-5cf6-4c44-a652-5b008480c79b",
+          "timestamp": 1794339818636736,
+          "type": "activity_observed",
+          "actor_identity": {
+            "pid": 96305,
+            "start_seconds": 1794339818,
+            "start_microseconds": 298612
+          },
+          "classification": "known_agent_candidate",
+          "ancestor_pids": [
+            96257,
+            96254,
+            814,
+            466
+          ],
+          "target_resource": "<TEST_ROOT>/current_codex_tool/synthetic.env",
+          "detail": "sensitive_file_open:<TEST_ROOT>/current_codex_tool/synthetic.env"
+        }
+      ],
+      "tool_action_verified": true,
+      "model_invocation_attempted": false,
+      "failure_categories": [],
+      "socket_peer_observed": true,
+      "risk_signal_observed": true
+    }
+  },
+  "independent_ps_baseline": {
+    "cursor_app": [
+      494,
+      778,
+      779,
+      782,
+      859,
+      990
+    ],
+    "workbuddy_ai_app": [
+      445,
+      749,
+      750,
+      801,
+      812,
+      923,
+      965,
+      3496,
+      10394,
+      10397,
+      10402,
+      49974,
+      77337,
+      25100,
+      25154
+    ],
+    "codex_app_backend": [
+      814,
+      79513,
+      86563,
+      93165,
+      93166
+    ],
+    "grok_bot_app": [
+      475,
+      916,
+      918,
+      997,
+      1006,
+      1039,
+      1078,
+      1079,
+      1099,
+      84513
+    ]
+  },
+  "monitor_exit_code": 0,
+  "coverage": [
+    {
+      "activity_processes": 0,
+      "activity_scan_duration_ms": 0,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 0,
+      "generation": 1,
+      "history_evicted": 0,
+      "known_candidates": 0,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 632
+    },
+    {
+      "activity_processes": 638,
+      "activity_scan_duration_ms": 70,
+      "activity_validation_failed": 1,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 21,
+      "history_evicted": 0,
+      "known_candidates": 71,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 309,
+      "visible": 639
+    },
+    {
+      "activity_processes": 647,
+      "activity_scan_duration_ms": 26,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 41,
+      "history_evicted": 0,
+      "known_candidates": 74,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 310,
+      "visible": 648
+    },
+    {
+      "activity_processes": 640,
+      "activity_scan_duration_ms": 31,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 62,
+      "history_evicted": 0,
+      "known_candidates": 71,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 309,
+      "visible": 641
+    },
+    {
+      "activity_processes": 639,
+      "activity_scan_duration_ms": 19,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 83,
+      "history_evicted": 0,
+      "known_candidates": 71,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 309,
+      "visible": 642
+    },
+    {
+      "activity_processes": 639,
+      "activity_scan_duration_ms": 91,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 103,
+      "history_evicted": 0,
+      "known_candidates": 71,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 308,
+      "visible": 640
+    },
+    {
+      "activity_processes": 639,
+      "activity_scan_duration_ms": 22,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 124,
+      "history_evicted": 0,
+      "known_candidates": 71,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 308,
+      "visible": 640
+    },
+    {
+      "activity_processes": 639,
+      "activity_scan_duration_ms": 19,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 144,
+      "history_evicted": 0,
+      "known_candidates": 71,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 308,
+      "visible": 640
+    },
+    {
+      "activity_processes": 641,
+      "activity_scan_duration_ms": 19,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 165,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 308,
+      "visible": 642
+    },
+    {
+      "activity_processes": 641,
+      "activity_scan_duration_ms": 29,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 185,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 642
+    },
+    {
+      "activity_processes": 638,
+      "activity_scan_duration_ms": 24,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 205,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 639
+    },
+    {
+      "activity_processes": 638,
+      "activity_scan_duration_ms": 25,
+      "activity_validation_failed": 1,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 226,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 640
+    },
+    {
+      "activity_processes": 637,
+      "activity_scan_duration_ms": 17,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 246,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 638
+    },
+    {
+      "activity_processes": 637,
+      "activity_scan_duration_ms": 54,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 267,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 638
+    },
+    {
+      "activity_processes": 637,
+      "activity_scan_duration_ms": 18,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 287,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 638
+    },
+    {
+      "activity_processes": 636,
+      "activity_scan_duration_ms": 20,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 307,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 637
+    },
+    {
+      "activity_processes": 636,
+      "activity_scan_duration_ms": 18,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 328,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 637
+    },
+    {
+      "activity_processes": 636,
+      "activity_scan_duration_ms": 47,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 349,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 637
+    },
+    {
+      "activity_processes": 635,
+      "activity_scan_duration_ms": 56,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 369,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 636
+    },
+    {
+      "activity_processes": 635,
+      "activity_scan_duration_ms": 25,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 390,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 636
+    },
+    {
+      "activity_processes": 635,
+      "activity_scan_duration_ms": 26,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 410,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 636
+    },
+    {
+      "activity_processes": 635,
+      "activity_scan_duration_ms": 20,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 431,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 636
+    },
+    {
+      "activity_processes": 637,
+      "activity_scan_duration_ms": 34,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 451,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 640
+    },
+    {
+      "activity_processes": 638,
+      "activity_scan_duration_ms": 19,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 472,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 639
+    },
+    {
+      "activity_processes": 638,
+      "activity_scan_duration_ms": 17,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 493,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 639
+    },
+    {
+      "activity_processes": 633,
+      "activity_scan_duration_ms": 20,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 503,
+      "history_evicted": 0,
+      "known_candidates": 68,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 634
+    }
+  ],
+  "app_discovery": {
+    "cursor_app": {
+      "expected_count": 6,
+      "observed_count": 6,
+      "all_observed": true,
+      "classifications": [
+        "known_agent_candidate"
+      ]
+    },
+    "workbuddy_ai_app": {
+      "expected_count": 15,
+      "observed_count": 15,
+      "all_observed": true,
+      "classifications": [
+        "known_agent_candidate"
+      ]
+    },
+    "codex_app_backend": {
+      "expected_count": 5,
+      "observed_count": 5,
+      "all_observed": true,
+      "classifications": [
+        "known_agent_candidate"
+      ]
+    },
+    "grok_bot_app": {
+      "expected_count": 10,
+      "observed_count": 10,
+      "all_observed": true,
+      "classifications": [
+        "unclassified_process"
+      ]
+    }
+  },
+  "record_count": 1027,
+  "raw_logs_published": false,
+  "coverage_summary": {
+    "visible": {
+      "min": 632,
+      "max": 648
+    },
+    "unavailable": {
+      "min": 307,
+      "max": 310
+    },
+    "activity_processes": {
+      "min": 0,
+      "max": 647
+    },
+    "activity_scan_duration_ms": {
+      "min": 0,
+      "max": 91
+    },
+    "fd_scans_partial": {
+      "min": 0,
+      "max": 8
+    },
+    "raw_queue_dropped": {
+      "min": 0,
+      "max": 0
+    },
+    "evidence_rejected": {
+      "min": 0,
+      "max": 0
+    },
+    "source_gaps": {
+      "min": 0,
+      "max": 0
+    }
+  },
+  "artifact_sha256": {
+    "private_evidence_jsonl": "b612f9b4612d06d0ae0fb4f90bf50a7e5914d45056b415e21ed9eff3f702fd90",
+    "probe_source": "9bf93c255e3de639d72f29a7ddf12ba01f553875a4943143c3d3ab9972d227a1"
+  },
+  "baseline_scope": "path-identifiable ps baseline subset; not a census of all agents or every renamed helper"
+}

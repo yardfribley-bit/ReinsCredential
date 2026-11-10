@@ -1,0 +1,15 @@
+{
+  "run_id": "b2dc2400-97f3-457e-a3e5-5384554426db",
+  "test_kind": "unlisted_reparented_interpreter_not_real_ai_client",
+  "passed": true,
+  "probe_pid": 98095,
+  "probe_ppid": 1,
+  "classification": "unclassified_process",
+  "agent_name_rule_used": false,
+  "sensitive_fd_observed": true,
+  "socket_peer_observed": true,
+  "evidence_event_id": "839a6a1d-09ac-4aa1-a9a0-a9dd039c0573",
+  "target_resource": "<TEST_ROOT>/synthetic.env",
+  "evidence_sha256": "cf3e17ac4e7a7741733b608b021e9bf7e7556268cb15e00d84952438eea50e89",
+  "monitor_exit_code": 0
+}

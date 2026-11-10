@@ -1,0 +1,21 @@
+{
+  "test_kind": "gateway_fault_injection",
+  "results": {
+    "expired_delivery_not_linked": true,
+    "eight_concurrent_requests": true,
+    "http_503_not_success_or_followed": true,
+    "http_302_not_success_or_followed": true,
+    "incomplete_body_deadline": true,
+    "service_recovers_after_slow_client": true,
+    "existing_path_preserved": true,
+    "symlink_source_rejected": true
+  },
+  "passed": true,
+  "not_tested": [
+    "self-signed TLS endpoint",
+    "system-wide bypass prevention"
+  ],
+  "evidence_sha256": {
+    "gateway.jsonl": "4fb3ff550704829c0c2e08295c80324244e3779cce814f6ba56f1cb7a28c1b98"
+  }
+}

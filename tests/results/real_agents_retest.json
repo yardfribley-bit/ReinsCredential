@@ -1,0 +1,387 @@
+{
+  "run_id": "10a470a6-4b74-4569-98aa-8ab53c1399e0",
+  "test_kind": "real_agent_acceptance",
+  "synthetic_only": true,
+  "limits": [
+    "polling can miss short-lived activity",
+    "descriptor presence is not proof of read or upload",
+    "real client invocation may fail due to auth, network or sandbox policy"
+  ],
+  "clients": {
+    "codex_cli": {
+      "client_pid": 8638,
+      "exit_code": -15,
+      "root_process_observed": true,
+      "failure_category": "no_verified_action_before_test_deadline",
+      "model_invocation_attempted": true,
+      "probe_proof_valid": false,
+      "tool_action_verified": false,
+      "analysis_note": "Timeout category reconciled from harness termination and private output; not a new model invocation.",
+      "private_output_timeout_message_present": true
+    },
+    "cursor_cli": {
+      "client_pid": 8639,
+      "exit_code": 143,
+      "root_process_observed": true,
+      "failure_category": "no_verified_action_before_test_deadline",
+      "model_invocation_attempted": true,
+      "probe_proof_valid": false,
+      "tool_action_verified": false,
+      "analysis_note": "Timeout category reconciled from harness termination and private output; not a new model invocation.",
+      "private_output_bytes": 0
+    },
+    "workbuddy_ai_cli": {
+      "client_pid": 8640,
+      "exit_code": 0,
+      "root_process_observed": true,
+      "failure_category": "client_proxy_initialization_error",
+      "model_invocation_attempted": true,
+      "probe_proof_valid": false,
+      "tool_action_verified": false
+    },
+    "current_codex_tool": {
+      "client_pid": 8641,
+      "exit_code": 0,
+      "root_process_observed": true,
+      "failure_category": "none",
+      "model_invocation_attempted": false,
+      "probe_proof_valid": true,
+      "probe_pid": 8641,
+      "probe_completed": true,
+      "sensitive_fd_observed": true,
+      "root_in_observed_ancestor_chain": true,
+      "loopback_probe_connected": true,
+      "loopback_independently_received": true,
+      "sanitized_evidence": [
+        {
+          "event_id": "6e1a5c09-18e7-46b8-8a4d-6352a2ebef64",
+          "timestamp": 1794348688737777,
+          "type": "activity_observed",
+          "actor_identity": {
+            "pid": 8641,
+            "start_seconds": 1794348688,
+            "start_microseconds": 407508
+          },
+          "classification": "known_agent_candidate",
+          "ancestor_pids": [
+            8599,
+            8579,
+            814,
+            466
+          ],
+          "target_resource": "<TEST_ROOT>/current_codex_tool/synthetic.env",
+          "detail": "sensitive_file_open:<TEST_ROOT>/current_codex_tool/synthetic.env"
+        }
+      ],
+      "tool_action_verified": true
+    }
+  },
+  "independent_ps_baseline": {
+    "cursor_app": [
+      494,
+      778,
+      779,
+      782,
+      859,
+      990
+    ],
+    "workbuddy_ai_app": [
+      445,
+      749,
+      750,
+      801,
+      812,
+      923,
+      965,
+      3496,
+      10394,
+      10397,
+      10402,
+      49974,
+      77337
+    ],
+    "codex_app_backend": [
+      814,
+      79513,
+      86563,
+      93165,
+      93166
+    ],
+    "grok_bot_app": [
+      475,
+      916,
+      918,
+      997,
+      1006,
+      1039,
+      1078,
+      1079,
+      1099,
+      84513
+    ]
+  },
+  "monitor_exit_code": 0,
+  "coverage": [
+    {
+      "activity_processes": 0,
+      "activity_scan_duration_ms": 0,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 0,
+      "generation": 1,
+      "history_evicted": 0,
+      "known_candidates": 0,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 308,
+      "visible": 634
+    },
+    {
+      "activity_processes": 641,
+      "activity_scan_duration_ms": 22,
+      "activity_validation_failed": 1,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 22,
+      "history_evicted": 0,
+      "known_candidates": 75,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 307,
+      "visible": 642
+    },
+    {
+      "activity_processes": 639,
+      "activity_scan_duration_ms": 719,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 39,
+      "history_evicted": 0,
+      "known_candidates": 74,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 308,
+      "visible": 640
+    },
+    {
+      "activity_processes": 638,
+      "activity_scan_duration_ms": 1078,
+      "activity_validation_failed": 1,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 40,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 308,
+      "visible": 639
+    },
+    {
+      "activity_processes": 637,
+      "activity_scan_duration_ms": 1782,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 42,
+      "history_evicted": 0,
+      "known_candidates": 72,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 310,
+      "visible": 639
+    },
+    {
+      "activity_processes": 638,
+      "activity_scan_duration_ms": 1355,
+      "activity_validation_failed": 1,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 44,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 310,
+      "visible": 639
+    },
+    {
+      "activity_processes": 637,
+      "activity_scan_duration_ms": 905,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 46,
+      "history_evicted": 0,
+      "known_candidates": 71,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 311,
+      "visible": 638
+    },
+    {
+      "activity_processes": 637,
+      "activity_scan_duration_ms": 964,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 48,
+      "history_evicted": 0,
+      "known_candidates": 72,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 309,
+      "visible": 638
+    },
+    {
+      "activity_processes": 638,
+      "activity_scan_duration_ms": 1017,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 51,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 309,
+      "visible": 639
+    },
+    {
+      "activity_processes": 638,
+      "activity_scan_duration_ms": 923,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 53,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 312,
+      "visible": 639
+    },
+    {
+      "activity_processes": 638,
+      "activity_scan_duration_ms": 921,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 56,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 312,
+      "visible": 639
+    },
+    {
+      "activity_processes": 639,
+      "activity_scan_duration_ms": 958,
+      "activity_validation_failed": 4,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 58,
+      "history_evicted": 0,
+      "known_candidates": 74,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 310,
+      "visible": 640
+    },
+    {
+      "activity_processes": 634,
+      "activity_scan_duration_ms": 49,
+      "activity_validation_failed": 0,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 65,
+      "history_evicted": 0,
+      "known_candidates": 75,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 308,
+      "visible": 635
+    },
+    {
+      "activity_processes": 632,
+      "activity_scan_duration_ms": 86,
+      "activity_validation_failed": 1,
+      "enumeration_complete": 1,
+      "evidence_rejected": 0,
+      "fd_scans_partial": 8,
+      "generation": 69,
+      "history_evicted": 0,
+      "known_candidates": 73,
+      "oversized_paths": 0,
+      "raw_queue_dropped": 0,
+      "source_gaps": 0,
+      "unavailable": 308,
+      "visible": 633
+    }
+  ],
+  "app_discovery": {
+    "cursor_app": {
+      "expected_count": 6,
+      "observed_count": 6,
+      "all_observed": true,
+      "classifications": [
+        "known_agent_candidate"
+      ]
+    },
+    "workbuddy_ai_app": {
+      "expected_count": 13,
+      "observed_count": 13,
+      "all_observed": true,
+      "classifications": [
+        "known_agent_candidate"
+      ]
+    },
+    "codex_app_backend": {
+      "expected_count": 5,
+      "observed_count": 5,
+      "all_observed": true,
+      "classifications": [
+        "known_agent_candidate"
+      ]
+    },
+    "grok_bot_app": {
+      "expected_count": 10,
+      "observed_count": 10,
+      "all_observed": true,
+      "classifications": [
+        "unclassified_process"
+      ]
+    }
+  },
+  "record_count": 903,
+  "raw_logs_published": false,
+  "private_evidence_sha256": "2b50b71b5d4f174a701acd387c4b742366f7887f9f631f2a54e3443fc992a27c"
+}

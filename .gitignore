@@ -1,5 +1,7 @@
 agent-monitor
+agent-gateway
 agent-probe
 agent-unit
 *.jsonl
 __pycache__/
+*.dSYM/

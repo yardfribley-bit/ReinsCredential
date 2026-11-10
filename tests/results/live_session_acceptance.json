@@ -1,0 +1,539 @@
+{
+  "run_id": "3af307bf-2dda-4474-813a-8eacd392cebe",
+  "test_kind": "current_real_codex_session",
+  "synthetic_only": true,
+  "new_cli_model_session": false,
+  "full_acceptance_passed": false,
+  "mediated_file_delivery_observed": true,
+  "model_challenge_response_correct": true,
+  "model_receipt_ground_truth_method": "current model returned reverse of random 8-digit file challenge; not a provider server receipt",
+  "model_destination_independently_detected": false,
+  "local_sensitive_upload_detected": true,
+  "local_server_received_exact_source": true,
+  "codex_chain_observed": true,
+  "related_read_event_present": true,
+  "external_sensitive_attempt_detected": true,
+  "external_http_success": false,
+  "external_response_contains_source_verified": false,
+  "external_transfer_metrics": [
+    {
+      "curl_code": 56,
+      "http_status": 0
+    }
+  ],
+  "evidence": [
+    {
+      "event_id": "a623ecd8-ae7a-4745-9f7a-fc3c4a7f8372",
+      "timestamp": 1794349058547892,
+      "type": "sensitive_content_delivery_attempt",
+      "risk_level": "Medium",
+      "attribution": "kernel_audit_token_authenticated_connection_initiator",
+      "metrics": {},
+      "content_sha256": "cd5462947759282b2f29e728c32ddf6c48a0fdc551df5902aac7155039f0e2a5",
+      "correlation_id": "ab191e3d-a1cb-4221-8dfc-2276d5b7f5c9",
+      "evidence_basis": "gateway_read_registered_file_on_behalf_of_peer;not_native_peer_read",
+      "transfer_outcome": "",
+      "related_event_ids": [],
+      "target_resource": "<TEST_ROOT>/synthetic.env",
+      "destination": "unix-peer:9282",
+      "actor": {
+        "identity": {
+          "pid": 9282,
+          "start_seconds": 1794349058,
+          "start_microseconds": 461989
+        },
+        "ppid": 9275,
+        "executable_basename": "curl",
+        "observed_parent_identity": {
+          "pid": 9275,
+          "start_seconds": 1794349058,
+          "start_microseconds": 91935
+        }
+      },
+      "ancestors": [
+        {
+          "identity": {
+            "pid": 9275,
+            "start_seconds": 1794349058,
+            "start_microseconds": 91935
+          },
+          "ppid": 814,
+          "executable_basename": "zsh",
+          "observed_parent_identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          }
+        },
+        {
+          "identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          },
+          "ppid": 466,
+          "executable_basename": "codex",
+          "observed_parent_identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          }
+        },
+        {
+          "identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          },
+          "ppid": 1,
+          "executable_basename": "ChatGPT",
+          "observed_parent_identity": null
+        }
+      ],
+      "chain_complete": false,
+      "chain_status": "missing_parent",
+      "classification": "known_agent_candidate"
+    },
+    {
+      "event_id": "93594671-96e2-401c-9178-9fb1f3bf01f4",
+      "timestamp": 1794349058703975,
+      "type": "sensitive_content_delivered",
+      "risk_level": "Medium",
+      "attribution": "kernel_audit_token_authenticated_connection_initiator",
+      "metrics": {},
+      "content_sha256": "cd5462947759282b2f29e728c32ddf6c48a0fdc551df5902aac7155039f0e2a5",
+      "correlation_id": "ab191e3d-a1cb-4221-8dfc-2276d5b7f5c9",
+      "evidence_basis": "gateway_read_registered_file_on_behalf_of_peer;not_native_peer_read",
+      "transfer_outcome": "written_to_local_socket;model_receipt_unproven",
+      "related_event_ids": [
+        "a623ecd8-ae7a-4745-9f7a-fc3c4a7f8372"
+      ],
+      "target_resource": "<TEST_ROOT>/synthetic.env",
+      "destination": "unix-peer:9282",
+      "actor": {
+        "identity": {
+          "pid": 9282,
+          "start_seconds": 1794349058,
+          "start_microseconds": 461989
+        },
+        "ppid": 9275,
+        "executable_basename": "curl",
+        "observed_parent_identity": {
+          "pid": 9275,
+          "start_seconds": 1794349058,
+          "start_microseconds": 91935
+        }
+      },
+      "ancestors": [
+        {
+          "identity": {
+            "pid": 9275,
+            "start_seconds": 1794349058,
+            "start_microseconds": 91935
+          },
+          "ppid": 814,
+          "executable_basename": "zsh",
+          "observed_parent_identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          }
+        },
+        {
+          "identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          },
+          "ppid": 466,
+          "executable_basename": "codex",
+          "observed_parent_identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          }
+        },
+        {
+          "identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          },
+          "ppid": 1,
+          "executable_basename": "ChatGPT",
+          "observed_parent_identity": null
+        }
+      ],
+      "chain_complete": false,
+      "chain_status": "missing_parent",
+      "classification": "known_agent_candidate"
+    },
+    {
+      "event_id": "dd0a3a09-2f40-4faa-b492-c47119c912d7",
+      "timestamp": 1794350068894730,
+      "type": "sensitive_payload_observed",
+      "risk_level": "High",
+      "attribution": "kernel_audit_token_authenticated_connection_initiator",
+      "metrics": {},
+      "content_sha256": "cd5462947759282b2f29e728c32ddf6c48a0fdc551df5902aac7155039f0e2a5",
+      "correlation_id": "b936e1f8-2582-4b26-a272-b69df1c43ad1",
+      "evidence_basis": "exact_bytes",
+      "transfer_outcome": "",
+      "related_event_ids": [
+        "93594671-96e2-401c-9178-9fb1f3bf01f4"
+      ],
+      "target_resource": "<TEST_ROOT>/synthetic.env",
+      "destination": "http://127.0.0.1:54632/ingest",
+      "actor": {
+        "identity": {
+          "pid": 9523,
+          "start_seconds": 1794350067,
+          "start_microseconds": 719461
+        },
+        "ppid": 9522,
+        "executable_basename": "curl",
+        "observed_parent_identity": {
+          "pid": 9522,
+          "start_seconds": 1794350063,
+          "start_microseconds": 987404
+        }
+      },
+      "ancestors": [
+        {
+          "identity": {
+            "pid": 9522,
+            "start_seconds": 1794350063,
+            "start_microseconds": 987404
+          },
+          "ppid": 9401,
+          "executable_basename": "Python",
+          "observed_parent_identity": {
+            "pid": 9401,
+            "start_seconds": 1794350040,
+            "start_microseconds": 332531
+          }
+        },
+        {
+          "identity": {
+            "pid": 9401,
+            "start_seconds": 1794350040,
+            "start_microseconds": 332531
+          },
+          "ppid": 814,
+          "executable_basename": "zsh",
+          "observed_parent_identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          }
+        },
+        {
+          "identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          },
+          "ppid": 466,
+          "executable_basename": "codex",
+          "observed_parent_identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          }
+        },
+        {
+          "identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          },
+          "ppid": 1,
+          "executable_basename": "ChatGPT",
+          "observed_parent_identity": null
+        }
+      ],
+      "chain_complete": false,
+      "chain_status": "missing_parent",
+      "classification": "known_agent_candidate"
+    },
+    {
+      "event_id": "3ba0f99b-07a4-4192-88c8-89734d7e3570",
+      "timestamp": 1794350073196708,
+      "type": "transfer_result",
+      "risk_level": "High",
+      "attribution": "kernel_audit_token_authenticated_connection_initiator",
+      "metrics": {
+        "curl_code": 0,
+        "http_status": 200
+      },
+      "content_sha256": "cd5462947759282b2f29e728c32ddf6c48a0fdc551df5902aac7155039f0e2a5",
+      "correlation_id": "b936e1f8-2582-4b26-a272-b69df1c43ad1",
+      "evidence_basis": "exact_bytes",
+      "transfer_outcome": "upstream_http_2xx;application_receipt_requires_independent_verification",
+      "related_event_ids": [
+        "93594671-96e2-401c-9178-9fb1f3bf01f4",
+        "dd0a3a09-2f40-4faa-b492-c47119c912d7"
+      ],
+      "target_resource": "<TEST_ROOT>/synthetic.env",
+      "destination": "http://127.0.0.1:54632/ingest",
+      "actor": {
+        "identity": {
+          "pid": 9523,
+          "start_seconds": 1794350067,
+          "start_microseconds": 719461
+        },
+        "ppid": 9522,
+        "executable_basename": "curl",
+        "observed_parent_identity": {
+          "pid": 9522,
+          "start_seconds": 1794350063,
+          "start_microseconds": 987404
+        }
+      },
+      "ancestors": [
+        {
+          "identity": {
+            "pid": 9522,
+            "start_seconds": 1794350063,
+            "start_microseconds": 987404
+          },
+          "ppid": 9401,
+          "executable_basename": "Python",
+          "observed_parent_identity": {
+            "pid": 9401,
+            "start_seconds": 1794350040,
+            "start_microseconds": 332531
+          }
+        },
+        {
+          "identity": {
+            "pid": 9401,
+            "start_seconds": 1794350040,
+            "start_microseconds": 332531
+          },
+          "ppid": 814,
+          "executable_basename": "zsh",
+          "observed_parent_identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          }
+        },
+        {
+          "identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          },
+          "ppid": 466,
+          "executable_basename": "codex",
+          "observed_parent_identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          }
+        },
+        {
+          "identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          },
+          "ppid": 1,
+          "executable_basename": "ChatGPT",
+          "observed_parent_identity": null
+        }
+      ],
+      "chain_complete": false,
+      "chain_status": "missing_parent",
+      "classification": "known_agent_candidate"
+    },
+    {
+      "event_id": "e88af0a9-9496-4273-9683-ea5e4b757ecc",
+      "timestamp": 1794350073983391,
+      "type": "sensitive_payload_observed",
+      "risk_level": "High",
+      "attribution": "kernel_audit_token_authenticated_connection_initiator",
+      "metrics": {},
+      "content_sha256": "cd5462947759282b2f29e728c32ddf6c48a0fdc551df5902aac7155039f0e2a5",
+      "correlation_id": "6b2b47ee-6a39-4234-8182-536602083b05",
+      "evidence_basis": "exact_bytes",
+      "transfer_outcome": "",
+      "related_event_ids": [],
+      "target_resource": "<TEST_ROOT>/synthetic.env",
+      "destination": "https://httpbin.org/post",
+      "actor": {
+        "identity": {
+          "pid": 9541,
+          "start_seconds": 1794350073,
+          "start_microseconds": 224526
+        },
+        "ppid": 9522,
+        "executable_basename": "curl",
+        "observed_parent_identity": {
+          "pid": 9522,
+          "start_seconds": 1794350063,
+          "start_microseconds": 987404
+        }
+      },
+      "ancestors": [
+        {
+          "identity": {
+            "pid": 9522,
+            "start_seconds": 1794350063,
+            "start_microseconds": 987404
+          },
+          "ppid": 9401,
+          "executable_basename": "Python",
+          "observed_parent_identity": {
+            "pid": 9401,
+            "start_seconds": 1794350040,
+            "start_microseconds": 332531
+          }
+        },
+        {
+          "identity": {
+            "pid": 9401,
+            "start_seconds": 1794350040,
+            "start_microseconds": 332531
+          },
+          "ppid": 814,
+          "executable_basename": "zsh",
+          "observed_parent_identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          }
+        },
+        {
+          "identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          },
+          "ppid": 466,
+          "executable_basename": "codex",
+          "observed_parent_identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          }
+        },
+        {
+          "identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          },
+          "ppid": 1,
+          "executable_basename": "ChatGPT",
+          "observed_parent_identity": null
+        }
+      ],
+      "chain_complete": false,
+      "chain_status": "missing_parent",
+      "classification": "known_agent_candidate"
+    },
+    {
+      "event_id": "bc8ebdc5-69b5-4bf6-9ff8-bf67b81867bf",
+      "timestamp": 1794350079516374,
+      "type": "transfer_result",
+      "risk_level": "High",
+      "attribution": "kernel_audit_token_authenticated_connection_initiator",
+      "metrics": {
+        "curl_code": 56,
+        "http_status": 0
+      },
+      "content_sha256": "cd5462947759282b2f29e728c32ddf6c48a0fdc551df5902aac7155039f0e2a5",
+      "correlation_id": "6b2b47ee-6a39-4234-8182-536602083b05",
+      "evidence_basis": "exact_bytes",
+      "transfer_outcome": "failed_or_non_2xx;partial_delivery_possible",
+      "related_event_ids": [
+        "e88af0a9-9496-4273-9683-ea5e4b757ecc"
+      ],
+      "target_resource": "<TEST_ROOT>/synthetic.env",
+      "destination": "https://httpbin.org/post",
+      "actor": {
+        "identity": {
+          "pid": 9541,
+          "start_seconds": 1794350073,
+          "start_microseconds": 224526
+        },
+        "ppid": 9522,
+        "executable_basename": "curl",
+        "observed_parent_identity": {
+          "pid": 9522,
+          "start_seconds": 1794350063,
+          "start_microseconds": 987404
+        }
+      },
+      "ancestors": [
+        {
+          "identity": {
+            "pid": 9522,
+            "start_seconds": 1794350063,
+            "start_microseconds": 987404
+          },
+          "ppid": 9401,
+          "executable_basename": "Python",
+          "observed_parent_identity": {
+            "pid": 9401,
+            "start_seconds": 1794350040,
+            "start_microseconds": 332531
+          }
+        },
+        {
+          "identity": {
+            "pid": 9401,
+            "start_seconds": 1794350040,
+            "start_microseconds": 332531
+          },
+          "ppid": 814,
+          "executable_basename": "zsh",
+          "observed_parent_identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          }
+        },
+        {
+          "identity": {
+            "pid": 814,
+            "start_seconds": 1794170460,
+            "start_microseconds": 856324
+          },
+          "ppid": 466,
+          "executable_basename": "codex",
+          "observed_parent_identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          }
+        },
+        {
+          "identity": {
+            "pid": 466,
+            "start_seconds": 1794170423,
+            "start_microseconds": 687423
+          },
+          "ppid": 1,
+          "executable_basename": "ChatGPT",
+          "observed_parent_identity": null
+        }
+      ],
+      "chain_complete": false,
+      "chain_status": "missing_parent",
+      "classification": "known_agent_candidate"
+    }
+  ],
+  "passive_file_fd_events_all_processes": 26,
+  "passive_tool_file_fd_events": 0,
+  "passive_content_upload_events": 0,
+  "clean_shutdown": true,
+  "private_artifact_sha256": {
+    "g.jsonl": "3de6bc5a694f9ce825f76d108109964929e9d51db2f96c30a788542febf56974",
+    "e.jsonl": "55f80502f7c60e85388ff9898a8d72f52dd6b40a5e0118962ea46cd655aeef0a",
+    "passive.jsonl": "6700bdbba1765873c47a4ca81c06e8784c26a5e8d0c6ca1013a760d09f7f8d48",
+    "receiver.jsonl": "4d0155b3adfc8de810d2179025f2249a72c141b9a83abf5b70ab2abfeca9e7cc"
+  }
+}
