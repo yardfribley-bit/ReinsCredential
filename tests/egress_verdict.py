@@ -83,7 +83,13 @@ class Server:
             return
         if self.tls_cert:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            context.load_cert_chain(self.tls_cert, self.tls_key)
+            chain = self.tls_cert
+            ca_path = str(Path(self.tls_cert).with_name("ca.crt"))
+            if Path(ca_path).exists() and Path(ca_path).resolve() != Path(self.tls_cert).resolve():
+                combined = Path(self.tls_cert).with_name("server-chain.crt")
+                combined.write_bytes(Path(self.tls_cert).read_bytes() + b"\n" + Path(ca_path).read_bytes())
+                chain = str(combined)
+            context.load_cert_chain(chain, self.tls_key)
             try:
                 conn = context.wrap_socket(conn, server_side=True)
             except ssl.SSLError as error:

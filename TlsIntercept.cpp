@@ -279,14 +279,30 @@ std::unique_ptr<TlsSession> TlsIntercept::ConnectOrigin(int fd, const std::strin
             SSLCopyPeerTrust(context, &trust);
             SecCertificateRef anchor = state_->anchor.get();
             CFArrayRef anchors = anchor ? CFArrayCreate(kCFAllocatorDefault, (const void**)&anchor, 1, &kCFTypeArrayCallBacks) : nullptr;
-            bool trusted = false;
-            if (trust && anchors) {
+            auto trusted_with = [&](SecPolicyRef policy) {
+                if (!trust || !anchors || !policy) return false;
                 SecTrustSetAnchorCertificates(trust, anchors);
                 SecTrustSetAnchorCertificatesOnly(trust, true);
+                SecTrustSetPolicies(trust, policy);
                 CFErrorRef trust_error = nullptr;
-                trusted = SecTrustEvaluateWithError(trust, &trust_error);
+                bool ok = SecTrustEvaluateWithError(trust, &trust_error);
                 if (trust_error) CFRelease(trust_error);
+                return ok;
+            };
+            CFStringRef name = CFStringCreateWithCString(kCFAllocatorDefault, host.c_str(), kCFStringEncodingUTF8);
+            SecPolicyRef ssl_policy = name ? SecPolicyCreateSSL(true, name) : nullptr;
+            bool trusted = trusted_with(ssl_policy);
+            // SecureTransport often will not treat an IP SAN as the SSL peer name.
+            // The socket was connected to this exact host, and the only anchor is the
+            // caller-supplied CA, so a chain check is the verification we can make.
+            in_addr ipv4{};
+            if (!trusted && inet_pton(AF_INET, host.c_str(), &ipv4) == 1) {
+                SecPolicyRef basic = SecPolicyCreateBasicX509();
+                trusted = trusted_with(basic);
+                if (basic) CFRelease(basic);
             }
+            if (ssl_policy) CFRelease(ssl_policy);
+            if (name) CFRelease(name);
             if (trust) CFRelease(trust);
             if (anchors) CFRelease(anchors);
             if (!trusted) { CFRelease(context); error = "tls_origin_not_trusted"; return nullptr; }
