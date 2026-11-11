@@ -25,7 +25,11 @@
 - 打开的文件描述符不证明读入了字节。FSEvents 仍然没有行为进程。
 - 代理看到的 HTTP 2xx 不是对端的独立回执。
 
-测试加在 `macOSClient/Tests/EvidenceCoreTests/EvidenceChainTests.swift` 和 `DashboardStoreTests`。它们检查相关事件并成一条链、不完整的进程链保持不完整，以及看不到不会被写成未发现。本工作区是 Linux，没有 Swift 工具链，所以上述 macOS 客户端测试没有在这里执行。CI 仍应跑 `macOSClient/scripts/check.sh`。这一步没有放宽 `make acceptance`。**总体验收：未通过。**
+测试加在 `macOSClient/Tests/EvidenceCoreTests/EvidenceChainTests.swift` 和 `DashboardStoreTests`。它们检查相关事件并成一条链、不完整的进程链保持不完整，以及看不到不会被写成未发现。
+
+合成演示的界面快照由 `EvidenceChainSnapshotTests` 用 SwiftUI `ImageRenderer` 生成，不启动采集服务。macOS workflow 把这些文件上传为 artifact `evidence-chain-snapshots`。实测 run [43090043359](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43090043359)，提交 `0e60290`。其中有按 Agent 分组的总览、已上传、已尝试未成功、未发现、看不到各一张卡片，以及 `evidence-chains.md`。导出文本里没有 `SYNTHETIC_EGRESS_SECRET_v2_0123456789abcdef`。这些图片只证明演示数据能画出来，不证明本机采集看见了上传。
+
+这一步没有放宽 `make acceptance`。**总体验收：未通过。**
 
 ## 2026-11-11 本地出口代理与上传结论（step 2）
 
