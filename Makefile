@@ -10,8 +10,8 @@ agent-gateway: ContentGateway.cpp $(CORE) $(HEADERS)
 	$(CXX) $(CXXFLAGS) ContentGateway.cpp $(CORE) $(LDLIBS) -lcurl -lbsm -o $@
 agent-monitor: main.cpp $(CORE) $(HEADERS)
 	$(CXX) $(CXXFLAGS) main.cpp $(CORE) $(LDLIBS) -o $@
-agent-egress: EgressProxy.cpp $(CORE) $(HEADERS)
-	$(CXX) $(CXXFLAGS) EgressProxy.cpp $(CORE) $(LDLIBS) -o $@
+agent-egress: EgressProxy.cpp TlsIntercept.cpp $(CORE) $(HEADERS)
+	$(CXX) $(CXXFLAGS) EgressProxy.cpp TlsIntercept.cpp $(CORE) $(LDLIBS) -framework Security -framework CoreFoundation -o $@
 agent-unit: tests/unit.cpp $(CORE) $(HEADERS)
 	$(CXX) $(CXXFLAGS) -I. tests/unit.cpp $(CORE) $(LDLIBS) -o $@
 agent-probe: tests/fixture.cpp
@@ -47,4 +47,4 @@ agent-short-read: tests/short_read_fixture.cpp
 acceptance: all
 	/usr/bin/python3 tests/acceptance_matrix.py --require-full-acceptance
 clean:
-	rm -f agent-monitor agent-gateway agent-egress agent-unit agent-probe agent-short-read agent-generations agent-callback-tests agent-store-tests agent-shutdown-probe
+	rm -f agent-monitor agent-gateway agent-egress agent-unit agent-probe agent-short-read agent-generations agent-callback-tests agent-store-tests agent-shutdown-probe live-agent

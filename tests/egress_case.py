@@ -8,14 +8,18 @@ import gzip
 import json
 import os
 import socket
+import ssl
 import sys
 import time
 
 
 def split_http(url):
-    if not url.startswith("http://"):
-        raise SystemExit("destination must be http")
-    rest = url[len("http://"):]
+    if url.startswith("https://"):
+        rest = url[len("https://"):]
+    elif url.startswith("http://"):
+        rest = url[len("http://"):]
+    else:
+        raise SystemExit("destination must be http or https")
     slash = rest.find("/")
     authority = rest if slash < 0 else rest[:slash]
     path = "/" if slash < 0 else rest[slash:]
@@ -93,6 +97,36 @@ def connect_tunnel(proxy_port, url, body):
     sock.close()
 
 
+def https_via_proxy(proxy_port, url, body, cafile, trust):
+    host, port, path = split_http(url)
+    sock = socket.create_connection(("127.0.0.1", proxy_port))
+    sock.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+    sock.settimeout(15)
+    read_headers(sock)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.set_alpn_protocols(["http/1.1"])
+    if trust:
+        context.load_verify_locations(cafile)
+    else:
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.load_default_certs()
+    try:
+        tls = context.wrap_socket(sock, server_hostname=host)
+    except ssl.SSLError:
+        sock.close()
+        return
+    request = (
+        f"POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+    ).encode() + body
+    tls.sendall(request)
+    try:
+        tls.recv(4096)
+    except Exception:
+        pass
+    tls.close()
+
+
 def main():
     if len(sys.argv) < 4:
         raise SystemExit("usage: egress_case.py MODE URL SENSITIVE_PATH [PAYLOAD_PATH]")
@@ -121,9 +155,22 @@ def main():
     elif mode == "connect":
         connect_tunnel(proxy_port, url, secret)
         body = b""
+    elif mode == "https":
+        https_via_proxy(proxy_port, url, secret, os.environ["TLS_CA"], True)
+        body = b""
+    elif mode == "https-json":
+        encoded = json.dumps({"payload": secret.decode("utf-8")}).encode("utf-8")
+        https_via_proxy(proxy_port, url, encoded, os.environ["TLS_CA"], True)
+        body = b""
+    elif mode == "https-fail":
+        https_via_proxy(proxy_port, url, secret, os.environ["TLS_CA"], True)
+        body = b""
+    elif mode == "https-pinned":
+        https_via_proxy(proxy_port, url, secret, "", False)
+        body = b""
     else:
         raise SystemExit("unknown mode")
-    if mode not in ("direct", "connect"):
+    if mode not in ("direct", "connect", "https", "https-json", "https-fail", "https-pinned"):
         proxy_post(proxy_port, url, body)
     if hold_ms:
         time.sleep(hold_ms / 1000)

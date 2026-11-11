@@ -8,6 +8,7 @@ import gzip
 import json
 import os
 import socket
+import ssl
 import statistics
 import subprocess
 import sys
@@ -56,21 +57,23 @@ def sample_process(pid, seconds):
 
 
 class Server:
-    def __init__(self, status=200, raw=False):
+    def __init__(self, status=200, raw=False, tls_cert=None, tls_key=None, accept_timeout=15):
         self.status = status
         self.raw = raw
+        self.tls_cert = tls_cert
+        self.tls_key = tls_key
         self.box = {}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("127.0.0.1", 0))
         self.sock.listen(1)
-        self.sock.settimeout(15)
+        self.sock.settimeout(accept_timeout)
         self.port = self.sock.getsockname()[1]
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
-    def url(self, path):
-        return f"http://127.0.0.1:{self.port}{path}"
+    def url(self, path, scheme="http"):
+        return f"{scheme}://127.0.0.1:{self.port}{path}"
 
     def _run(self):
         try:
@@ -78,6 +81,14 @@ class Server:
         except Exception as error:
             self.box["error"] = str(error)
             return
+        if self.tls_cert:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(self.tls_cert, self.tls_key)
+            try:
+                conn = context.wrap_socket(conn, server_side=True)
+            except ssl.SSLError as error:
+                self.box["error"] = str(error)
+                return
         conn.settimeout(3)
         data = b""
         try:
@@ -134,18 +145,18 @@ def load_records(path):
     return records
 
 
-def run_proxy(log, secret, command, env, timeout=25):
-    proc = subprocess.Popen(
-        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--sample-ms", "20", "--timeout-sec", "20",
-         "--launch", "--", *command],
-        cwd=str(ROOT), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    return proc
+def run_proxy(log, secret, command, env, extra=None):
+    command_line = [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--sample-ms", "20",
+                    "--timeout-sec", "40"]
+    if extra:
+        command_line.extend(extra)
+    command_line.extend(["--launch", "--", *command])
+    return subprocess.Popen(command_line, cwd=str(ROOT), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def finish(proc):
     try:
-        out, err = proc.communicate(timeout=30)
+        out, err = proc.communicate(timeout=45)
     except subprocess.TimeoutExpired:
         proc.send_signal(15)
         out, err = proc.communicate(timeout=5)
@@ -213,13 +224,23 @@ def assert_case(mode, expected, records, receipt):
             raise SystemExit("benign receiver saw the synthetic secret")
         if record["transfer_outcome"] != "watched_http_no_registered_content":
             raise SystemExit(f"benign outcome {record['transfer_outcome']}")
-    if mode == "fail500" and not record["transfer_outcome"].startswith("upstream_http_500"):
-        raise SystemExit(f"fail500 outcome {record['transfer_outcome']}")
+    if mode in ("fail500", "https-fail") and not record["transfer_outcome"].startswith("upstream_http_500"):
+        raise SystemExit(f"{mode} outcome {record['transfer_outcome']}")
     if mode == "refused" and record["transfer_outcome"] != "connect_failed":
         raise SystemExit(f"refused outcome {record['transfer_outcome']}")
+    if mode in ("https", "https-json", "https-fail") and "tls_intercept" not in record["detail"]:
+        raise SystemExit(f"{mode} was not inspected as TLS: {record['detail']}")
+    if mode == "https-pinned" and "upstream_http_2xx" in record["transfer_outcome"]:
+        raise SystemExit("pinned TLS was treated as a successful inspected upload")
+    if mode in ("live-direct", "live-proxy", "live-udp") and "already_running_not_redirected" not in record["detail"]:
+        raise SystemExit(f"{mode} detail does not explain the live tree: {record['detail']}")
+    if mode == "live-udp" and "udp_or_quic" not in record["transfer_outcome"]:
+        raise SystemExit(f"udp outcome {record['transfer_outcome']}")
+    if mode == "live-direct" and "socket_body_not_visible" not in record["transfer_outcome"]:
+        raise SystemExit(f"live direct outcome {record['transfer_outcome']}")
     if expected == "uploaded" and "upstream_http_2xx" not in record["transfer_outcome"]:
         raise SystemExit(f"uploaded outcome {record['transfer_outcome']}")
-    if mode in ("plaintext", "json", "base64", "gzip", "bypass", "fail500", "noopen"):
+    if mode in ("plaintext", "json", "base64", "gzip", "bypass", "fail500", "noopen", "https", "https-json", "https-fail", "live-proxy", "live-direct"):
         if not receipt or MARKER.split(b"\n")[0] not in receipt["data"] and mode != "base64" and mode != "gzip":
             if mode not in ("base64", "gzip"):
                 raise SystemExit(f"{mode} receiver did not observe the synthetic marker")
@@ -235,7 +256,29 @@ def assert_case(mode, expected, records, receipt):
     return expected
 
 
-def one_case(directory, mode, measure=False):
+def make_ca(directory):
+    ca_key = directory / "ca.key"
+    ca_cert = directory / "ca.crt"
+    server_key = directory / "server.key"
+    server_csr = directory / "server.csr"
+    server_cert = directory / "server.crt"
+    ext = directory / "server.ext"
+    ext.write_text("[ext]\nbasicConstraints=CA:FALSE\nsubjectAltName=IP:127.0.0.1\n")
+    subprocess.check_call(["/usr/bin/openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(ca_key)],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.check_call(["/usr/bin/openssl", "req", "-x509", "-key", str(ca_key), "-subj", "/CN=ReinsEphemeralTestCA",
+                           "-days", "1", "-out", str(ca_cert)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.check_call(["/usr/bin/openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(server_key)],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.check_call(["/usr/bin/openssl", "req", "-new", "-key", str(server_key), "-subj", "/CN=127.0.0.1",
+                           "-out", str(server_csr)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.check_call(["/usr/bin/openssl", "x509", "-req", "-in", str(server_csr), "-CA", str(ca_cert), "-CAkey", str(ca_key),
+                           "-CAcreateserial", "-out", str(server_cert), "-days", "1", "-extfile", str(ext), "-extensions", "ext"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return ca_cert, ca_key, server_cert, server_key
+
+
+def one_case(directory, mode, measure=False, ca=None):
     secret = directory / "synthetic.env"
     if not secret.exists():
         secret.write_bytes(MARKER)
@@ -246,12 +289,17 @@ def one_case(directory, mode, measure=False):
         payload.write_bytes(MARKER)
         os.chmod(payload, 0o600)
     raw = mode == "connect"
-    status = 500 if mode == "fail500" else 200
-    server = None if mode == "refused" else Server(status=status, raw=raw)
+    https = mode.startswith("https")
+    status = 500 if mode in ("fail500", "https-fail") else 200
+    server = None if mode == "refused" else Server(
+        status=status, raw=raw, accept_timeout=30,
+        tls_cert=str(ca[2]) if https else None, tls_key=str(ca[3]) if https else None)
     if mode == "refused":
         url = "http://127.0.0.1:1/upload"
     elif mode == "bypass":
         url = server.url("/bypass-gateway")
+    elif https:
+        url = server.url("/upload", "https")
     else:
         url = server.url("/upload")
     log = directory / f"{mode}.jsonl"
@@ -266,10 +314,13 @@ def one_case(directory, mode, measure=False):
     env.pop("NO_PROXY", None)
     if measure:
         env["EGRESS_HOLD_MS"] = "2000"
+    if https and mode != "https-pinned":
+        env["TLS_CA"] = str(ca[0])
+    extra = ["--tls-ca-cert", str(ca[0]), "--tls-ca-key", str(ca[1])] if https else None
     command = [sys.executable, str(CASE), mode, url, str(secret)]
     if mode == "noopen":
         command.append(str(payload))
-    proc = run_proxy(log, secret, command, env)
+    proc = run_proxy(log, secret, command, env, extra)
     cpu, rss = ([], [])
     if measure:
         cpu, rss = sample_process(proc.pid, 6)
@@ -279,7 +330,7 @@ def one_case(directory, mode, measure=False):
         server.join()
         receipt["data"] = server.box.get("data", b"")
         receipt["error"] = server.box.get("error")
-        if mode in ("direct", "connect", "plaintext", "bypass", "fail500", "json", "base64", "gzip", "noopen") and not receipt["data"] and not receipt["error"]:
+        if mode in ("direct", "connect", "plaintext", "bypass", "fail500", "json", "base64", "gzip", "noopen", "https", "https-json", "https-fail") and not receipt["data"] and not receipt["error"]:
             raise SystemExit(f"{mode} receiver captured nothing\n{redact(err)}")
     records = load_records(log)
     try:
@@ -295,6 +346,13 @@ def one_case(directory, mode, measure=False):
             "direct": "not_visible",
             "connect": "not_visible",
             "noopen": None,
+            "https": "uploaded",
+            "https-json": "uploaded",
+            "https-fail": "attempted",
+            "https-pinned": "not_visible",
+            "live-proxy": "uploaded",
+            "live-direct": "not_visible",
+            "live-udp": "not_visible",
         }[mode], records, receipt)
     except SystemExit:
         sys.stderr.write(redact(err))
@@ -305,6 +363,54 @@ def one_case(directory, mode, measure=False):
         if secret.name not in closed["target_resource"]:
             raise SystemExit(f"{mode} target {closed['target_resource']}")
     return kind, cpu, rss, err
+
+
+def live_case(directory, mode, binary, secret):
+    log = directory / f"{mode}.jsonl"
+    server = Server(accept_timeout=8) if mode != "live-udp" else None
+    if mode == "live-udp":
+        dummy = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        dummy.bind(("127.0.0.1", 0))
+        port = dummy.getsockname()[1]
+    else:
+        port = server.port
+    port_file = directory / f"{mode}.port"
+    if mode == "live-proxy":
+        agent = subprocess.Popen([str(binary), "proxy", str(secret), str(port_file), server.url("/upload")])
+        time.sleep(0.3)
+        proc = subprocess.Popen(
+            [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "8",
+             "--sample-ms", "40", "--port-file", str(port_file)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    else:
+        action = "direct" if mode == "live-direct" else "udp"
+        agent = subprocess.Popen([str(binary), action, str(secret), "127.0.0.1", str(port)])
+        time.sleep(0.2)
+        proc = subprocess.Popen(
+            [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "4",
+             "--sample-ms", "40"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    _out, err = finish(proc)
+    try:
+        agent.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        agent.kill()
+    receipt = {"port": port, "data": b"", "error": None}
+    if server:
+        server.join()
+        receipt["data"] = server.box.get("data", b"")
+        receipt["error"] = server.box.get("error")
+    records = load_records(log)
+    try:
+        kind = assert_case(mode, {"live-proxy": "uploaded", "live-direct": "not_visible", "live-udp": "not_visible"}[mode],
+                           records, receipt)
+    except SystemExit:
+        sys.stderr.write(redact(err))
+        raise
+    closed = next(record for record in records if record["type"] == "sensitive_access_closed")
+    if secret.name not in closed["target_resource"]:
+        raise SystemExit(f"{mode} target {closed['target_resource']}")
+    return kind
 
 
 def main():
@@ -319,8 +425,10 @@ def main():
         secret = directory / "synthetic.env"
         secret.write_bytes(MARKER)
         os.chmod(secret, 0o600)
+        ca = make_ca(directory)
         idle = subprocess.Popen(
-            [str(PROXY), "--log", str(idle_log), "--sensitive-file", str(secret), "--duration", "3", "--sample-ms", "50"],
+            [str(PROXY), "--log", str(idle_log), "--sensitive-file", str(secret), "--watch-live", "--duration", "3",
+             "--sample-ms", "50"],
             cwd=str(ROOT), text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         idle_cpu, idle_rss = sample_process(idle.pid, 3.4)
@@ -328,9 +436,11 @@ def main():
         if idle.returncode != 0:
             raise SystemExit(f"idle proxy failed\n{idle_out}\n{idle_err}")
         active_cpu, active_rss = [], []
-        for mode in ("plaintext", "json", "base64", "gzip", "fail500", "refused", "bypass", "benign", "direct", "connect", "noopen"):
-            kind, cpu, rss, _err = one_case(directory, mode, measure=(mode == "benign"))
-            if mode == "benign":
+        modes = ("plaintext", "json", "base64", "gzip", "fail500", "refused", "bypass", "benign", "direct", "connect",
+                 "noopen", "https", "https-json", "https-fail", "https-pinned")
+        for mode in modes:
+            kind, cpu, rss, _err = one_case(directory, mode, measure=(mode == "https"), ca=ca)
+            if mode == "https":
                 active_cpu, active_rss = cpu, rss
             if kind == "uploaded":
                 upload_tp += 1
@@ -341,6 +451,17 @@ def main():
                 if kind == "not_visible":
                     content_unseen += 1
             elif kind != "transfer_only":
+                fn += 1
+        binary = directory / "codex"
+        subprocess.check_call(["/usr/bin/clang", "-O2", "-o", str(binary), str(ROOT / "tests/live_agent.c")])
+        for mode in ("live-proxy", "live-direct", "live-udp"):
+            kind = live_case(directory, mode, binary, secret)
+            if kind == "uploaded":
+                upload_tp += 1
+            elif kind == "not_visible":
+                tn += 1
+                content_unseen += 1
+            else:
                 fn += 1
     # False positives and false negatives are assertion failures above. A passed
     # run has none. not_visible is a true negative for the verdict and a content miss.
@@ -354,7 +475,7 @@ def main():
     )
     if not idle_cpu or not active_cpu:
         raise SystemExit(f"missing cpu samples idle={len(idle_cpu)} active={len(active_cpu)}")
-    if upload_tp != 5 or attempted_tp != 2 or tn != 3 or content_unseen != 2:
+    if upload_tp != 8 or attempted_tp != 3 or tn != 6 or content_unseen != 5:
         raise SystemExit("verdict counts did not match the synthetic matrix")
 
 
