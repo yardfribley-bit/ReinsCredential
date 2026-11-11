@@ -3,7 +3,8 @@ import AppKit
 import Foundation
 
 /// Local, opt-in rendering probe; omitted from release builds. It captures only
-/// this app's own sample-data window, never the desktop or another app's window.
+/// this app's own synthetic or empty first-launch window, never the desktop or
+/// another app's window. It never starts or registers the collection service.
 /// Window capture may require the host's Screen Recording permission.
 @MainActor
 enum DashboardSmoke {
@@ -15,7 +16,8 @@ enum DashboardSmoke {
               arguments.indices.contains(flag + 1) else { return }
         started = true
         let directory = URL(fileURLWithPath: arguments[flag + 1], isDirectory: true)
-        store.showSamples()
+        if arguments.contains("--smoke-empty") { store.returnToLive(records: []) }
+        else { store.showSamples() }
         Task {
             do {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -49,10 +51,11 @@ enum DashboardSmoke {
                     renders.append(["appearance": name, "width": bitmap.pixelsWide, "height": bitmap.pixelsHigh])
                 }
                 let report: [String: Any] = ["status": "rendered", "sample_records": store.records.count,
+                                             "dataset_mode": store.mode.rawValue,
                                              "demo_mode": store.isDemo, "captures": renders,
                                              "capture_method": "screencapture-window-id",
                                              "window_number": windowNumber,
-                                             "scope": "Own synthetic-data window only; visual review required; not interaction automation"]
+                                             "scope": "Own synthetic-data or empty first-launch window only; service registration disabled; visual review required; not interaction automation"]
                 try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                     .write(to: directory.appendingPathComponent("ui-smoke.json"), options: .atomic)
             } catch {

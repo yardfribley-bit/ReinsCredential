@@ -73,12 +73,16 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
     public let evidenceBasis: String
     public let transferOutcome: String
     public let classification: String
+    public let metrics: [String: UInt64]
+    public let count: UInt64
+    public let sessionID: String?
 
     public init(id: UUID = UUID(), timestamp: Date, riskLevel: RiskLevel,
                 targetResource: String, actionType: String, processTree: [ProcessNode],
                 sourceType: String = "", attribution: String = "", detail: String = "",
                 destination: String = "", chainComplete: Bool? = nil,
-                evidenceBasis: String = "", transferOutcome: String = "", classification: String = "") {
+                evidenceBasis: String = "", transferOutcome: String = "", classification: String = "",
+                metrics: [String: UInt64] = [:], count: UInt64 = 0, sessionID: String? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.riskLevel = riskLevel
@@ -93,12 +97,16 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
         self.evidenceBasis = evidenceBasis
         self.transferOutcome = transferOutcome
         self.classification = classification
+        self.metrics = metrics
+        self.count = count
+        self.sessionID = sessionID
     }
 
     enum CodingKeys: String, CodingKey {
         case id, timestamp, riskLevel, targetResource, actionType, processTree
         case sourceType, attribution, detail, destination, chainComplete
         case evidenceBasis, transferOutcome, classification
+        case metrics, count, sessionID, backendSession = "session_id"
         case schemaVersion = "schema_version", eventID = "event_id"
         case timestampUnit = "timestamp_unit", backendRisk = "risk_level"
         case backendTarget = "target_resource", type, actor = "actor_process"
@@ -134,6 +142,7 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
             case "sensitive_payload_observed", "payload_observed": actionType = "SUBMIT"
             case "transfer_result": actionType = "TRANSFER"
             case "sensor_gap": actionType = "GAP"
+            case "sensitive_network_cooccurrence": actionType = "CORRELATE"
             default: actionType = "OBSERVE"
             }
             let actor = try c.decodeIfPresent(BackendActor.self, forKey: .actor)
@@ -158,6 +167,9 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
         attribution = try c.decodeIfPresent(String.self, forKey: .attribution) ?? "unavailable"
         detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
         destination = try c.decodeIfPresent(String.self, forKey: .destination) ?? ""
+        metrics = try c.decodeIfPresent([String: UInt64].self, forKey: .metrics) ?? [:]
+        count = try c.decodeIfPresent(UInt64.self, forKey: .count) ?? 0
+        sessionID = try c.decodeIfPresent(String.self, forKey: c.contains(.schemaVersion) ? .backendSession : .sessionID)
     }
 
     /// The client format has camelCase keys. This does not rewrite backend logs.
@@ -177,6 +189,9 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
         try c.encode(evidenceBasis, forKey: .evidenceBasis)
         try c.encode(transferOutcome, forKey: .transferOutcome)
         try c.encode(classification, forKey: .classification)
+        try c.encode(metrics, forKey: .metrics)
+        try c.encode(count, forKey: .count)
+        try c.encodeIfPresent(sessionID, forKey: .sessionID)
     }
 }
 

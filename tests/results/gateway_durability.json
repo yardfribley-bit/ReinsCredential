@@ -1,0 +1,35 @@
+{
+  "test_kind": "gateway_admission_durability",
+  "checks": {
+    "success": {
+      "passed": true,
+      "upstream_receipts": 1
+    },
+    "write_fail_forward": {
+      "passed": true,
+      "gateway_exit": 1,
+      "upstream_receipts": 0,
+      "response_status": null,
+      "client_error": "RemoteDisconnected",
+      "log_bytes": 1024
+    },
+    "write_fail_read": {
+      "passed": true,
+      "gateway_exit": 1,
+      "upstream_receipts": 0,
+      "response_status": null,
+      "client_error": "RemoteDisconnected",
+      "log_bytes": 1024
+    }
+  },
+  "passed": true,
+  "limits": [
+    "receiver file read proves ordering; unit syscall interposition checks fsync",
+    "remote delivery and local outcome record are not an atomic transaction"
+  ],
+  "private_log_sha256": {
+    "success": "fbe6bdd6073cda453f7c587042869db2846a1e70ab0967eb0b2eed6b62bf1e84",
+    "write_fail_read": "e2748c363d7ad9b681daa61458b486856bd9bf43fb5d1e558b5255f763ca7b19",
+    "write_fail_forward": "369d1c2b89d8ce6bf41c099c186522c3075781773107c66f278a67ceef3dd00e"
+  }
+}

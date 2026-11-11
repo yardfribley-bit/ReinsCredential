@@ -26,6 +26,7 @@
 | `identity.pid` + `start_seconds` + `start_microseconds` | 三元组共同标识观察到的进程世代。单独 PID 或 PPID 不足以连接历史事件；同一世代也可能经历 `exec`。 |
 | `filesystem_change` | Swift 显示 `CHANGE`；FSEvents 不提供修改者 PID，也不报告读取行为。 |
 | `sensitive_fd_observed` | Swift 显示 `OBSERVE`；打开描述符不证明完成读取或上传。 |
+| `sensitive_network_cooccurrence` | Swift 显示 `CORRELATE`；同次世代校验后的 FD 样本携带确切文件与 socket 对端，`same_identity_descriptor_snapshot` 不证明文件内容发送。 |
 | `sensitive_content_delivered` / `sensitive_payload_observed` / `transfer_result` | Swift 分别显示 `DELIVER` / `SUBMIT` / `TRANSFER`；仍需联合查看 `evidence_basis`、`transfer_outcome` 和相关记录。 |
 | 未知 `type` | 保留原类型，Swift 默认显示 `OBSERVE`。不要仅凭类型字符串推断 `READ`、`WRITE` 或 `EXEC`。 |
 | `target_resource_bytes_hex` | 原始路径字节的十六进制表示。`target_resource` 遇到无效 UTF-8 会用替换字符显示；仅比较显示路径可能丢失差异。 |

@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 
 struct DashboardView: View {
     @ObservedObject var store: DashboardStore
+    @ObservedObject var runtime: RuntimeController
+    @State private var isConfigurationPresented = false
 
     var body: some View {
         NavigationSplitView {
@@ -25,21 +27,36 @@ struct DashboardView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .toolbar {
             ToolbarItemGroup {
+                if store.mode != .live {
+                    Button { store.returnToLive(records: runtime.records) } label: {
+                        Label("返回实时监控", systemImage: "waveform.path.ecg")
+                    }
+                    .disabled(store.isLoading)
+                }
+                Button { isConfigurationPresented = true } label: {
+                    Label("监控范围", systemImage: "folder.badge.gearshape")
+                }
+                .help("选择敏感文件所在的目录")
+                Button(action: runtime.runSelfTest) {
+                    Label("检测自检", systemImage: "checkmark.shield")
+                }
+                .disabled(runtime.isBusy || !runtime.state.canSelfTest)
+                .help("创建合成测试文件，验证采集与显示；不会读取真实凭据或上传内容")
                 if store.isLoading {
                     ProgressView().controlSize(.small)
                         .accessibilityLabel("正在导入证据日志")
                 }
-                Button { store.isImporterPresented = true } label: {
-                    Label("导入日志", systemImage: "square.and.arrow.down")
+                Menu {
+                    Button("导入日志快照…") { store.isImporterPresented = true }
+                    Button("查看合成演示") { store.showSamples() }
+                } label: {
+                    Label("更多", systemImage: "ellipsis.circle")
                 }
                 .disabled(store.isLoading)
-                .help("打开 C++ 后端生成的 JSONL 证据日志（⌘O）")
-                Button { store.showSamples() } label: {
-                    Label("演示数据", systemImage: "play.rectangle")
-                }
-                .disabled(store.isLoading)
-                .help("查看合成示例；不代表本机检测结果")
             }
+        }
+        .sheet(isPresented: $isConfigurationPresented) {
+            RuntimeConfigurationView(runtime: runtime)
         }
         .fileImporter(isPresented: $store.isImporterPresented,
                       allowedContentTypes: [.json, .plainText, .data]) { result in
@@ -60,6 +77,12 @@ struct DashboardView: View {
         } message: {
             Text(store.errorMessage ?? "")
         }
+        .alert("监控服务", isPresented: Binding(
+            get: { runtime.errorMessage != nil },
+            set: { if !$0 { runtime.errorMessage = nil } }
+        )) {
+            Button("好", role: .cancel) { runtime.errorMessage = nil }
+        } message: { Text(runtime.errorMessage ?? "") }
         .onChange(of: store.searchText) { _ in store.reconcileSelection() }
         .onChange(of: store.riskFilter) { _ in store.reconcileSelection() }
     }
@@ -72,11 +95,12 @@ struct DashboardView: View {
                     .foregroundStyle(Color.accentColor)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("运行时安全").font(.headline)
-                    Text("证据浏览器").font(.caption).foregroundStyle(.secondary)
+                    Text("本机 Agent 监控").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
             .padding(18)
+            .fixedSize(horizontal: false, vertical: true)
 
             List(selection: $store.riskFilter) {
                 Section("风险分级") {
@@ -94,17 +118,22 @@ struct DashboardView: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
-            Spacer(minLength: 0)
+            .frame(maxHeight: .infinity)
             VStack(alignment: .leading, spacing: 7) {
-                Label(store.isDemo ? "演示模式" : "日志快照", systemImage: "doc.text")
+                Label(store.mode.title, systemImage: store.mode == .live ? "waveform.path.ecg" : "doc.text")
                     .font(.caption.weight(.semibold))
-                Text("本客户端按需读取日志；当前未连接实时采集服务。")
+                Text(store.mode == .live ? "\(runtime.watchedPaths.count) 个监控目录" : "当前显示独立数据集。后台监控状态见主面板。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if store.mode == .live, let date = runtime.lastUpdate {
+                    Text("最近更新 \(date.formatted(date: .omitted, time: .standard))")
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .background(.ultraThinMaterial)
     }
@@ -112,6 +141,7 @@ struct DashboardView: View {
     private var evidenceContent: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
+                RuntimeStatusPanel(runtime: runtime)
                 HStack(alignment: .firstTextBaseline) {
                     Text(store.riskFilter.title).font(.title2.bold())
                     Spacer()
@@ -127,11 +157,12 @@ struct DashboardView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.ultraThinMaterial)
+            .fixedSize(horizontal: false, vertical: true)
+            .layoutPriority(1)
 
             Divider()
             if store.visibleRecords.isEmpty {
-                EmptyEvidenceView(symbol: "line.3.horizontal.decrease.circle", title: "没有匹配的证据",
-                                  message: store.records.isEmpty ? "导入 JSONL 日志后，记录会显示在这里。" : "调整风险分类或搜索条件。")
+                emptyDataset
             } else {
                 EvidenceTable(records: store.visibleRecords, selection: $store.selectedRecordID)
             }
@@ -142,18 +173,61 @@ struct DashboardView: View {
 
     private var datasetNotice: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: store.isDemo ? "sparkles" : "doc.text")
+            Image(systemName: store.isDemo ? "sparkles" : (store.mode == .live ? "dot.radiowaves.left.and.right" : "doc.text"))
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 4) {
-                Text(store.isDemo ? "演示数据 · 合成示例" : (store.importedURL?.lastPathComponent ?? "已导入日志"))
+                Text(datasetTitle)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
-                    .help(store.importedURL?.path ?? "用于展示界面的合成数据")
-                Text(store.isDemo ? "这些记录不是本机采集结果。导入日志以查看实际证据。" : "导入时的本地快照；重新导入以查看新增记录。")
+                    .help(store.importedURL?.path ?? store.mode.title)
+                Text(datasetDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    private var datasetTitle: String {
+        switch store.mode {
+        case .live: return "本机采集结果"
+        case .imported: return store.importedURL?.lastPathComponent ?? "已导入日志"
+        case .demo: return "演示数据 · 合成示例"
+        }
+    }
+
+    private var datasetDescription: String {
+        switch store.mode {
+        case .live: return "持续显示采集服务的实际记录。高风险表示需要核查的证据，不等同于已确认泄露。"
+        case .imported: return "导入时的本地快照；实时监控仍独立运行。点击“返回实时监控”查看新增记录。"
+        case .demo: return "这些记录不是本机检测结果。点击“返回实时监控”查看真实采集。"
+        }
+    }
+
+    @ViewBuilder
+    private var emptyDataset: some View {
+        if !store.records.isEmpty {
+            EmptyEvidenceView(symbol: "line.3.horizontal.decrease.circle", title: "没有匹配的证据",
+                              message: "调整风险分类或搜索条件。")
+        } else if store.mode == .live {
+            VStack(spacing: 14) {
+                Image(systemName: "shield.lefthalf.filled").font(.system(size: 38)).foregroundStyle(Color.accentColor)
+                Text(runtime.state.canStop ? "等待本机检测记录" : "开始监控本机 Agent")
+                    .font(.title3.bold())
+                Text(runtime.state.canStop ? "可执行检测自检，验证敏感文件活动能否出现在这里。没有记录不代表不存在风险。" : "启动服务、选择敏感目录，进程与文件活动将自动显示。关闭窗口后，后台服务可继续运行。")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center).frame(maxWidth: 420)
+                HStack {
+                    Button("选择监控目录…") { isConfigurationPresented = true }
+                    if runtime.state.canSelfTest {
+                        Button("运行检测自检", action: runtime.runSelfTest).buttonStyle(.borderedProminent)
+                            .disabled(runtime.isBusy)
+                    }
+                }
+            }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            EmptyEvidenceView(symbol: "doc.text", title: "此快照没有证据记录",
+                              message: "可导入其他日志，或返回实时监控查看本机采集结果。")
         }
     }
 
@@ -195,10 +269,10 @@ private struct EvidenceTable: View {
                     .monospacedDigit()
                     .help(record.timestamp.formatted(date: .complete, time: .complete))
             }.width(82)
-            TableColumn("动作") { record in
-                Text(record.actionType).font(.caption.monospaced()).lineLimit(1)
-                    .help(record.sourceType)
-            }.width(min: 65, ideal: 78)
+            TableColumn("检测项") { record in
+                Text(record.findingTitle).font(.caption).lineLimit(2)
+                    .help(record.sourceType.isEmpty ? record.actionType : record.sourceType)
+            }.width(min: 105, ideal: 150)
             TableColumn("进程 / 资源") { record in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(record.processTree.first?.name ?? "未归因")

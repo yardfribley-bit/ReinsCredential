@@ -1,6 +1,7 @@
 #include "ProcessCache.h"
 #include <algorithm>
 #include <stdexcept>
+#include <functional>
 
 namespace agentsec {
 std::optional<ActorProcess> ProcessSnapshot::Resolve(const ProcessIdentity& id) const {
@@ -17,7 +18,11 @@ std::optional<ActorProcess> ProcessSnapshot::Resolve(const ProcessIdentity& id) 
         if (!visited.insert(*entry.observed_parent).second) { actor.chain_status = "cycle_rejected"; break; }
         auto parent = history.find(*entry.observed_parent);
         if (parent == history.end()) { actor.chain_status = "history_expired_or_evicted"; break; }
-        actor.ancestors.push_back(parent->second); entry = parent->second;
+        if (!entry.parent_at_observation) { actor.chain_status = "parent_observation_unavailable"; break; }
+        entry = *entry.parent_at_observation;
+        // Liveness is current; image/arguments and observation times are frozen.
+        entry.state = parent->second.state;
+        actor.ancestors.push_back(entry);
         if (depth == 127) actor.chain_status = "depth_limit";
     }
     return actor;
@@ -98,6 +103,38 @@ void ProcessCache::Refresh() {
         const auto birth = [](const ProcessIdentity& id) { return std::make_pair(id.start_seconds, id.start_microseconds); };
         if (parent.identity == entry.node.identity || birth(parent.identity) > birth(entry.node.identity)) continue;
         if (source_->ValidateParent(entry.node, parent)) entry.observed_parent = parent.identity;
+    }
+    // All edges for this sample are established before any image is frozen, so
+    // PID sort order cannot accidentally truncate a chain. Existing frozen
+    // observations never acquire a parent's later exec image or late ancestry.
+    std::map<ProcessIdentity, std::shared_ptr<const ProcessEntry>> frozen;
+    std::set<ProcessIdentity> visiting;
+    std::function<std::shared_ptr<const ProcessEntry>(const ProcessIdentity&, size_t)> freeze;
+    freeze = [&](const ProcessIdentity& id, size_t depth) -> std::shared_ptr<const ProcessEntry> {
+        if (depth >= 128 || !visiting.insert(id).second) return {};
+        auto memo = frozen.find(id);
+        if (memo != frozen.end()) { visiting.erase(id); return memo->second; }
+        auto found = next->history.find(id);
+        if (found == next->history.end()) { visiting.erase(id); return {}; }
+        auto& entry = found->second;
+        if (entry.observed_parent && !entry.parent_at_observation)
+            entry.parent_at_observation = freeze(*entry.observed_parent, depth + 1);
+        // A chain can grow over many refreshes without recursive work in this
+        // refresh. Bound the retained immutable graph as well as DFS depth.
+        auto ancestor = entry.parent_at_observation;
+        size_t retained = 0;
+        while (ancestor) {
+            if (++retained >= 128) { visiting.erase(id); return {}; }
+            ancestor = ancestor->parent_at_observation;
+        }
+        auto observation = std::make_shared<const ProcessEntry>(entry);
+        frozen.emplace(id, observation); visiting.erase(id);
+        return observation;
+    };
+    for (auto& pair : next->history) {
+        auto& entry = pair.second;
+        if (entry.observed_parent && !entry.parent_at_observation)
+            entry.parent_at_observation = freeze(*entry.observed_parent, 0);
     }
     // Historical retention is bounded in time AND count. Never evict a live entry.
     std::vector<std::pair<MonoClock::time_point, ProcessIdentity>> retired;

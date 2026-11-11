@@ -60,7 +60,8 @@ std::string Entry(const ProcessEntry& entry) {
 std::string NewUuid() {
     uuid_t uuid; uuid_generate_random(uuid); char result[37]{}; uuid_unparse_lower(uuid, result); return result;
 }
-std::string ToJson(const EvidenceRecord& record, const std::string& session, uint64_t sequence) {
+namespace {
+std::string EncodeFields(const EvidenceRecord& record) {
     std::string actor = "null";
     if (record.actor_process) {
         const auto& a = *record.actor_process;
@@ -77,8 +78,7 @@ std::string ToJson(const EvidenceRecord& record, const std::string& session, uin
     std::string related = "[";
     for (const auto& id : record.related_event_ids) { if (related.size() > 1) related += ','; related += Quote(id); }
     related += ']';
-    return "{\"schema_version\":2,\"event_id\":" + Quote(record.event_id) + ",\"session_id\":" + Quote(session) +
-        ",\"sequence\":" + std::to_string(sequence) + ",\"timestamp\":" + std::to_string(record.timestamp) +
+    return ",\"event_id\":" + Quote(record.event_id) + ",\"timestamp\":" + std::to_string(record.timestamp) +
         ",\"timestamp_unit\":\"unix_microseconds\",\"type\":" + Quote(record.type) + ",\"actor_process\":" + actor +
         ",\"target_resource\":" + Quote(record.target_resource) + ",\"target_resource_bytes_hex\":" + Quote(Hex(record.target_resource)) +
         ",\"risk_level\":" + Quote(risk) + ",\"attribution\":" + Quote(record.attribution) + ",\"detail\":" + Quote(record.detail) +
@@ -88,8 +88,16 @@ std::string ToJson(const EvidenceRecord& record, const std::string& session, uin
         ",\"correlation_id\":" + Quote(record.correlation_id) + ",\"evidence_basis\":" + Quote(record.evidence_basis) +
         ",\"transfer_outcome\":" + Quote(record.transfer_outcome) + ",\"related_event_ids\":" + related + "}";
 }
+std::string Envelope(const std::string& session, uint64_t sequence) {
+    return "{\"schema_version\":2,\"session_id\":" + Quote(session) + ",\"sequence\":" + std::to_string(sequence);
+}
+} // namespace
+std::string ToJson(const EvidenceRecord& record, const std::string& session, uint64_t sequence) {
+    return Envelope(session, sequence) + EncodeFields(record);
+}
 EvidenceStore::EvidenceStore(const std::string& path, Config config) : config_(config), session_(NewUuid()) {
-    if (!config_.capacity) throw std::invalid_argument("evidence queue capacity must be positive");
+    if (!config_.capacity || !config_.max_record_bytes || config_.max_pending_bytes < config_.max_record_bytes)
+        throw std::invalid_argument("invalid evidence queue record/byte limits");
     // O_NONBLOCK avoids hanging on a malicious FIFO before fstat can reject it.
     int fd = ::open(path.c_str(), O_RDWR | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
     if (fd < 0) SystemError("open evidence file");
@@ -114,24 +122,64 @@ EvidenceStore::EvidenceStore(const std::string& path, Config config) : config_(c
     thread_ = std::thread([this] { Run(); });
 }
 EvidenceStore::~EvidenceStore() { Join(); }
-SubmitResult EvidenceStore::Submit(EvidenceRecord record) {
+EvidenceStore::Pending EvidenceStore::Prepare(EvidenceRecord record) const {
     if (record.event_id.empty()) record.event_id = NewUuid();
     if (!record.timestamp) record.timestamp = UnixMicros();
+    Pending pending;
+    pending.fields = EncodeFields(record);
+    // Reserve the largest sequence header + newline; producer-side record and
+    // unused argv data are released before waiting on the bounded queue.
+    pending.bytes = pending.fields.size() + Envelope(session_, UINT64_MAX).size() + 1;
+    return pending;
+}
+bool EvidenceStore::Fits(const Pending& pending) const noexcept {
+    return queue_.size() < config_.capacity && pending.bytes <= config_.max_pending_bytes - pending_bytes_;
+}
+size_t EvidenceStore::PendingBytes() const {
+    std::lock_guard<std::mutex> lock(mutex_); return pending_bytes_;
+}
+uint64_t EvidenceStore::FileBytes() const {
+    if (!fd_) throw std::logic_error("evidence store closed");
+    struct stat status{};
+    if (::fstat(fd_->value, &status)) SystemError("fstat evidence size");
+    if (status.st_size < 0) throw std::runtime_error("negative evidence file size");
+    return static_cast<uint64_t>(status.st_size);
+}
+SubmitResult EvidenceStore::Submit(EvidenceRecord record) {
+    auto pending = Prepare(std::move(record));
     std::lock_guard<std::mutex> lock(mutex_);
     if (error_) return SubmitResult::Failed;
     if (closed_) return SubmitResult::Closed;
-    if (queue_.size() >= config_.capacity) { ++rejected_; return SubmitResult::Full; }
-    queue_.push_back(std::move(record)); ready_.notify_one(); return SubmitResult::Accepted;
+    if (pending.bytes > config_.max_record_bytes) { ++rejected_; return SubmitResult::Oversized; }
+    if (!Fits(pending)) { ++rejected_; return SubmitResult::Full; }
+    const auto bytes = pending.bytes;
+    queue_.push_back(std::move(pending)); pending_bytes_ += bytes; ready_.notify_one();
+    return SubmitResult::Accepted;
 }
-void EvidenceStore::SubmitCritical(EvidenceRecord record, std::chrono::seconds timeout) {
-    if (record.event_id.empty()) record.event_id = NewUuid();
-    if (!record.timestamp) record.timestamp = UnixMicros();
+void EvidenceStore::EnqueueAndWait(Pending pending, std::chrono::seconds timeout, bool durable) {
+    const auto deadline = MonoClock::now() + timeout;
+    std::future<void> receipt;
+    if (durable) { pending.receipt = std::make_unique<std::promise<void>>(); receipt = pending.receipt->get_future(); }
     std::unique_lock<std::mutex> lock(mutex_);
-    if (!space_.wait_for(lock, timeout, [this] { return closed_ || error_ || queue_.size() < config_.capacity; }))
-        throw std::runtime_error("critical evidence submission timed out");
+    if (pending.bytes > config_.max_record_bytes) { ++rejected_; throw std::length_error("evidence record exceeds byte limit"); }
+    if (!space_.wait_until(lock, deadline, [this, &pending] { return closed_ || error_ || Fits(pending); })) {
+        ++rejected_; throw std::runtime_error("critical evidence submission timed out");
+    }
     if (error_) std::rethrow_exception(error_);
     if (closed_) throw std::runtime_error("evidence store closed");
-    queue_.push_back(std::move(record)); ready_.notify_one();
+    const auto bytes = pending.bytes;
+    queue_.push_back(std::move(pending)); pending_bytes_ += bytes; ready_.notify_one(); lock.unlock();
+    if (durable) {
+        if (receipt.wait_until(deadline) != std::future_status::ready)
+            throw std::runtime_error("evidence sync acknowledgement timed out; record may later persist");
+        receipt.get();
+    }
+}
+void EvidenceStore::SubmitCritical(EvidenceRecord record, std::chrono::seconds timeout) {
+    EnqueueAndWait(Prepare(std::move(record)), timeout, false);
+}
+void EvidenceStore::SubmitDurable(EvidenceRecord record, std::chrono::seconds timeout) {
+    EnqueueAndWait(Prepare(std::move(record)), timeout, true);
 }
 void EvidenceStore::Check() const {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -161,19 +209,31 @@ void EvidenceStore::WriteAll(const std::string& line) {
     }
 }
 void EvidenceStore::Run() noexcept {
+    Pending current;
     try {
         uint64_t sequence = 0;
         for (;;) {
             std::unique_lock<std::mutex> lock(mutex_);
             ready_.wait(lock, [this] { return closed_ || !queue_.empty(); });
             if (queue_.empty()) break;
-            auto record = std::move(queue_.front()); queue_.pop_front(); space_.notify_all(); lock.unlock();
-            WriteAll(ToJson(record, session_, ++sequence) + '\n');
-            if (config_.sync_each_record && ::fsync(fd_->value)) SystemError("fsync evidence record");
+            current = std::move(queue_.front()); queue_.pop_front(); space_.notify_all(); lock.unlock();
+            WriteAll(Envelope(session_, ++sequence) + current.fields + '\n');
+            if ((config_.sync_each_record || current.receipt) && ::fsync(fd_->value)) SystemError("fsync evidence record");
+            // Release the buffer before releasing its byte budget or acknowledging.
+            auto receipt = std::move(current.receipt);
+            const auto bytes = current.bytes;
+            current = {};
+            { std::lock_guard<std::mutex> update(mutex_); pending_bytes_ -= bytes; }
+            space_.notify_all();
+            if (receipt) receipt->set_value();
         }
         if (::fsync(fd_->value)) SystemError("final fsync evidence");
     } catch (...) {
-        std::lock_guard<std::mutex> lock(mutex_); error_ = std::current_exception(); closed_ = true;
+        const auto error = std::current_exception();
+        std::lock_guard<std::mutex> lock(mutex_); error_ = error; closed_ = true;
+        if (current.receipt) current.receipt->set_exception(error);
+        for (auto& pending : queue_) if (pending.receipt) pending.receipt->set_exception(error);
+        current = {}; queue_.clear(); pending_bytes_ = 0;
         ready_.notify_all(); space_.notify_all();
     }
 }

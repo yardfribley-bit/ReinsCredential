@@ -1,0 +1,25 @@
+{
+  "result": "PASS",
+  "dmg_sha256": "eb6e112d88f86e337a8731292e6bfe4ffd647ea1eb1d711fb449fb3168483c12",
+  "dmg_bytes": 1598483,
+  "signature": "ad-hoc; integrity only, not notarized",
+  "architectures": {
+    "dashboard": [
+      "x86_64",
+      "arm64"
+    ],
+    "runtime": [
+      "x86_64",
+      "arm64"
+    ],
+    "monitor": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  "mounted_binary_matches": {
+    "dashboard": true,
+    "runtime": true,
+    "monitor": true
+  }
+}

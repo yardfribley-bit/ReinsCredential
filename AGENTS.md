@@ -29,9 +29,15 @@ mean complete agent discovery or exfiltration detection has been achieved.
 | Resource ownership | `SystemResources.h`: RAII for native handles |
 | Evidence writer | `EvidenceStore.h/.cpp`: schema, JSON escaping, admission and persistence |
 | Explicit content channel | `ContentGateway.cpp`, `ContentMatcher.cpp`: opt-in delivery/transfer evidence |
-| Native client | `macOSClient/Package.swift`: `EvidenceCore` library + `ReinsDashboardApp` executable |
+| Native client | `macOSClient/Package.swift`: EvidenceCore / RuntimeCore / ReinsDashboardApp / ReinsRuntime |
 | Client model | `macOSClient/Sources/EvidenceCore/Models/Evidence.swift`: backend-to-UI decoding |
 | Client input | `EvidenceLogReader.swift`: bounded, read-only JSONL snapshot importer |
+| Live input | `LiveEvidenceReader.swift`: bounded actor, partial lines, inode rotation, fresh coverage |
+| Background control | `RuntimeController.swift`: SMAppService, independent health, config, self-test |
+| Supervisor | `ReinsRuntime/main.swift`, `OwnedChild.swift`: owned process lifecycle, backoff, archive rotation |
+| Runtime storage | `RuntimeCore`: private atomic config/status, instance lock, archive retention |
+| Local-build service | `RuntimeCore/LocalLaunchAgent.swift`: explicit per-user plist/launchctl for ad-hoc builds; signed builds use SMAppService |
+| Installation | `macOSClient/scripts/build-app.sh`, `package-local.sh`, `install-local.sh` |
 | Client state/UI | `macOSClient/Sources/ReinsDashboardApp/`: main-actor state and SwiftUI views |
 | Wire contract | `schemas/evidence-v2.schema.json`: emitted C++ Schema 2; keep it in sync with `ToJson` |
 
@@ -72,12 +78,21 @@ macOSClient/scripts/check.sh
 macOSClient/scripts/build-app.sh
 # Both architectures; execution on each architecture needs its own verification
 macOSClient/scripts/build-app.sh --arch arm64 --arch x86_64
+macOSClient/scripts/package-local.sh
+# Real collector + isolated runtime integration; does not install a LaunchAgent
+python3 macOSClient/scripts/runtime-check.py
 ```
 
 `make acceptance` deliberately returns failure while full behavior acceptance
 contains known misses. Do not weaken this gate to make a report green. Native
 process/FSEvents tests may need execution outside a development sandbox; distinguish
 permission/tooling failures from product test results.
+
+`make shutdown-probe` is also a strict capability gate with a known failure:
+an immediately stopped stream may miss a completed write. Do not add a test sleep
+or claim that FlushSync is a filesystem barrier. See BACKEND_AUDIT_REPORT.md.
+Read macOSClient/PRODUCT_TEST_REPORT.md for installed-product results; the older
+macOSClient/TEST_REPORT.md describes the historical snapshot-only release.
 
 For a UI-only change, run the client checks and affected rendering probes; do not
 invoke real agents or transmit content unnecessarily. For backend behavior changes,

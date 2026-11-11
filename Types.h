@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <memory>
 #include <map>
 #include <string>
 #include <tuple>
@@ -35,6 +36,9 @@ struct ProcessEntry {
     ProcessState state = ProcessState::Observed;
     // A historical, identity-bound parent link. Never replace it with a bare PID lookup.
     std::optional<ProcessIdentity> observed_parent;
+    // Freeze the parent's observed image AND ancestry when this edge is bound.
+    // PID/start identifies a lifetime; it does not identify an exec image.
+    std::shared_ptr<const ProcessEntry> parent_at_observation;
     uint64_t first_seen_us = 0, last_seen_us = 0;
     MonoClock::time_point last_seen_mono;
 };
@@ -56,7 +60,9 @@ struct EvidenceRecord {
     std::string attribution = "unavailable", detail;
     uint64_t source_event_id = 0, source_flags = 0, count = 0;
     std::map<std::string, uint64_t> metrics;
-    // Optional content-sensor evidence; never populated from socket/FD coincidence.
+    // Destination may be an observed peer, or a content gateway target. The
+    // evidence_basis/type distinguishes them; content hashes and transfer outcomes
+    // must never be fabricated from descriptor co-occurrence.
     std::string destination, content_sha256, correlation_id, evidence_basis, transfer_outcome;
     std::vector<std::string> related_event_ids;
 };

@@ -41,20 +41,49 @@ enum RiskFilter: String, CaseIterable, Identifiable {
 
 @MainActor
 final class DashboardStore: ObservableObject {
-    @Published private(set) var records = EvidenceRecord.sampleRecords
+    enum DatasetMode: String {
+        case live, imported, demo
+        var title: String {
+            switch self {
+            case .live: return "本机实时监控"
+            case .imported: return "日志快照"
+            case .demo: return "演示数据"
+            }
+        }
+    }
+
+    @Published private(set) var records: [EvidenceRecord] = []
     @Published var riskFilter: RiskFilter = .all
     @Published var searchText = ""
     @Published var selectedRecordID: UUID?
     @Published var isImporterPresented = false
     @Published private(set) var isLoading = false
-    @Published private(set) var isDemo = true
+    @Published private(set) var mode: DatasetMode = .live
     @Published private(set) var importedURL: URL?
     @Published private(set) var rejectedLines: [Int] = []
     @Published private(set) var incompleteTail = false
     @Published var errorMessage: String?
 
-    init() {
-        selectedRecordID = records.first?.id
+    var isDemo: Bool { mode == .demo }
+
+    /// Live updates cannot overwrite an imported snapshot or synthetic demo.
+    /// Keep selection and filters stable as new records arrive.
+    func applyLive(records: [EvidenceRecord]) {
+        guard mode == .live, !isLoading else { return }
+        self.records = records
+        reconcileSelection()
+    }
+
+    func returnToLive(records: [EvidenceRecord]) {
+        guard !isLoading else { return }
+        mode = .live
+        importedURL = nil
+        rejectedLines = []
+        incompleteTail = false
+        errorMessage = nil
+        riskFilter = .all
+        searchText = ""
+        applyLive(records: records)
     }
 
     var visibleRecords: [EvidenceRecord] {
@@ -89,7 +118,7 @@ final class DashboardStore: ObservableObject {
         importedURL = nil
         rejectedLines = []
         incompleteTail = false
-        isDemo = true
+        mode = .demo
         riskFilter = .all
         searchText = ""
         selectedRecordID = records.first?.id
@@ -116,7 +145,7 @@ final class DashboardStore: ObservableObject {
                 rejectedLines = result.rejectedLines
                 incompleteTail = result.incompleteTail
                 importedURL = url
-                isDemo = false
+                mode = .imported
                 riskFilter = .all
                 searchText = ""
                 selectedRecordID = records.first?.id

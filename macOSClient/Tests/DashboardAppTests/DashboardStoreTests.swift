@@ -6,6 +6,71 @@ import XCTest
 
 @MainActor
 final class DashboardStoreTests: XCTestCase {
+    func testFirstLaunchStartsWithEmptyLiveDataset() {
+        let store = DashboardStore()
+        XCTAssertEqual(store.mode, .live)
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertFalse(store.isDemo)
+        XCTAssertNil(store.selectedRecord)
+        XCTAssertNil(store.importedURL)
+    }
+
+    func testLiveUpdatesPreserveSelectionAndRespectCurrentFilters() {
+        let store = DashboardStore()
+        let first = record(risk: .high, pid: 12, name: "one", path: "/Fixtures/one")
+        let second = record(risk: .medium, pid: 13, name: "two", path: "/Fixtures/two")
+        store.applyLive(records: [first])
+        XCTAssertEqual(store.selectedRecordID, first.id)
+        store.applyLive(records: [second, first])
+        XCTAssertEqual(store.selectedRecordID, first.id)
+        store.riskFilter = .medium
+        store.reconcileSelection()
+        XCTAssertEqual(store.selectedRecordID, second.id)
+        store.applyLive(records: [first])
+        XCTAssertNil(store.selectedRecordID)
+        XCTAssertTrue(store.visibleRecords.isEmpty)
+        XCTAssertEqual(store.records, [first])
+    }
+
+    func testLiveRecordsNeverOverwriteSyntheticDemo() {
+        let store = DashboardStore()
+        let actual = record(risk: .high, pid: 14, name: "actual", path: "/Fixtures/actual")
+        store.showSamples()
+        let samples = store.records
+        store.applyLive(records: [actual])
+        XCTAssertEqual(store.mode, .demo)
+        XCTAssertEqual(store.records, samples)
+        store.searchText = "stale"
+        store.returnToLive(records: [actual])
+        XCTAssertEqual(store.mode, .live)
+        XCTAssertEqual(store.records, [actual])
+        XCTAssertFalse(store.isDemo)
+        XCTAssertTrue(store.searchText.isEmpty)
+    }
+
+    func testLiveUpdatesDoNotOverwriteImportedSnapshotAndReturnClearsWarnings() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = DashboardStore()
+        let snapshot = record(risk: .low, pid: 15, name: "snapshot", path: "/Fixtures/snapshot")
+        let actual = record(risk: .high, pid: 16, name: "actual", path: "/Fixtures/actual")
+        let url = directory.appendingPathComponent("partial.jsonl")
+        var data = try JSONEncoder().encode(snapshot)
+        data.append(Data("\ninvalid\n".utf8))
+        try data.write(to: url)
+        store.importLog(from: url)
+        try await waitForImport(store)
+        store.applyLive(records: [actual])
+        XCTAssertEqual(store.mode, .imported)
+        XCTAssertEqual(store.records, [snapshot])
+        XCTAssertEqual(store.rejectedLines, [2])
+        store.returnToLive(records: [actual])
+        XCTAssertEqual(store.mode, .live)
+        XCTAssertEqual(store.records, [actual])
+        XCTAssertNil(store.importedURL)
+        XCTAssertTrue(store.rejectedLines.isEmpty)
+    }
+
     func testRiskFiltersSearchAndSelectionUseImportedEvidence() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -43,6 +108,7 @@ final class DashboardStoreTests: XCTestCase {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = DashboardStore()
+        store.showSamples()
         XCTAssertTrue(store.isDemo)
         store.riskFilter = .high
         store.searchText = "stale search"

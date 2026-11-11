@@ -2,7 +2,7 @@
 
 C++17 用户态 Agent 候选监测与结构化证据收集器，使用 libproc 和 FSEvents。
 
-原生 macOS 客户端第一阶段位于 [macOSClient](macOSClient/README.md)：SwiftUI 风险列表、进程链详情和只读 JSONL 日志导入，支持浅色/暗色和材质背景。开发 Agent 请先读 [AGENTS.md](AGENTS.md)；后端证据契约见 [Schema 2](schemas/README.md)。
+原生 macOS 客户端位于 [macOSClient](macOSClient/README.md)：可安装 App 包含 C++ 采集器、登录后台服务、实时风险列表、目录配置、独立健康检查和检测自检。按用户选择坚持无 ESF，接受采样覆盖限制。[安装说明](macOSClient/INSTALL.md) · [本机产品逐功能验收](macOSClient/PRODUCT_TEST_REPORT.md) · [后端整改报告](BACKEND_AUDIT_REPORT.md)。开发 Agent 请先读 [AGENTS.md](AGENTS.md)；后端证据契约见 [Schema 2](schemas/README.md)。
 
 **完整读取/外传验收尚未通过。** 最新实测、逐功能检查和真实 Agent 证据见 [ACCEPTANCE_REPORT.md](ACCEPTANCE_REPORT.md)：45 个行为用例为 17 TP、22 TN、0 FP、6 FN；已接入内容通道的真实 Codex 本机发送验证通过，模型目的地、未接入发送和公网收件仍未通过。
 
@@ -30,7 +30,7 @@ make integration
 make acceptance # 当前返回非零：完整验收存在漏报
 ```
 
-默认敏感路径为 ~/.ssh、~/.aws、启动目录的 .env。日志模式强制要求 0600，目录应由本人控制；默认输出到 evidence.jsonl，正常监控不向 stdout 输出。--pid 返回 JSON 元数据与已观察祖先链。--match 和 --sensitive 可以重复增加规则。--include-runtimes 会把普通解释器也列为候选，增加误报。SIGINT/SIGTERM 正常排空关闭。退出码 0 为正常，1 为致命错误，2 为存在覆盖/队列丢失。
+CLI 默认敏感路径为 ~/.ssh、~/.aws、启动目录的 .env。日志模式强制要求 0600，目录应由本人控制；默认输出到 evidence.jsonl，正常监控不向 stdout 输出。--pid 返回 JSON 元数据与已观察祖先链。--match 和 --sensitive 可以重复增加规则；`--no-default-sensitive` 清除之前的路径，App 在参数开头使用它以严格应用保存的配置。--include-runtimes 会把普通解释器也列为候选，增加误报。SIGINT/SIGTERM 排空已接收事件，但不保证尚未交付的 FSEvents。退出码 0 为正常，1 为致命错误，2 为覆盖/队列丢失，3 为请求日志轮转；轮转仍需检查汇总中的丢失指标。
 
 现在默认记录所有可见进程的清单，并对它们采样敏感文件描述符，不依赖 Agent 名称白名单。未识别工具标注为 unclassified_process；已知程序标注为 known_agent_candidate。未知进程持有敏感文件时也会采样 socket 对端并输出风险线索。--agent-bundle 可重复配置应用目录标签，无需重新编译；标签不是身份认证或 Agent 语义证明。
 

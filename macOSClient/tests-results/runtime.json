@@ -1,0 +1,90 @@
+{
+  "result": "PASS",
+  "generated_at": "2026-11-11T16:22:13.722825+00:00",
+  "platform": {
+    "system": "Darwin",
+    "version": "26.5.2",
+    "architecture": "x86_64"
+  },
+  "scope": "Isolated runtime processes; no LaunchAgent installation; generated data and loopback only.",
+  "binaries": {
+    "runtime": "ef0e688d87f4059b657e1c66a12e4fb4074f7bc6881ed091799c7d5cad45936d",
+    "monitor": "8a7ffea3ef969167503c940ebf9ed2fea8824cf21eec09e85ce9cd65e3c63db5"
+  },
+  "cases": [
+    {
+      "name": "live_monitor_epoch",
+      "status": "PASS",
+      "detail": "A current monitor emits coverage at or after the supervisor monitor-start epoch."
+    },
+    {
+      "name": "private_runtime_files",
+      "status": "PASS",
+      "detail": "Live evidence and status are private mode 0600."
+    },
+    {
+      "name": "single_instance_lock",
+      "status": "PASS",
+      "detail": "A second supervisor is refused without overwriting the first status."
+    },
+    {
+      "name": "synthetic_probe_ready",
+      "status": "PASS",
+      "detail": "Bundled probe opens the synthetic file and connects only to loopback."
+    },
+    {
+      "name": "live_synthetic_file_peer_detection",
+      "status": "PASS",
+      "detail": "Real monitor independently associates the probe identity, synthetic path and loopback peer; no upload claim."
+    },
+    {
+      "name": "live_identity_and_ancestor_chain",
+      "status": "PASS",
+      "detail": "The probe identity includes start time and its observed Python test parent appears in the ancestor chain."
+    },
+    {
+      "name": "probe_completed",
+      "status": "PASS",
+      "detail": "Probe exits normally after holding descriptors."
+    },
+    {
+      "name": "configuration_reload_restarts_monitor",
+      "status": "PASS",
+      "detail": "Changing saved configuration gracefully replaces the owned monitor with a fresh session."
+    },
+    {
+      "name": "restart_archives_previous_evidence",
+      "status": "PASS",
+      "detail": "The prior closed log is archived with a shutdown summary before a new log is opened."
+    },
+    {
+      "name": "signal_shutdown_reaps_child",
+      "status": "PASS",
+      "detail": "SIGTERM stops the supervisor and its owned monitor, reaps the child and publishes stopped."
+    },
+    {
+      "name": "rotation_exit3_restart",
+      "status": "PASS",
+      "detail": "Synthetic exit 3 repeatedly rotates and restarts; only five prior log archives remain."
+    },
+    {
+      "name": "mock_shutdown_has_no_child",
+      "status": "PASS",
+      "detail": "An owned synthetic child is also reaped on supervisor shutdown."
+    },
+    {
+      "name": "bounded_failure_retry",
+      "status": "PASS",
+      "detail": "Five synthetic failures trip the retry budget; the live supervisor reports failed without a monitor."
+    },
+    {
+      "name": "failure_circuit_stays_open",
+      "status": "PASS",
+      "detail": "Failure state does not immediately respawn another child."
+    }
+  ],
+  "counts": {
+    "passed": 14,
+    "failed": 0
+  }
+}

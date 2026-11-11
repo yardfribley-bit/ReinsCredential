@@ -4,7 +4,7 @@ LDLIBS := -framework CoreServices -lz
 CORE := ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp
 HEADERS := $(wildcard *.h)
 
-.PHONY: all check integration acceptance clean
+.PHONY: all check audit-check audit-native shutdown-probe integration acceptance clean
 all: agent-monitor agent-gateway
 agent-gateway: ContentGateway.cpp $(CORE) $(HEADERS)
 	$(CXX) $(CXXFLAGS) ContentGateway.cpp $(CORE) $(LDLIBS) -lcurl -lbsm -o $@
@@ -14,11 +14,31 @@ agent-unit: tests/unit.cpp $(CORE) $(HEADERS)
 	$(CXX) $(CXXFLAGS) -I. tests/unit.cpp $(CORE) $(LDLIBS) -o $@
 agent-probe: tests/fixture.cpp
 	$(CXX) $(CXXFLAGS) $< -o $@
-check: agent-unit
+agent-generations: tests/process_generations.cpp $(CORE) $(HEADERS)
+	$(CXX) $(CXXFLAGS) -I. $< $(CORE) $(LDLIBS) -o $@
+agent-callback-tests: tests/callback_unit.cpp $(CORE) $(HEADERS)
+	$(CXX) $(CXXFLAGS) -I. $< $(CORE) $(LDLIBS) -o $@
+agent-store-tests: tests/store_durability.cpp EvidenceStore.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -I. $< EvidenceStore.cpp $(LDLIBS) -o $@
+agent-shutdown-probe: tests/file_shutdown.cpp $(CORE) $(HEADERS)
+	$(CXX) $(CXXFLAGS) -I. $< $(CORE) $(LDLIBS) -o $@
+check: agent-unit audit-check
 	./agent-unit
+audit-check: agent-generations agent-callback-tests agent-store-tests
+	./agent-generations
+	./agent-callback-tests
+	./agent-store-tests
+audit-native: all
+	/usr/bin/python3 tests/rotation.py
+	/usr/bin/python3 tests/gateway_durability.py
+# This deliberately strict pre-Stop write probe remains a failing capability
+# probe where macOS has not yet delivered the operation to fseventsd. It is not
+# weakened or silently counted as a passing cleanup test.
+shutdown-probe: agent-shutdown-probe
+	./agent-shutdown-probe
 integration: agent-monitor agent-probe
 	/usr/bin/python3 tests/integration.py
 acceptance: all
 	/usr/bin/python3 tests/acceptance_matrix.py --require-full-acceptance
 clean:
-	rm -f agent-monitor agent-gateway agent-unit agent-probe
+	rm -f agent-monitor agent-gateway agent-unit agent-probe agent-generations agent-callback-tests agent-store-tests agent-shutdown-probe

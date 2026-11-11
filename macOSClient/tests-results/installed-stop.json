@@ -1,0 +1,9 @@
+{
+  "message": "后台服务已停用；已有证据保留在本机。",
+  "result": "PASS",
+  "state": "stopped",
+  "launchagent_removed": true,
+  "owned_processes_exited": true,
+  "job_unloaded": true,
+  "evidence_preserved": true
+}

@@ -48,6 +48,12 @@ with tempfile.TemporaryDirectory(prefix="agent-monitor-test-") as temp:
     assert any(r.get("detail", "").startswith("sensitive_file_open:") for r in ours), "open sensitive file"
     assert any(r.get("detail", "").startswith("socket_peer:127.0.0.1:") for r in ours), "loopback peer"
     assert any("upload_unproven" in r.get("detail", "") for r in ours), "co-observation signal"
+    pairs = [r for r in ours if r['type'] == 'sensitive_network_cooccurrence']
+    assert pairs and any(r['target_resource'] == str(sensitive.resolve()) and
+                         r['destination'].startswith('127.0.0.1:') and
+                         r['evidence_basis'] == 'same_identity_descriptor_snapshot' and
+                         r['risk_level'] == 'Medium' and not r['transfer_outcome'] and
+                         not r['content_sha256'] for r in pairs), 'typed file/peer co-observation'
     assert any(r["type"] == "agent_no_longer_observed" and actor_pid(r) == parent for r in ours), "disappearance"
     file_events = [r for r in records if r["type"] == "filesystem_change"]
     assert file_events and all(r["actor_process"] is None for r in file_events), "honest FSEvents attribution"

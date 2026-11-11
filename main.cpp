@@ -1,6 +1,7 @@
 #include "AgentMonitor.h"
 #include "FileMonitor.h"
 #include <climits>
+#include <algorithm>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -15,20 +16,34 @@ int Positive(const std::string& text) {
     if (consumed != text.size() || value <= 0 || value > 86400000) throw std::invalid_argument("invalid positive integer: " + text);
     return static_cast<int>(value);
 }
-void Health(agentsec::ProcessCache& cache, agentsec::FileMonitor& files, agentsec::AgentMonitor& agents, agentsec::EvidenceStore& store, bool final) {
+uint64_t PositiveBytes(const std::string& text) {
+    if (text.empty() || !std::all_of(text.begin(), text.end(), [](char c) { return c >= '0' && c <= '9'; }))
+        throw std::invalid_argument("invalid byte limit: " + text);
+    size_t consumed = 0;
+    const auto value = std::stoull(text, &consumed);
+    if (!value || consumed != text.size()) throw std::invalid_argument("invalid byte limit: " + text);
+    return value;
+}
+void Health(agentsec::ProcessCache& cache, agentsec::FileMonitor& files, agentsec::AgentMonitor& agents, agentsec::EvidenceStore& store,
+    bool final, uint64_t log_limit, bool rotation_required) {
     const auto snapshot = cache.View(); const auto stats = files.Stats();
+    const auto scanned = agents.Stats();
     agentsec::EvidenceRecord record;
     record.type = final ? "shutdown_summary" : "coverage";
-    record.count = stats.queue_dropped + stats.oversized_paths + stats.source_gaps + store.Rejected();
+    record.count = stats.queue_dropped + stats.oversized_paths + stats.source_gaps + store.Rejected() +
+        scanned.retirement_retry_exhausted + scanned.cooccurrence_pairs_truncated + (final ? scanned.retirement_pending : 0);
     record.risk_level = record.count ? agentsec::RiskLevel::High : agentsec::RiskLevel::Low;
     record.detail = "Best-effort coverage; absence of an observation does not prove absence of activity";
     record.metrics = {{"generation", snapshot->generation}, {"visible", snapshot->current.size()},
         {"unavailable", snapshot->unavailable}, {"history_evicted", snapshot->history_evicted},
         {"enumeration_complete", snapshot->enumeration_complete ? 1 : 0}, {"raw_queue_dropped", stats.queue_dropped},
         {"oversized_paths", stats.oversized_paths}, {"source_gaps", stats.source_gaps}, {"evidence_rejected", store.Rejected()}};
-    const auto scanned = agents.Stats();
     record.metrics.insert({{"activity_processes", scanned.processes}, {"known_candidates", scanned.candidates},
-        {"activity_validation_failed", scanned.validation_failed}, {"fd_scans_partial", scanned.descriptors_partial}, {"activity_scan_duration_ms", scanned.duration_ms}});
+        {"activity_validation_failed", scanned.validation_failed}, {"fd_scans_partial", scanned.descriptors_partial}, {"activity_scan_duration_ms", scanned.duration_ms},
+        {"retirement_pending", scanned.retirement_pending}, {"retirement_retry_exhausted", scanned.retirement_retry_exhausted},
+        {"cooccurrence_pairs_truncated", scanned.cooccurrence_pairs_truncated}, {"log_bytes", store.FileBytes()},
+        {"log_limit_bytes", log_limit}, {"log_rotation_required", rotation_required ? 1 : 0},
+        {"shutdown_flush_not_filesystem_barrier", final ? 1 : 0}});
     store.SubmitCritical(std::move(record));
 }
 } // namespace
@@ -39,6 +54,7 @@ int main(int argc, char** argv) {
         ProcessCache::Config cache_config;
         AgentRules rules;
         int duration = 0; size_t workers = 2;
+        uint64_t max_log_bytes = 0;
         std::optional<pid_t> query;
         std::vector<std::filesystem::path> paths;
         if (const auto home = std::getenv("HOME")) paths = {std::filesystem::path(home) / ".ssh", std::filesystem::path(home) / ".aws"};
@@ -47,13 +63,16 @@ int main(int argc, char** argv) {
             const std::string option = argv[i];
             if (option == "--help") {
                 std::cout << "Usage: agent-monitor [--log PATH] [--duration SECONDS] [--interval-ms N] [--match BASENAME]\n"
-                    "                     [--sensitive PATH] [--agent-bundle NAME.app] [--include-runtimes] [--workers 1..8] [--pid PID]\n";
+                    "                     [--sensitive PATH] [--agent-bundle NAME.app] [--include-runtimes] [--workers 1..8] [--pid PID]\n"
+                    "                     [--no-default-sensitive] [--max-log-bytes N] (rotation: exit 3; not a hard size ceiling)\n";
                 return 0;
             }
             if (option == "--include-runtimes") { rules.include_runtimes = true; continue; }
+            if (option == "--no-default-sensitive") { paths.clear(); continue; }
             if (i + 1 == argc) throw std::invalid_argument("missing value: " + option);
             const std::string value = argv[++i];
             if (option == "--log") log = value;
+            else if (option == "--max-log-bytes") max_log_bytes = PositiveBytes(value);
             else if (option == "--duration") duration = Positive(value);
             else if (option == "--interval-ms") cache_config.interval = std::chrono::milliseconds(Positive(value));
             else if (option == "--workers") workers = static_cast<size_t>(Positive(value));
@@ -88,21 +107,33 @@ int main(int argc, char** argv) {
         std::signal(SIGINT, SignalHandler); std::signal(SIGTERM, SignalHandler);
         live_cache.Start();
         files.Start();
-        Health(live_cache, files, agents, store, false);
+        Health(live_cache, files, agents, store, false, max_log_bytes, false);
+        bool rotation_required = false;
         const auto begin = MonoClock::now(); auto next_health = begin + std::chrono::seconds(5); auto next_scan = begin;
+        auto next_size_check = begin;
         while (!stopping) {
             if (duration && MonoClock::now() - begin >= std::chrono::seconds(duration)) break;
             live_cache.Check(); files.Check(); store.Check();
+            if (max_log_bytes && MonoClock::now() >= next_size_check) {
+                if (store.FileBytes() >= max_log_bytes) { rotation_required = true; break; }
+                next_size_check = MonoClock::now() + std::chrono::milliseconds(250);
+            }
             if (MonoClock::now() >= next_scan) { agents.Scan(); next_scan = MonoClock::now() + cache_config.interval; }
-            if (MonoClock::now() >= next_health) { Health(live_cache, files, agents, store, false); next_health = MonoClock::now() + std::chrono::seconds(5); }
+            if (MonoClock::now() >= next_health) { Health(live_cache, files, agents, store, false, max_log_bytes, false); next_health = MonoClock::now() + std::chrono::seconds(5); }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
         files.Stop(); live_cache.Stop();
         files.Check(); live_cache.Check();
-        Health(live_cache, files, agents, store, true);
+        // The threshold is advisory: accepted records are always drained, so
+        // shutdown and one in-progress scan can take the file beyond the limit.
+        if (max_log_bytes && store.FileBytes() >= max_log_bytes) rotation_required = true;
+        Health(live_cache, files, agents, store, true, max_log_bytes, rotation_required);
         store.Close(); // errors during drain or final sync affect the exit status
         const auto stats = files.Stats();
-        return stats.queue_dropped || stats.oversized_paths || stats.source_gaps || store.Rejected() ? 2 : 0;
+        if (rotation_required) return 3;
+        const auto activity = agents.Stats();
+        return stats.queue_dropped || stats.oversized_paths || stats.source_gaps || store.Rejected() ||
+            activity.retirement_retry_exhausted || activity.retirement_pending || activity.cooccurrence_pairs_truncated ? 2 : 0;
     } catch (const std::exception& error) {
         EvidenceRecord record; record.event_id = NewUuid(); record.timestamp = UnixMicros();
         record.type = "fatal_error"; record.risk_level = RiskLevel::High; record.detail = error.what();

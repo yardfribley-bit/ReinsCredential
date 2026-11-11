@@ -13,6 +13,13 @@ struct EvidenceDetailView: View {
                     Spacer()
                     RiskBadge(level: record.riskLevel)
                 }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(record.findingTitle).font(.title3.weight(.semibold))
+                    if let action = record.recommendedAction {
+                        Text(action).font(.subheadline).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 detailSection("事件") {
                     DetailValue(title: "事件 ID", value: record.id.uuidString, monospaced: true)
                     DetailValue(title: "记录时间（本地）", value: Self.timestampFormatter.string(from: record.timestamp), monospaced: true)

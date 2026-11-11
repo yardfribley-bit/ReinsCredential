@@ -6,7 +6,8 @@
 namespace agentsec {
 namespace {
 constexpr auto GapFlags = kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped |
-    kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagEventIdsWrapped;
+    kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagEventIdsWrapped |
+    kFSEventStreamEventFlagMount | kFSEventStreamEventFlagUnmount;
 constexpr auto ChangeFlags = kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemModified |
     kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemRenamed;
 static_assert(std::atomic<uint64_t>::is_always_lock_free, "callback counters must be lock-free");
@@ -54,7 +55,15 @@ void FileMonitor::Start() {
 void FileMonitor::Stop() noexcept {
     if (stream_) {
         auto& deleter = stream_.get_deleter();
-        if (deleter.started) { FSEventStreamStop(stream_.get()); deleter.started = false; }
+        if (deleter.started) {
+            // Ask fseventsd to flush its buffered events before unregistering.
+            // Native tests still miss some externally acknowledged writes when
+            // Stop immediately follows them; do not turn this API into a claimed
+            // filesystem-operation barrier. It also has no hard OS deadline.
+            FSEventStreamFlushSync(stream_.get());
+            if (dispatch_) dispatch_sync_f(dispatch_.get(), nullptr, [](void*) {});
+            FSEventStreamStop(stream_.get()); deleter.started = false;
+        }
         if (deleter.scheduled) { FSEventStreamInvalidate(stream_.get()); deleter.scheduled = false; }
         // Source is stopped and unscheduled. Drain any already-enqueued C callbacks
         // while this object, its rings and borrowed context are still alive.
@@ -113,7 +122,7 @@ void FileMonitor::Process(const RawFileEvent& raw) {
         EvidenceRecord gap;
         gap.type = "sensor_gap"; gap.timestamp = raw.observed_us; gap.source_event_id = raw.source_id;
         gap.source_flags = raw.flags; gap.risk_level = RiskLevel::High;
-        gap.detail = "FSEvents gap/root change: rescan and stream reconfiguration required; coverage incomplete";
+        gap.detail = "FSEvents gap/root or volume topology change: rescan and stream reconfiguration required; coverage incomplete";
         gap.target_resource = path; store_.Submit(std::move(gap));
     }
     if (!(raw.flags & ChangeFlags)) return;

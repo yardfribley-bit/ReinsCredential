@@ -1,0 +1,37 @@
+{
+  "date": "2026-11-12",
+  "swift": {
+    "tests": 63,
+    "passed": 63,
+    "failed": 0,
+    "skipped": 0,
+    "groups": {
+      "DashboardStore": 11,
+      "EvidenceLogReader": 10,
+      "EvidenceModel": 9,
+      "LiveEvidenceReader": 7,
+      "RuntimeController": 6,
+      "RuntimeCore": 20
+    },
+    "log_sha256": "29892d85643c5870368af2bc578e2adf5718138b4549d9303889a1188e84a3ca"
+  },
+  "backend": {
+    "original_groups_passed": 6,
+    "audit_groups_passed": 14,
+    "native_integration_groups_passed": 2,
+    "rotation_cases_passed": 6,
+    "gateway_durability_cases_passed": 3,
+    "log_sha256": "28a6ee3a8755a103920ca940bb419c196bbea18c53a05a44f3679db920579296"
+  },
+  "shutdown_delivery_probe": {
+    "result": "FAIL",
+    "rounds": 6,
+    "misses": 6,
+    "delay_ms": 0,
+    "log_sha256": "1a9879f657f942884db8a88bc72a6120909dcf98171d003d85f4c1cb5cf67b72"
+  },
+  "limits": [
+    "Counts mix test functions, groups and scenarios; do not combine as a detection accuracy score.",
+    "No general TLS exfiltration proof; no new real-agent model upload validation."
+  ]
+}

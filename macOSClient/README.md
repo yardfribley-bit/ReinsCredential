@@ -1,8 +1,10 @@
-# ReinsCredential · macOS 原生证据浏览器
+# ReinsCredential · macOS 本机监控客户端
 
-第一阶段 SwiftUI 客户端：原生三栏导航、风险筛选、搜索、证据详情、进程链和本地 JSONL 导入。最低部署目标为 macOS 13；跟随系统浅色/暗色外观，侧栏和详情采用 `.ultraThinMaterial`。
+SwiftUI 客户端：可安装 App、当前用户后台采集、实时风险筛选、搜索、证据详情、进程链、监控范围配置、自检和本地 JSONL 导入。最低部署目标为 macOS 13；跟随系统浅色/暗色外观，侧栏和详情采用 `.ultraThinMaterial`。
 
-当前界面展示**按需导入的日志快照**。启动时显示明确标识的合成演示数据；成功导入后完全替换演示数据。尚未接入守护进程的实时 IPC、后台订阅或告警推送。
+启动时显示真实实时数据，未启动服务时为空。完整 App 注册用户后台服务，自动采集；本机 ad-hoc 版采用用户 LaunchAgent，正式签名构建使用 SMAppService。界面以有界增量方式读取私有 JSONL。导入快照、合成演示和实时模式互相隔离。用户态采样可能漏过短暂活动，共现不证明内容上传。
+
+[安装与卸载](INSTALL.md) · [本次逐功能测试报告](PRODUCT_TEST_REPORT.md)。
 
 实际运行截图（合成数据）：[浅色](Documentation/dashboard-light.png) · [暗色](Documentation/dashboard-dark.png)。
 
@@ -21,11 +23,13 @@ open macOSClient/dist/ReinsCredential.app
 # 同时编译 Apple Silicon 与 Intel
 macOSClient/scripts/build-app.sh --arch arm64 --arch x86_64
 
-# 26 项测试，含真实 C++ ToJson → Swift 解码
+# 63 项测试，含真实 C++ ToJson → Swift 解码
 macOSClient/scripts/check.sh
+macOSClient/scripts/package-local.sh
+macOSClient/scripts/install-local.sh
 ```
 
-`dist/ReinsCredential.app` 使用 ad-hoc 本地签名，未做 Developer ID 签名、公证或分发安装包。构建产物不提交 Git。也可在 Xcode 中打开 `Package.swift`，选择 `ReinsDashboard` 运行。
+`dist/ReinsCredential.app` 与本地 DMG 使用 ad-hoc 签名，未做 Developer ID 签名/公证。构建产物不提交 Git。`swift run` / Xcode 直接运行可开发界面，但只有完整 App 包包含后台注册所需 plist 和二进制。
 
 使用工具栏「导入日志」或 `⌘O` 选择 C++ 监控器产生的 JSONL 文件。导入只读，不修改证据、不启动采集、不发送网络请求。文件权限仍由系统控制，客户端不会提升权限读取 `/var/log`。
 
@@ -33,11 +37,11 @@ macOSClient/scripts/check.sh
 
 ```text
 ReinsDashboardApp
-  └─ DashboardStore (@MainActor)
-       ├─ DashboardView / EvidenceDetailView
-       └─ EvidenceLogReader (后台读取、限额、逐行解码)
-            └─ Models/Evidence.swift (EvidenceCore)
-                 └─ C++ Schema 2 / 客户端 Codable 格式
+  ├─ RuntimeController → 用户 LaunchAgent / SMAppService → ReinsRuntime → agent-monitor
+  │     ├─ RuntimeCore: 私有配置、状态心跳、单实例锁、归档
+  │     └─ LiveEvidenceReader: 增量 JSONL → 独立采集健康 + 实时记录
+  └─ DashboardStore → DashboardView / EvidenceDetailView
+        └─ EvidenceLogReader: 只读快照导入 → EvidenceCore 模型
 ```
 
 模型实现：[Models/Evidence.swift](Sources/EvidenceCore/Models/Evidence.swift)。保留请求的 `ProcessNode`、`RiskLevel`、`EvidenceRecord` 基础字段，并扩展可选世代信息与证据语义。
@@ -52,6 +56,7 @@ ReinsDashboardApp
 | `ProcessNode.path` | `executable`；后端节点 UUID 由 PID + 两个启动时间字段稳定派生 |
 | `actionType` | FSEvents 为 `CHANGE`，FD/进程观测为 `OBSERVE`；内容通道分别保留 `DELIVER/SUBMIT/TRANSFER` |
 | 关联字段 | 保留 `sourceType`、`attribution`、`destination`、`chainComplete`、`evidenceBasis`、`transferOutcome`、`classification` |
+| 健康字段 | 保留 `metrics`、`count`、`sessionID`；采集心跳必须晚于本轮 monitor 启动且足够新鲜 |
 
 `ProcessNode` 显式解码保存的 UUID，避免 `let id = UUID()` 配合合成 Codable 时每次解码丢失原 ID。没有身份的 FSEvents 记录显示「未归因」，不会补造进程。PID + 启动时间的 UUID 只用于稳定显示，不是身份认证。
 
@@ -68,7 +73,7 @@ ReinsDashboardApp
 
 ## 验证与 AI 协作入口
 
-逐项结果见 [TEST_REPORT.md](TEST_REPORT.md)。`scripts/check.sh` 编译 C++ 合成样例生成器并传入测试；单独 `swift test` 时 C++ 互操作项会明确跳过。
+当前逐项结果见 [PRODUCT_TEST_REPORT.md](PRODUCT_TEST_REPORT.md)，旧快照版本保留在 [TEST_REPORT.md](TEST_REPORT.md)。`scripts/check.sh` 编译 C++ 合成样例生成器并传入测试；单独 `swift test` 时 C++ 互操作项会明确跳过。`scripts/runtime-check.py` 验证隔离后台服务，只有本机合成文件/回环连接。
 
 Debug 版包含只针对本应用合成窗口的渲染探针：
 

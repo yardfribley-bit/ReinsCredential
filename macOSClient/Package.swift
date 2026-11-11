@@ -6,12 +6,17 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "EvidenceCore", targets: ["EvidenceCore"]),
-        .executable(name: "ReinsDashboard", targets: ["ReinsDashboardApp"])
+        .library(name: "RuntimeCore", targets: ["RuntimeCore"]),
+        .executable(name: "ReinsDashboard", targets: ["ReinsDashboardApp"]),
+        .executable(name: "ReinsRuntime", targets: ["ReinsRuntime"])
     ],
     targets: [
         .target(name: "EvidenceCore"),
-        .executableTarget(name: "ReinsDashboardApp", dependencies: ["EvidenceCore"]),
+        .target(name: "RuntimeCore"),
+        .executableTarget(name: "ReinsRuntime", dependencies: ["RuntimeCore"]),
+        .executableTarget(name: "ReinsDashboardApp", dependencies: ["EvidenceCore", "RuntimeCore"]),
         .testTarget(name: "EvidenceCoreTests", dependencies: ["EvidenceCore"]),
-        .testTarget(name: "DashboardAppTests", dependencies: ["EvidenceCore", "ReinsDashboardApp"])
+        .testTarget(name: "RuntimeCoreTests", dependencies: ["RuntimeCore"]),
+        .testTarget(name: "DashboardAppTests", dependencies: ["EvidenceCore", "RuntimeCore", "ReinsDashboardApp"])
     ]
 )

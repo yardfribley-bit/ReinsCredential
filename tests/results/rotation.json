@@ -1,0 +1,42 @@
+{
+  "test_kind": "daemon_rotation_contract",
+  "passed": true,
+  "checks": [
+    {
+      "case": "threshold_during_collection",
+      "passed": true,
+      "exit_code": 3,
+      "threshold_bytes": 2048,
+      "final_bytes": 868909,
+      "records": 700
+    },
+    {
+      "case": "already_over_threshold",
+      "passed": true,
+      "exit_code": 3,
+      "threshold_bytes": 1,
+      "final_bytes": 2218,
+      "records": 2
+    },
+    {
+      "case": "reject_invalid_limit_0",
+      "passed": true
+    },
+    {
+      "case": "reject_invalid_limit_-1",
+      "passed": true
+    },
+    {
+      "case": "reject_invalid_limit_1x",
+      "passed": true
+    },
+    {
+      "case": "reject_invalid_limit_18446744073709551616",
+      "passed": true
+    }
+  ],
+  "limits": [
+    "Threshold is checked between scans; queued records and final summary can overshoot.",
+    "Backend requests rotation; the native supervisor owns rename, retention and restart."
+  ]
+}

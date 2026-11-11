@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
                     record.content_sha256 = digest; record.count = bytes.size(); record.risk_level = RiskLevel::Medium;
                     record.destination = "unix-peer:" + std::to_string(record.actor_process->process.node.identity.pid);
                     record.evidence_basis = "gateway_read_registered_file_on_behalf_of_peer;not_native_peer_read";
-                    store.SubmitCritical(record);
+                    store.SubmitDurable(record);
                     Respond(client->value, 200, bytes);
                     record.related_event_ids = {record.event_id}; record.event_id = NewUuid();
                     record.timestamp = UnixMicros();
@@ -266,7 +266,8 @@ int main(int argc, char** argv) {
                         record.detail = "registered_content_version_sha256=" + digest + ";source_copy_origin_unproven";
                         if (!record.related_event_ids.empty()) record.detail += ";linked_by_same_observed_agent_scope_and_content_not_memory_taint";
                     }
-                    store.SubmitCritical(record); // admission evidence before network attempt
+                    // Fail closed until the admission record has been written and fsynced.
+                    store.SubmitDurable(record);
                     const auto forwarded = Forward(upstream, request.body);
                     record.related_event_ids.push_back(record.event_id); record.event_id = NewUuid();
                     record.timestamp = UnixMicros();

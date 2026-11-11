@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-11-11T16:43:58Z",
+  "rejected_lines": 0,
+  "result": "PASS",
+  "scope": "Installed app and real background monitor; synthetic file/loopback peer; no external transfer; background service left registered.",
+  "self_test_message": "自检通过：独立采集器关联了测试进程、文件和本机连接。未向外网发送。",
+  "self_test_passed": true,
+  "service_mode": "local_launchagent",
+  "state": "degraded",
+  "status_message": "可见进程 665，Agent 候选 75。部分进程或描述符不可见。用户态采样可能漏过短暂活动。",
+  "background_after_ui_exit": {
+    "passed": true,
+    "launchd_pid_matches_supervisor": true,
+    "status_age_seconds": 0.39
+  },
+  "synthetic_evidence": {
+    "event_id": "82cb664c-43b5-4aea-b088-cd46727221df",
+    "timestamp": 1794415433230192,
+    "type": "sensitive_network_cooccurrence",
+    "evidence_basis": "same_identity_descriptor_snapshot",
+    "destination": "127.0.0.1:55869/protocol=6",
+    "transfer_outcome": "",
+    "risk_level": "Medium",
+    "target_resource": "$APP_DATA/runtime/self-test/synthetic-8D73F03E-F127-499D-8A2F-76315D363FEF.env",
+    "actor_identity": {
+      "pid": 18873,
+      "start_seconds": 1794415431,
+      "start_microseconds": 738333
+    },
+    "ancestor_names": [
+      "ReinsDashboard"
+    ],
+    "chain_complete": false
+  },
+  "binary_sha256": {
+    "dashboard": "52b3e143864f96e527baaaf7cfd8cb914bd9b3cb440e959dce3d535df29b8251",
+    "runtime": "aa2574981b9141c06402f067a63ddaa9caed361989b86ec5780f56f19eb5fdf2",
+    "monitor": "8a7ffea3ef969167503c940ebf9ed2fea8824cf21eec09e85ce9cd65e3c63db5"
+  },
+  "restart_after_stop": {
+    "passed": true,
+    "self_test_passed": true,
+    "state": "degraded"
+  }
+}

@@ -24,10 +24,15 @@ public:
     FileMonitor(const FileMonitor&) = delete;
     FileMonitor& operator=(const FileMonitor&) = delete;
     void Start();
-    void Stop() noexcept; // control thread only; never call from the dispatch queue
+    // Control thread only. Requests OS-buffered delivery before stopping, then
+    // drains received callbacks/rings. This is NOT a barrier for every write
+    // completed by another process before Stop; see the native shutdown probe.
+    // No hard shutdown deadline. Never call from the dispatch queue.
+    void Stop() noexcept;
     void Check() const;
     FileMonitorStats Stats() const noexcept;
 private:
+    friend struct FileMonitorTestAccess; // test-only definition; exercises the real callback
     using Ring = SpscRing<RawFileEvent, 1024>;
     static void Callback(ConstFSEventStreamRef, void*, size_t, void*, const FSEventStreamEventFlags[], const FSEventStreamEventId[]) noexcept;
     void Consume(size_t index) noexcept;
