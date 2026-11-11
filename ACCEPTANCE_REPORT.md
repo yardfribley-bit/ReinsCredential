@@ -28,14 +28,14 @@
 
 访问级矩阵：**TP 7（已上传 5，已尝试未成功 2）、TN 3、FP 0、FN 0**。内容仍然看不到的是直接 TCP 和 CONNECT，**2/2 被标成看不到，没有被伪装成未发现**。打开文件本身仍然不是上传。
 
-CPU 和 RSS 在同一次 macOS 运行里用 `ps -o %cpu=,rss=` 采样。`%cpu` 是衰减平均值，不是积分后的单核占用。空闲是代理单独运行约 3 秒；活跃是无关正文那次，包含转发和大约 2 秒的采样。数字见这次 GitHub Actions `macos-latest` 运行的 `RESULT` 行，填在下面：
+CPU 和 RSS 在同一次 macOS 运行里用 `ps -o %cpu=,rss=` 采样。`%cpu` 是衰减平均值，不是积分后的单核占用。空闲是代理单独运行约 3 秒；活跃是无关正文那次，包含转发和大约 2 秒的采样。中位数 0.0% 只说明这组短采样的衰减平均值没有升到 0.1，不是积分后的零占用。
+
+实测来自 GitHub Actions `macos-latest`，镜像 `macos-26-arm64`，run [43076987696](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43076987696)，提交 `ed0cae9`。命令：`make check`（通过，含上传结论单元测试）、`make integration`（通过，含 `tests/egress_verdict.py`）、`macOSClient/scripts/check.sh`（65 个 Swift 测试，0 失败）。
 
 | 测量 | 结果 |
 | --- | --- |
-| 空闲 CPU 中位数 | 待本次 runner 的 RESULT 行回填 |
-| 空闲 RSS 中位数 | 待本次 runner 的 RESULT 行回填 |
-| 活跃 CPU 中位数 | 待本次 runner 的 RESULT 行回填 |
-| 活跃 RSS 中位数 | 待本次 runner 的 RESULT 行回填 |
+| 空闲约 3 秒 | CPU 中位数 0.0%，RSS 中位数 5696 KB（11 次 `ps`） |
+| 活跃约 6 秒采样窗口 | CPU 中位数 0.0%，RSS 中位数 6896 KB（20 次 `ps`） |
 
 这是进程很少的 CI 机器，不能外推到一台有数百个进程的 Mac。没有在 x86_64 上复跑。没有做 TLS 解密，所以普通 HTTPS 正文仍然是看不到。跨请求分片、旧网关那 45 例里的其它漏报，以及 `make acceptance` 的完整通过标准，都没有被这一步改掉。**总体验收：未通过。**
 
