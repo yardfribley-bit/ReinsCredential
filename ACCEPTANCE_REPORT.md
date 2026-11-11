@@ -45,7 +45,28 @@ CPU 和 RSS 在同一次 macOS 运行里用 `ps -o %cpu=,rss=` 采样。`%cpu` �
 
 `--tls-ca-cert` 与 `--tls-ca-key` 让 CONNECT 里的 HTTPS 使用同一套指纹。CA 只存在调用方给出的文件和临时目录里的短命叶子，不进入登录钥匙串。证书固定、QUIC/UDP 和直连仍然是看不到，不写成未发现。
 
-新增合成用例的计数和 CPU 在 macOS runner 测完后填在这里。上一节 `ed0cae9` 的数字仍然是拦截关闭、且只覆盖自己启动的进程树时的结果。
+上一节 `ed0cae9` 的数字仍然是拦截关闭、且只覆盖自己启动的进程树时的结果。这一节是加上已运行进程观察和可选 HTTPS 检查之后的实测。
+
+实测来自 GitHub Actions `macos-latest`，镜像 `macos-26-arm64`，run [43084817319](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43084817319)，提交 `65d0907`。命令：`make check`（通过）、`make integration`（通过，含原来的短读和 `tests/egress_verdict.py`）、`macOSClient/scripts/check.sh`（65 个 Swift 测试，0 失败）。敏感内容仍是 `SYNTHETIC_EGRESS_SECRET_v2_0123456789abcdef`。
+
+| 用例 | 结论 | 归类 |
+| --- | --- | --- |
+| 原文 / JSON / Base64 / gzip / 绕过旧网关的明文 HTTP | 已上传 | TP ×5 |
+| HTTPS 原文、HTTPS JSON（CONNECT，信任临时 CA） | 已上传 | TP ×2 |
+| 已经在运行的 `codex` 自己连到代理 | 已上传 | TP |
+| HTTP 500、连接失败、HTTPS 500 | 已尝试未成功 | TP ×3 |
+| 无关明文 | 未发现 | TN |
+| 直连 TCP、无拦截的 CONNECT、证书不信任的 HTTPS、已运行进程的直连、UDP | 看不到 | TN ×5 |
+| 正文匹配但没有打开文件 | 只记传输，不编造打开 | 单独 1 例 |
+
+访问级矩阵：**TP 11（已上传 8，已尝试未成功 3）、TN 6、FP 0、FN 0**。内容仍然看不到的 5 例都被标成看不到，没有被写成未发现。
+
+| 测量 | 结果 |
+| --- | --- |
+| 空闲约 3 秒，开启 `--watch-live` | CPU 中位数 2.4%，RSS 中位数 6560 KB（12 次 `ps`） |
+| HTTPS 拦截那次，20 次 `ps` | CPU 中位数 0.15%，RSS 中位数 8128 KB |
+
+`%cpu` 仍是衰减平均值。2.4% 是在扫已有进程，不是那台几百个进程的 Mac。没有在 x86_64 上复跑。证书固定、QUIC、不经过代理的直连，以及没有自己连过来的已运行 Agent，仍然看不到。`make acceptance` 仍失败。**总体验收：未通过。**
 
 ## 0. 2026-11-11 归因与短时打开（step 1）
 
