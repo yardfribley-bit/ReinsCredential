@@ -111,35 +111,29 @@ public:
     }
     bool Write(const char* data, size_t length, std::string& error) override {
         size_t sent = 0;
+        int stalls = 0;
         while (sent < length) {
             size_t count = 0;
             OSStatus status = SSLWrite(context, data + sent, length - sent, &count);
             sent += count;
-            if (status == noErr) { if (!count) { error = "tls_write_stall"; return false; } continue; }
-            if (status == errSSLWouldBlock && count) continue;
+            if (status == noErr || (status == errSSLWouldBlock && count)) {
+                if (status == noErr && !count) { error = "tls_write_stall"; return false; }
+                stalls = 0;
+                continue;
+            }
+            if (status == errSSLWouldBlock && stalls < 8) {
+                ++stalls;
+                char scratch = 0;
+                size_t ignored = 0;
+                SSLRead(context, &scratch, 0, &ignored);
+                continue;
+            }
             error = "tls_write_" + std::to_string(static_cast<int>(status));
             return false;
         }
         return true;
     }
 };
-std::unique_ptr<TlsSession> FinishHandshake(int fd, SSLContextRef context, std::string& error) {
-    OSStatus status = noErr;
-    for (int attempt = 0; attempt < 8; ++attempt) {
-        status = SSLHandshake(context);
-        if (status != errSSLWouldBlock) break;
-    }
-    if (status != noErr) {
-        CFRelease(context);
-        error = "tls_handshake_" + std::to_string(static_cast<int>(status));
-        return nullptr;
-    }
-    auto session = std::make_unique<SecureSession>();
-    session->context = context;
-    session->fd = fd;
-    SSLSetConnection(context, &session->fd);
-    return std::unique_ptr<TlsSession>(session.release());
-}
 } // namespace
 
 struct TlsIntercept::State {
@@ -253,21 +247,38 @@ std::unique_ptr<TlsSession> TlsIntercept::AcceptClient(int fd, const std::string
     } else identity = &found->second;
     SSLContextRef context = SSLCreateContext(kCFAllocatorDefault, kSSLServerSide, kSSLStreamType);
     if (!context) { error = "tls_context_failed"; return nullptr; }
+    auto session = std::make_unique<SecureSession>();
+    session->fd = fd;
+    session->context = context;
     SSLSetIOFuncs(context, ReadTls, WriteTls);
-    SSLSetConnection(context, &fd);
+    SSLSetConnection(context, &session->fd);
     SecIdentityRef raw = identity->get();
     CFArrayRef chain = CFArrayCreate(kCFAllocatorDefault, (const void**)&raw, 1, &kCFTypeArrayCallBacks);
     OSStatus set = SSLSetCertificate(context, chain);
     CFRelease(chain);
-    if (set != noErr) { CFRelease(context); error = "tls_certificate_" + std::to_string(static_cast<int>(set)); return nullptr; }
-    return FinishHandshake(fd, context, error);
+    if (set != noErr) { session->context = nullptr; CFRelease(context); error = "tls_certificate_" + std::to_string(static_cast<int>(set)); return nullptr; }
+    OSStatus status = errSSLWouldBlock;
+    for (int attempt = 0; attempt < 12; ++attempt) {
+        status = SSLHandshake(context);
+        if (status != errSSLWouldBlock) break;
+    }
+    if (status != noErr) {
+        session->context = nullptr;
+        CFRelease(context);
+        error = "tls_handshake_" + std::to_string(static_cast<int>(status));
+        return nullptr;
+    }
+    return std::unique_ptr<TlsSession>(session.release());
 }
 std::unique_ptr<TlsSession> TlsIntercept::ConnectOrigin(int fd, const std::string& host, std::string& error) {
     if (!SafeHost(host) || !state_->anchor) { error = "tls_origin_rejected"; return nullptr; }
     SSLContextRef context = SSLCreateContext(kCFAllocatorDefault, kSSLClientSide, kSSLStreamType);
     if (!context) { error = "tls_context_failed"; return nullptr; }
+    auto session = std::make_unique<SecureSession>();
+    session->fd = fd;
+    session->context = context;
     SSLSetIOFuncs(context, ReadTls, WriteTls);
-    SSLSetConnection(context, &fd);
+    SSLSetConnection(context, &session->fd);
     SSLSetPeerDomainName(context, host.c_str(), host.size());
     SSLSetSessionOption(context, kSSLSessionOptionBreakOnServerAuth, true);
     OSStatus status = errSSLWouldBlock;
@@ -306,16 +317,12 @@ std::unique_ptr<TlsSession> TlsIntercept::ConnectOrigin(int fd, const std::strin
             if (name) CFRelease(name);
             if (trust) CFRelease(trust);
             if (anchors) CFRelease(anchors);
-            if (!trusted) { CFRelease(context); error = "tls_origin_not_trusted"; return nullptr; }
+            if (!trusted) { session->context = nullptr; CFRelease(context); error = "tls_origin_not_trusted"; return nullptr; }
             continue;
         }
         if (status != errSSLWouldBlock) break;
     }
-    if (status != noErr) { CFRelease(context); error = "tls_origin_handshake_" + std::to_string(static_cast<int>(status)); return nullptr; }
-    auto session = std::make_unique<SecureSession>();
-    session->context = context;
-    session->fd = fd;
-    SSLSetConnection(context, &session->fd);
+    if (status != noErr) { session->context = nullptr; CFRelease(context); error = "tls_origin_handshake_" + std::to_string(static_cast<int>(status)); return nullptr; }
     return std::unique_ptr<TlsSession>(session.release());
 }
 #pragma clang diagnostic pop

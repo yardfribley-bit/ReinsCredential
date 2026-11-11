@@ -832,7 +832,7 @@ void InspectConnect(int fd, const ActorProcess& actor, const std::pair<std::stri
         "\r\nContent-Length: " + std::to_string(request.body.size()) + "\r\nConnection: close\r\n\r\n" + request.body;
     if (!origin->Write(wire.data(), wire.size(), failure)) {
         Wipe(wire);
-        RecordTransfer(session, actor, request, destination, "tls_upstream_write_failed", false, ";tls_intercept");
+        RecordTransfer(session, actor, request, destination, failure.empty() ? "tls_upstream_write_failed" : failure, false, ";tls_intercept");
         return;
     }
     Wipe(wire);
