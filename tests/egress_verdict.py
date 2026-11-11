@@ -264,17 +264,13 @@ def make_ca(directory):
     server_cert = directory / "server.crt"
     ext = directory / "server.ext"
     ext.write_text("[ext]\nbasicConstraints=CA:FALSE\nsubjectAltName=IP:127.0.0.1\n")
-    subprocess.check_call(["/usr/bin/openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(ca_key)],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.check_call(["/usr/bin/openssl", "req", "-x509", "-key", str(ca_key), "-subj", "/CN=ReinsEphemeralTestCA",
-                           "-days", "1", "-out", str(ca_cert)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.check_call(["/usr/bin/openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(server_key)],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.check_call(["/usr/bin/openssl", "req", "-new", "-key", str(server_key), "-subj", "/CN=127.0.0.1",
-                           "-out", str(server_csr)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.check_call(["/usr/bin/openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(ca_key)])
+    subprocess.check_call(["/usr/bin/openssl", "req", "-new", "-x509", "-key", str(ca_key), "-subj", "/CN=ReinsEphemeralTestCA",
+                           "-days", "1", "-out", str(ca_cert)])
+    subprocess.check_call(["/usr/bin/openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(server_key)])
+    subprocess.check_call(["/usr/bin/openssl", "req", "-new", "-key", str(server_key), "-subj", "/CN=127.0.0.1", "-out", str(server_csr)])
     subprocess.check_call(["/usr/bin/openssl", "x509", "-req", "-in", str(server_csr), "-CA", str(ca_cert), "-CAkey", str(ca_key),
-                           "-CAcreateserial", "-out", str(server_cert), "-days", "1", "-extfile", str(ext), "-extensions", "ext"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           "-CAcreateserial", "-out", str(server_cert), "-days", "1", "-extfile", str(ext), "-extensions", "ext"])
     return ca_cert, ca_key, server_cert, server_key
 
 
