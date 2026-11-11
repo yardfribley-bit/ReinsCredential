@@ -14,14 +14,18 @@
 - 采集器自身是 `collector_self`，不会被写成嫌疑 Agent。AgentReins 一类未列入规则的安全工具保持 `unclassified_process`。
 - 默认敏感路径增加 `~/.config/gh`、`~/.netrc`、`~/.npmrc`、`~/.git-credentials`、`~/.docker/config.json`、`~/.kube/config`、`~/.config/gcloud`、`~/.azure`。已保存且恰好仍是旧的 `~/.ssh` + `~/.aws` 配置会升级一次；其它自定义配置不动。`--no-default-sensitive` 仍然先清空。
 
-实测数字来自 GitHub Actions `macos-latest` 上的 `make check`、`make integration`（含 `tests/short_read.py`）和 `macOSClient/scripts/check.sh`。短时打开用临时目录里的 `synthetic-credential`，内容是 `SYNTHETIC_CREDENTIAL_NOT_A_SECRET`。30ms 持有与 `/bin/cat` 立即退出各 20 次。下表在该次运行日志写入后填入；在填入前不要把单元测试当成召回率。
+实测来自 GitHub Actions `macos-latest`（作业注解为 arm64 runner），run [43070070831](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43070070831)，提交 `eb48c43`。命令：`make check`（通过）、`make integration`（通过，含 `tests/short_read.py`）、`macOSClient/scripts/check.sh`（64 个 Swift 测试，0 失败）。短时打开用临时目录里的 `synthetic-credential`，内容是 `SYNTHETIC_CREDENTIAL_NOT_A_SECRET`。各 20 次。`ps` 的 `%cpu` 是衰减平均值，不是积分后的单核占用。
 
 | 测量 | 结果 |
 | --- | --- |
-| 30ms 打开 TP/FN | 待 CI |
-| cat 立即退出 TP/FN | 待 CI |
-| 空闲 CPU / RSS | 待 CI |
-| 活动 CPU / RSS | 待 CI |
+| 30ms 打开 | TP 20 / FN 0（20/20） |
+| `/bin/cat` 立即退出 | TP 13 / FN 7（13/20，65%） |
+| 合计 | TP 33 / FN 7（33/40，82.5%）。33 次命中都来自快速采样（`fast_fd_hits=33`，`subtree_fd_hits=33`，`subtree_fork_notes=40`，`subtree_bursts=40`） |
+| 空闲约 3 秒 | CPU 中位数 2.2%，RSS 中位数 11216 KB（11 次 `ps`） |
+| cat 队列期间约 4 秒 | CPU 中位数 2.35%，RSS 中位数 11632 KB（14 次 `ps`） |
+| 当次全机扫描 | `activity_scan_duration_ms=11`，`fd_scans_partial=0` |
+
+这是进程很少的 CI 机器，不是主人那台约 670 个可见进程、扫描一度到 12.5 秒的 Intel Mac。不能把 2% CPU 外推到那台机器。本轮没有在 x86_64 上复跑这组短时打开。
 
 仍会漏掉：比 fork 通知更短、且在采样前就退出的打开；访问时间在 APFS 上经常不变，所以 `access_time_change` / `inferred` 不能当召回保证；权限不可见的进程；FSEvents 变更仍然没有 actor。上传、模型目的地和公网收件不在本步范围内。
 
