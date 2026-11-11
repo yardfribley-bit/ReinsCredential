@@ -138,50 +138,63 @@ struct EvidenceChainDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("证据链")
-                            .font(.headline)
-                        Text(chain.headline)
-                            .font(.title3.weight(.semibold))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                    VerdictBadge(verdict: chain.verdict)
-                }
-                Text(EvidenceChainExport.glossaryText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Button("导出 Markdown", action: exportMarkdown)
-                    Button("导出 JSON", action: exportJSON)
-                }
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(chain.links.enumerated()), id: \.element.kind) { index, link in
-                        ChainStep(link: link, showsConnector: index < chain.links.count - 1, emphasize: link.kind == .verdict)
-                    }
-                }
-                if chain.missingReferenceCount > 0 {
-                    Label("有 \(chain.missingReferenceCount) 个关联事件不在当前快照里，没有补造。", systemImage: "link.badge.plus")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                if !chain.backendSummary.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("采集原句").font(.caption).foregroundStyle(.secondary)
-                        Text(chain.backendSummary)
-                            .font(.subheadline)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                memberList
-            }
-            .padding(20)
+            EvidenceChainDetailBody(chain: chain, records: records, exportMarkdown: exportMarkdown, exportJSON: exportJSON)
         }
         .background(.ultraThinMaterial)
         .textSelection(.enabled)
+    }
+}
+
+/// The card body without a scroll view, so ImageRenderer can lay out the whole chain.
+struct EvidenceChainDetailBody: View {
+    let chain: EvidenceChain
+    let records: [EvidenceRecord]
+    var exportMarkdown: () -> Void
+    var exportJSON: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("证据链")
+                        .font(.headline)
+                    Text(chain.headline)
+                        .font(.title3.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                VerdictBadge(verdict: chain.verdict)
+            }
+            Text(EvidenceChainExport.glossaryText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("导出 Markdown", action: exportMarkdown)
+                Button("导出 JSON", action: exportJSON)
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(chain.links.enumerated()), id: \.element.kind) { index, link in
+                    ChainStep(link: link, showsConnector: index < chain.links.count - 1, emphasize: link.kind == .verdict)
+                }
+            }
+            if chain.missingReferenceCount > 0 {
+                Label("有 \(chain.missingReferenceCount) 个关联事件不在当前快照里，没有补造。", systemImage: "link.badge.plus")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if !chain.backendSummary.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("采集原句").font(.caption).foregroundStyle(.secondary)
+                    Text(chain.backendSummary)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            memberList
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var members: [EvidenceRecord] {

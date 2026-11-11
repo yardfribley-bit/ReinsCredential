@@ -16,3 +16,13 @@ jobs:
         run: make integration
       - name: Swift client checks
         run: macOSClient/scripts/check.sh
+      - name: Render evidence-chain snapshots
+        run: |
+          mkdir -p chain-snapshots
+          REINS_CHAIN_SNAPSHOT_DIR="$PWD/chain-snapshots" swift test --package-path macOSClient --filter EvidenceChainSnapshotTests
+      - name: Upload evidence-chain snapshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-chain-snapshots
+          path: chain-snapshots
+          if-no-files-found: error

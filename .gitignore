@@ -9,3 +9,4 @@ agent-shutdown-probe
 *.jsonl
 __pycache__/
 *.dSYM/
+chain-snapshots/
