@@ -104,10 +104,13 @@ bool WriteAll(int fd, const std::string& bytes, std::chrono::milliseconds budget
     }
     return true;
 }
-// Reads until the marker is present, or until max_bytes. The marker may sit in the middle.
+// One chunk, EOF, or the deadline. Callers loop until they have the bytes they need.
+// Filling max_bytes here would stall a client that has already sent a short request
+// and is waiting for the response.
 bool ReadSome(int fd, std::string& out, size_t max_bytes, std::chrono::milliseconds budget) {
+    if (out.size() >= max_bytes) return true;
     const auto deadline = MonoClock::now() + budget;
-    while (out.size() < max_bytes) {
+    for (;;) {
         auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - MonoClock::now()).count();
         if (left <= 0 || !WaitFd(fd, POLLIN, std::chrono::milliseconds(std::max<int64_t>(left, 1)))) return false;
         std::array<char, 4096> block{};
@@ -116,8 +119,8 @@ bool ReadSome(int fd, std::string& out, size_t max_bytes, std::chrono::milliseco
         if (n < 0) return false;
         if (!n) return true;
         out.append(block.data(), static_cast<size_t>(n));
+        return true;
     }
-    return true;
 }
 struct HttpRequest { std::string method, target, body; };
 HttpRequest ReadRequest(int fd) {
@@ -269,10 +272,15 @@ Upstream Exchange(const Target& target, const std::string& method, const std::st
     request.append(body);
     if (!WriteAll(fd->value, request, std::chrono::seconds(10))) { result.failure = "upstream_write_failed"; Wipe(request); return result; }
     Wipe(request);
-    if (!ReadSome(fd->value, result.raw, 64 * 1024, std::chrono::seconds(10)) && result.raw.empty()) {
-        result.failure = "upstream_timeout";
-        return result;
+    const auto deadline = MonoClock::now() + std::chrono::seconds(10);
+    while (result.raw.find("\r\n") == std::string::npos && result.raw.size() < 64 * 1024) {
+        auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - MonoClock::now());
+        if (left.count() <= 0) break;
+        const auto before = result.raw.size();
+        if (!ReadSome(fd->value, result.raw, 64 * 1024, left) && result.raw.size() == before) break;
+        if (result.raw.size() == before) break;
     }
+    if (result.raw.empty()) { result.failure = "upstream_timeout"; return result; }
     auto line_end = result.raw.find("\r\n");
     if (line_end == std::string::npos || result.raw.rfind("HTTP/1.", 0) != 0) { result.failure = "upstream_bad_status"; return result; }
     std::istringstream line(result.raw.substr(0, line_end));
