@@ -2,6 +2,43 @@ import EvidenceCore
 import Foundation
 import SwiftUI
 
+enum AgentFilter: Hashable, Identifiable {
+    case all
+    case named(String)
+    case unattributed
+
+    var id: String {
+        switch self {
+        case .all: return "all"
+        case .named(let name): return "named:\(name)"
+        case .unattributed: return "unattributed"
+        }
+    }
+
+    func includes(_ chain: EvidenceChain) -> Bool {
+        switch self {
+        case .all: return true
+        case .named(let name): return chain.owningAgentName == name
+        case .unattributed: return chain.owningAgentName.isEmpty
+        }
+    }
+
+    func includes(_ record: EvidenceRecord) -> Bool {
+        switch self {
+        case .all: return true
+        case .named(let name): return record.owningAgentName == name
+        case .unattributed: return record.owningAgentName.isEmpty
+        }
+    }
+}
+
+struct AgentChoice: Identifiable, Equatable {
+    var id: String { filter.id }
+    var filter: AgentFilter
+    var title: String
+    var count: Int
+}
+
 enum RiskFilter: String, CaseIterable, Identifiable {
     case all, high, medium, low
 
@@ -54,8 +91,10 @@ final class DashboardStore: ObservableObject {
 
     @Published private(set) var records: [EvidenceRecord] = []
     @Published var riskFilter: RiskFilter = .all
+    @Published var agentFilter: AgentFilter = .all
     @Published var searchText = ""
     @Published var selectedRecordID: UUID?
+    @Published var selectedChainID: UUID?
     @Published var isImporterPresented = false
     @Published private(set) var isLoading = false
     @Published private(set) var mode: DatasetMode = .live
@@ -82,17 +121,63 @@ final class DashboardStore: ObservableObject {
         incompleteTail = false
         errorMessage = nil
         riskFilter = .all
+        agentFilter = .all
         searchText = ""
         applyLive(records: records)
+    }
+
+    var chains: [EvidenceChain] { EvidenceChainBuilder.chains(from: records) }
+
+    var chainsMatchingRiskAndSearch: [EvidenceChain] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return chains.filter { chain in
+            guard riskFilter == .all || riskFilter.rawValue.uppercased() == chain.riskLevel.rawValue else { return false }
+            return query.isEmpty || chain.matchesSearch(query)
+        }
+    }
+
+    var visibleChains: [EvidenceChain] {
+        chainsMatchingRiskAndSearch.filter { agentFilter.includes($0) }
+    }
+
+    var chainSections: [EvidenceChainSection] { visibleChains.groupedByOwningAgent() }
+
+    var selectedChain: EvidenceChain? { visibleChains.first { $0.id == selectedChainID } }
+
+    var agentChoices: [AgentChoice] {
+        chainsMatchingRiskAndSearch.groupedByOwningAgent().map { section in
+            let filter: AgentFilter = section.id == "unattributed" ? .unattributed : .named(section.title)
+            return AgentChoice(filter: filter, title: section.title, count: section.chains.count)
+        }
+    }
+
+    var hasSensorGap: Bool { records.contains { $0.sourceType == "sensor_gap" } }
+
+    /// Selects the chain for a synthetic self-test file once that file is in the live set.
+    @discardableResult
+    func focusChain(matchingResource path: String) -> Bool {
+        guard mode == .live, !path.isEmpty else { return false }
+        let matches = chains.filter { $0.filePath == path }
+        guard let match = matches.first(where: \.openObserved) ?? matches.first else { return false }
+        if !visibleChains.contains(where: { $0.id == match.id }) {
+            agentFilter = .all
+            riskFilter = .all
+            searchText = ""
+        }
+        selectedChainID = match.id
+        return true
     }
 
     var visibleRecords: [EvidenceRecord] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return records.filter { record in
             guard riskFilter.includes(record) else { return false }
+            guard agentFilter.includes(record) else { return false }
             guard !query.isEmpty else { return true }
             let fields = [record.targetResource, record.actionType, record.sourceType,
-                          record.destination, record.id.uuidString] +
+                          record.destination, record.id.uuidString, record.owningAgentName,
+                          record.uploadVerdict, record.summary,
+                          UploadVerdictWord.parse(record.uploadVerdict).chineseLabel] +
                 record.processTree.flatMap { [$0.name, $0.path, String($0.pid)] }
             return fields.contains { $0.localizedCaseInsensitiveContains(query) }
         }
@@ -110,6 +195,9 @@ final class DashboardStore: ObservableObject {
         if !visibleRecords.contains(where: { $0.id == selectedRecordID }) {
             selectedRecordID = visibleRecords.first?.id
         }
+        if !visibleChains.contains(where: { $0.id == selectedChainID }) {
+            selectedChainID = visibleChains.first?.id
+        }
     }
 
     func showSamples() {
@@ -120,8 +208,10 @@ final class DashboardStore: ObservableObject {
         incompleteTail = false
         mode = .demo
         riskFilter = .all
+        agentFilter = .all
         searchText = ""
         selectedRecordID = records.first?.id
+        reconcileSelection()
         errorMessage = nil
     }
 
@@ -147,8 +237,10 @@ final class DashboardStore: ObservableObject {
                 importedURL = url
                 mode = .imported
                 riskFilter = .all
+                agentFilter = .all
                 searchText = ""
                 selectedRecordID = records.first?.id
+                reconcileSelection()
             } catch {
                 // A failed import never replaces the last usable dataset.
                 errorMessage = error.localizedDescription
