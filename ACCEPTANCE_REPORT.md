@@ -1,5 +1,30 @@
 # Agent 敏感数据读取与发送：逐功能验收报告
 
+## 0. 2026-11-11 归因与短时打开（step 1）
+
+这一节只回答“哪个 Agent 碰过哪个敏感文件”。**不声称检测到上传。** 下文第 3 节的 45 例内容矩阵仍然有效，完整验收仍然失败。
+
+触发：本机约 13 分钟日志里，每条 `actor_process` 都是 `chain_complete=false` / `missing_parent`，因为用户态读不到 launchd 的路径，链条在 ppid 1 处断开；子工具只标成 `observed_ancestor`，所属应用没有稳定名字；500ms 全机 FD 扫描抓不住几十到几百微秒的打开；默认敏感路径只有 `~/.ssh`、`~/.aws` 和启动目录的 `.env`。
+
+结果：
+
+- 父进程 ppid 被再次核对为 1 时，`chain_complete=true`，`chain_status=observed_chain_to_launchd`。不编造 launchd 的启动身份。中间父进程仍然缺失时保持 `missing_parent`。
+- `owning_agent` 带上应用名、bundle 和根进程身份。给人读的 `summary` 形如：`Codex read ~/.ssh/id_ed25519 via zsh -> python. The file was open in that process. This is not an upload finding.` 这里的 read 表示文件在该进程里打开过，或句子写明的更弱信号，不是上传。
+- 已知 Agent 树用 kqueue 的 fork/exec 立刻采样子进程。证据基础是 `fd_observed`、`access_time_change` 或 `inferred`。
+- 采集器自身是 `collector_self`，不会被写成嫌疑 Agent。AgentReins 一类未列入规则的安全工具保持 `unclassified_process`。
+- 默认敏感路径增加 `~/.config/gh`、`~/.netrc`、`~/.npmrc`、`~/.git-credentials`、`~/.docker/config.json`、`~/.kube/config`、`~/.config/gcloud`、`~/.azure`。已保存且恰好仍是旧的 `~/.ssh` + `~/.aws` 配置会升级一次；其它自定义配置不动。`--no-default-sensitive` 仍然先清空。
+
+实测数字来自 GitHub Actions `macos-latest` 上的 `make check`、`make integration`（含 `tests/short_read.py`）和 `macOSClient/scripts/check.sh`。短时打开用临时目录里的 `synthetic-credential`，内容是 `SYNTHETIC_CREDENTIAL_NOT_A_SECRET`。30ms 持有与 `/bin/cat` 立即退出各 20 次。下表在该次运行日志写入后填入；在填入前不要把单元测试当成召回率。
+
+| 测量 | 结果 |
+| --- | --- |
+| 30ms 打开 TP/FN | 待 CI |
+| cat 立即退出 TP/FN | 待 CI |
+| 空闲 CPU / RSS | 待 CI |
+| 活动 CPU / RSS | 待 CI |
+
+仍会漏掉：比 fork 通知更短、且在采样前就退出的打开；访问时间在 APFS 上经常不变，所以 `access_time_change` / `inferred` 不能当召回保证；权限不可见的进程；FSEvents 变更仍然没有 actor。上传、模型目的地和公网收件不在本步范围内。
+
 日期：2026-11-11（Asia/Shanghai）。**总体验收：未通过。** 已完成本次实现、测试和结果归档，尚不能声称实现了“任意本机 Agent 的独立、完整读取与外传检测”。
 
 本次有实际代码改进：新增 C++ 内容审计网关、内核认证的本地连接方身份、内容匹配、文件版本哈希、发送目的地与结果、关联事件 ID。真实当前 Codex 会话通过该通道读取合成数据并发送到独立本机服务器，接收端验证了字节一致。模型目的地的独立检测、外部互联网收件、全部真实客户端调用及绕过通道的检测仍未通过。

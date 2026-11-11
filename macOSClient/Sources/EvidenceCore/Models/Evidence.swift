@@ -76,13 +76,20 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
     public let metrics: [String: UInt64]
     public let count: UInt64
     public let sessionID: String?
+    /// Plain-language description. It does not mean an upload was observed.
+    public let summary: String
+    public let owningAgentName: String
+    public let owningAgentBundle: String
+    public let chainStatus: String
 
     public init(id: UUID = UUID(), timestamp: Date, riskLevel: RiskLevel,
                 targetResource: String, actionType: String, processTree: [ProcessNode],
                 sourceType: String = "", attribution: String = "", detail: String = "",
                 destination: String = "", chainComplete: Bool? = nil,
                 evidenceBasis: String = "", transferOutcome: String = "", classification: String = "",
-                metrics: [String: UInt64] = [:], count: UInt64 = 0, sessionID: String? = nil) {
+                metrics: [String: UInt64] = [:], count: UInt64 = 0, sessionID: String? = nil,
+                summary: String = "", owningAgentName: String = "", owningAgentBundle: String = "",
+                chainStatus: String = "") {
         self.id = id
         self.timestamp = timestamp
         self.riskLevel = riskLevel
@@ -100,6 +107,10 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
         self.metrics = metrics
         self.count = count
         self.sessionID = sessionID
+        self.summary = summary
+        self.owningAgentName = owningAgentName
+        self.owningAgentBundle = owningAgentBundle
+        self.chainStatus = chainStatus
     }
 
     enum CodingKeys: String, CodingKey {
@@ -107,6 +118,7 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
         case sourceType, attribution, detail, destination, chainComplete
         case evidenceBasis, transferOutcome, classification
         case metrics, count, sessionID, backendSession = "session_id"
+        case summary, owningAgentName, owningAgentBundle, chainStatus
         case schemaVersion = "schema_version", eventID = "event_id"
         case timestampUnit = "timestamp_unit", backendRisk = "risk_level"
         case backendTarget = "target_resource", type, actor = "actor_process"
@@ -148,7 +160,10 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
             let actor = try c.decodeIfPresent(BackendActor.self, forKey: .actor)
             processTree = actor.map { [$0.process.node] + $0.parents.map(\.node) } ?? []
             chainComplete = actor?.chainComplete
+            chainStatus = actor?.chainStatus ?? ""
             classification = actor?.classification ?? ""
+            owningAgentName = actor?.owningAgent?.name ?? ""
+            owningAgentBundle = actor?.owningAgent?.bundle ?? ""
             evidenceBasis = try c.decodeIfPresent(String.self, forKey: .backendBasis) ?? ""
             transferOutcome = try c.decodeIfPresent(String.self, forKey: .backendOutcome) ?? ""
         } else {
@@ -163,7 +178,11 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
             evidenceBasis = try c.decodeIfPresent(String.self, forKey: .evidenceBasis) ?? ""
             transferOutcome = try c.decodeIfPresent(String.self, forKey: .transferOutcome) ?? ""
             classification = try c.decodeIfPresent(String.self, forKey: .classification) ?? ""
+            owningAgentName = try c.decodeIfPresent(String.self, forKey: .owningAgentName) ?? ""
+            owningAgentBundle = try c.decodeIfPresent(String.self, forKey: .owningAgentBundle) ?? ""
+            chainStatus = try c.decodeIfPresent(String.self, forKey: .chainStatus) ?? ""
         }
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
         attribution = try c.decodeIfPresent(String.self, forKey: .attribution) ?? "unavailable"
         detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
         destination = try c.decodeIfPresent(String.self, forKey: .destination) ?? ""
@@ -189,19 +208,31 @@ public struct EvidenceRecord: Identifiable, Codable, Equatable, Sendable {
         try c.encode(evidenceBasis, forKey: .evidenceBasis)
         try c.encode(transferOutcome, forKey: .transferOutcome)
         try c.encode(classification, forKey: .classification)
+        try c.encode(summary, forKey: .summary)
+        try c.encode(owningAgentName, forKey: .owningAgentName)
+        try c.encode(owningAgentBundle, forKey: .owningAgentBundle)
+        try c.encode(chainStatus, forKey: .chainStatus)
         try c.encode(metrics, forKey: .metrics)
         try c.encode(count, forKey: .count)
         try c.encodeIfPresent(sessionID, forKey: .sessionID)
     }
 }
 
+private struct BackendOwningAgent: Decodable {
+    let name: String
+    let bundle: String
+}
+
 private struct BackendActor: Decodable {
     let process: BackendEntry
     let parents: [BackendEntry]
     let chainComplete: Bool
+    let chainStatus: String?
     let classification: String
+    let owningAgent: BackendOwningAgent?
     enum CodingKeys: String, CodingKey {
-        case process, parents = "ppid_tree", chainComplete = "chain_complete", classification
+        case process, parents = "ppid_tree", chainComplete = "chain_complete"
+        case chainStatus = "chain_status", classification, owningAgent = "owning_agent"
     }
 }
 

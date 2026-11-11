@@ -275,9 +275,9 @@ private struct EvidenceTable: View {
             }.width(min: 105, ideal: 150)
             TableColumn("进程 / 资源") { record in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(record.processTree.first?.name ?? "未归因")
+                    Text(record.summary.isEmpty ? (record.processTree.first?.name ?? "未归因") : record.summary)
                         .font(.body.weight(.medium))
-                        .lineLimit(1)
+                        .lineLimit(record.summary.isEmpty ? 1 : 3)
                     Text(record.targetResource.isEmpty ? "无文件资源" : record.targetResource)
                         .font(.caption)
                         .foregroundStyle(.secondary)

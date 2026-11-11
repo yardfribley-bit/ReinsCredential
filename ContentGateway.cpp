@@ -121,10 +121,7 @@ std::optional<ActorProcess> Peer(int fd, ProcessCache& cache, IProcessSource& so
     auto actor = view->Resolve(current->second);
     if (!actor || actor->process.node.executable != path.data() || !source.Validate(actor->process.node)) return {};
     if (proc_pidpath_audittoken(&token, path.data(), path.size()) <= 0 || actor->process.node.executable != path.data()) return {};
-    auto reason = MatchAgent(actor->process.node, {});
-    for (const auto& parent : actor->ancestors) if (reason.empty() && !MatchAgent(parent.node, {}).empty()) reason = "observed_ancestor";
-    actor->classification = reason.empty() ? "unclassified_process" : "known_agent_candidate";
-    actor->classification_reason = reason;
+    AnnotateActor(*actor, {});
     return actor;
 }
 ProcessIdentity Scope(const ActorProcess& actor) {

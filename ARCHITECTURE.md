@@ -85,6 +85,12 @@ NotObserved 不声称进程一定已退出。历史父链只在父、子身份�
 
 默认历史保留 300 秒，目标上限 32768 条，优先淘汰非当前条目；若可见活进程本身超过该数，保留活进程，健康记录暴露规模。不可变快照通过 C++17 atomic shared_ptr 发布；该原子 shared_ptr 本身不保证无锁，但它不在 FSEvents 回调链路上。刷新失败保留上一快照并通知主线程退出。
 
+`chain_complete` 在三条边界上为 true：观察到 pid 1、观察到 ppid 0，或子进程的 ppid 被再次核对为 1 但 launchd 的可执行路径读不到（`chain_status` 为 `observed_chain_to_launchd`）。最后一种是普通用户态结果，因为 launchd 经常没有可读路径；它不编造 launchd 的启动身份。中间父进程仍然缺失时保持 `missing_parent`，不补链。
+
+所属 Agent 写在 `owning_agent`：最靠近根、且命中应用 bundle 的进程优先，否则用最靠近根的已知 Agent 进程。事件里的 `summary` 用更靠近实际工具的产品名来写人话，例如 Codex 跑在 ChatGPT.app 里时，句子以 Codex 为主语，bundle 与根 pid 仍指向 ChatGPT.app。采集器自身（`agent-monitor`、`ReinsRuntime`、`ReinsDashboard`、`ReinsCredential.app`）标记为 `collector_self`，不作为嫌疑 Agent。其他安全工具保持 `unclassified_process`。
+
+已知 Agent 树使用 kqueue 的 fork/exec 通知，并在短窗口内重复采样子进程文件描述符，用来抓住远短于 500ms 全局扫描的打开。敏感路径集合上的访问时间变化单独记录：没有进程时 `evidence_basis` 为 `access_time_change`；恰好一个 Agent 后代的存活区间与之重叠、且没有看到文件描述符时为 `inferred`。看到描述符则为 `fd_observed`。三种都不是上传证据。FSEvents 仍然没有 actor。
+
 只保留解释器分类所需的 argv[0]、入口参数和可选 Python -m 模块；不保留提示词或环境数据，临时 sysctl 缓冲区在所有退出路径擦除。普通日志不输出 argv。依然不能保证任意程序自定义 argv 内容不含敏感字符串，缓存仅驻留本机内存。
 
 ## 回调与并发

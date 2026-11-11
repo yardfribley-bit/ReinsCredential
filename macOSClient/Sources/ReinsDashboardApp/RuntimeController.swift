@@ -169,7 +169,7 @@ final class RuntimeController: ObservableObject {
         if !FileManager.default.fileExists(atPath: paths.configurationURL.path) {
             try RuntimeConfiguration.defaults().save(to: paths.configurationURL)
         }
-        return try RuntimeConfiguration.load(from: paths.configurationURL)
+        return try RuntimeConfiguration.loadEffective(from: paths.configurationURL)
     }
 
     func reloadConfiguration() {

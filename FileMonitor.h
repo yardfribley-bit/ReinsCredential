@@ -16,7 +16,7 @@ struct RawFileEvent {
     uint32_t path_size = 0;
     std::array<char, PATH_MAX> path{};
 };
-struct FileMonitorStats { uint64_t queue_dropped = 0, oversized_paths = 0, source_gaps = 0; };
+struct FileMonitorStats { uint64_t queue_dropped = 0, oversized_paths = 0, source_gaps = 0, broad_roots_skipped = 0; };
 class FileMonitor {
 public:
     FileMonitor(std::vector<std::string> sensitive, EvidenceStore& store, size_t workers = 2);
@@ -47,7 +47,7 @@ private:
     bool ever_started_ = false;
     size_t producer_lane_ = 0;
     std::atomic<bool> stopping_{false};
-    std::atomic<uint64_t> queue_dropped_{0}, oversized_paths_{0}, source_gaps_{0};
+    std::atomic<uint64_t> queue_dropped_{0}, oversized_paths_{0}, source_gaps_{0}, broad_roots_skipped_{0};
     mutable std::mutex error_mutex_;
     std::exception_ptr error_;
 };

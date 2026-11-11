@@ -1,5 +1,13 @@
 # v2 重构验证结果
 
+## 2026-11-11 所属 Agent、完整父链与短时打开
+
+本轮在原有模块结果之上增加所属 Agent、`observed_chain_to_launchd` 和短时打开采样。上传检测没有实现，也不在本轮声称之内。确定性单元测试覆盖合成树：ChatGPT.app → codex → zsh → 未进入慢扫描快照的 python，句子为 `Codex read /synthetic/secret via zsh -> python. The file was open in that process. This is not an upload finding.` 采集器自身不是 Agent，AgentReins 保持未分类。
+
+macOS 上的召回和 CPU/RSS 以 `make integration` 里的 `tests/short_read.py` 输出的 `SHORT_READ` 一行为准，并记在 [ACCEPTANCE_REPORT.md](ACCEPTANCE_REPORT.md) 第 0 节。下面的历史 PASS 不是这组短时打开的召回率。
+
+## 历史模块结果
+
 本文件保留基础模块重构轮次的结果。后续内容审计、最终行为矩阵和逐功能验收以 [ACCEPTANCE_REPORT.md](ACCEPTANCE_REPORT.md) 为准；其中完整验收失败，不应与本文件的基础模块 PASS 混为一谈。
 
 2026-11-11，在本机 macOS 使用 Clang 验证。

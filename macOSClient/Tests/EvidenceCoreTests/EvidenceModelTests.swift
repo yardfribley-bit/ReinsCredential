@@ -147,6 +147,10 @@ final class EvidenceModelTests: XCTestCase {
         XCTAssertEqual(event.processTree.map(\.path), ["/synthetic/agent", "/synthetic/launcher"])
         XCTAssertEqual(event.attribution, "observed_fd_only")
         XCTAssertEqual(event.chainComplete, false)
+        XCTAssertEqual(event.evidenceBasis, "fd_observed")
+        XCTAssertEqual(event.owningAgentName, "Codex")
+        XCTAssertEqual(event.owningAgentBundle, "ChatGPT.app")
+        XCTAssertEqual(event.summary, "Codex read /synthetic/secret via launcher. The file was open in that process. This is not an upload finding.")
 
         let change = try XCTUnwrap(imported.records.first {
             $0.id == UUID(uuidString: "22222222-2222-4222-8222-222222222222")!

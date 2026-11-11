@@ -1,5 +1,7 @@
 #include "AgentMonitor.h"
 #include "FileMonitor.h"
+#include "SensitiveDefaults.h"
+#include "SubtreeWatcher.h"
 #include <climits>
 #include <algorithm>
 #include <csignal>
@@ -25,7 +27,7 @@ uint64_t PositiveBytes(const std::string& text) {
     return value;
 }
 void Health(agentsec::ProcessCache& cache, agentsec::FileMonitor& files, agentsec::AgentMonitor& agents, agentsec::EvidenceStore& store,
-    bool final, uint64_t log_limit, bool rotation_required) {
+    const agentsec::SubtreeWatcher::Stats& watcher, bool final, uint64_t log_limit, bool rotation_required) {
     const auto snapshot = cache.View(); const auto stats = files.Stats();
     const auto scanned = agents.Stats();
     agentsec::EvidenceRecord record;
@@ -41,7 +43,15 @@ void Health(agentsec::ProcessCache& cache, agentsec::FileMonitor& files, agentse
     record.metrics.insert({{"activity_processes", scanned.processes}, {"known_candidates", scanned.candidates},
         {"activity_validation_failed", scanned.validation_failed}, {"fd_scans_partial", scanned.descriptors_partial}, {"activity_scan_duration_ms", scanned.duration_ms},
         {"retirement_pending", scanned.retirement_pending}, {"retirement_retry_exhausted", scanned.retirement_retry_exhausted},
-        {"cooccurrence_pairs_truncated", scanned.cooccurrence_pairs_truncated}, {"log_bytes", store.FileBytes()},
+        {"cooccurrence_pairs_truncated", scanned.cooccurrence_pairs_truncated},
+        {"broad_roots_skipped", stats.broad_roots_skipped},
+        {"fast_fd_hits", scanned.fast_fd_hits}, {"access_time_events", scanned.access_time_events},
+        {"inferred_accesses", scanned.inferred_accesses},
+        {"subtree_focused", watcher.focused}, {"subtree_bursts", watcher.bursts},
+        {"subtree_fd_hits", watcher.fd_hits}, {"subtree_fork_notes", watcher.fork_notes},
+        {"subtree_exec_notes", watcher.exec_notes}, {"subtree_dropped_bursts", watcher.dropped_bursts},
+        {"subtree_atime_events", watcher.atime_events}, {"subtree_sweep_us", watcher.sweep_us},
+        {"log_bytes", store.FileBytes()},
         {"log_limit_bytes", log_limit}, {"log_rotation_required", rotation_required ? 1 : 0},
         {"shutdown_flush_not_filesystem_barrier", final ? 1 : 0}});
     store.SubmitCritical(std::move(record));
@@ -57,7 +67,9 @@ int main(int argc, char** argv) {
         uint64_t max_log_bytes = 0;
         std::optional<pid_t> query;
         std::vector<std::filesystem::path> paths;
-        if (const auto home = std::getenv("HOME")) paths = {std::filesystem::path(home) / ".ssh", std::filesystem::path(home) / ".aws"};
+        if (const auto home = std::getenv("HOME")) {
+            for (const auto& suffix : DefaultSensitiveSuffixes()) paths.push_back(std::filesystem::path(home) / suffix);
+        }
         paths.push_back(std::filesystem::current_path() / ".env");
         for (int i = 1; i < argc; ++i) {
             const std::string option = argv[i];
@@ -104,10 +116,14 @@ int main(int argc, char** argv) {
         ProcessCache live_cache(source, cache_config);
         AgentMonitor agents(live_cache, store, rules, sensitive);
         FileMonitor files(sensitive, store, workers);
+        SubtreeWatcher watcher(source, sensitive, agents);
         std::signal(SIGINT, SignalHandler); std::signal(SIGTERM, SignalHandler);
         live_cache.Start();
+        agents.ArmFocus();
+        watcher.Start();
+        watcher.Focus(agents.FocusRoots());
         files.Start();
-        Health(live_cache, files, agents, store, false, max_log_bytes, false);
+        Health(live_cache, files, agents, store, watcher.GetStats(), false, max_log_bytes, false);
         bool rotation_required = false;
         const auto begin = MonoClock::now(); auto next_health = begin + std::chrono::seconds(5); auto next_scan = begin;
         auto next_size_check = begin;
@@ -118,16 +134,19 @@ int main(int argc, char** argv) {
                 if (store.FileBytes() >= max_log_bytes) { rotation_required = true; break; }
                 next_size_check = MonoClock::now() + std::chrono::milliseconds(250);
             }
-            if (MonoClock::now() >= next_scan) { agents.Scan(); next_scan = MonoClock::now() + cache_config.interval; }
-            if (MonoClock::now() >= next_health) { Health(live_cache, files, agents, store, false, max_log_bytes, false); next_health = MonoClock::now() + std::chrono::seconds(5); }
+            if (MonoClock::now() >= next_scan) {
+                agents.Scan(); watcher.Focus(agents.FocusRoots());
+                next_scan = MonoClock::now() + cache_config.interval;
+            }
+            if (MonoClock::now() >= next_health) { Health(live_cache, files, agents, store, watcher.GetStats(), false, max_log_bytes, false); next_health = MonoClock::now() + std::chrono::seconds(5); }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
-        files.Stop(); live_cache.Stop();
+        watcher.Stop(); files.Stop(); live_cache.Stop();
         files.Check(); live_cache.Check();
         // The threshold is advisory: accepted records are always drained, so
         // shutdown and one in-progress scan can take the file beyond the limit.
         if (max_log_bytes && store.FileBytes() >= max_log_bytes) rotation_required = true;
-        Health(live_cache, files, agents, store, true, max_log_bytes, rotation_required);
+        Health(live_cache, files, agents, store, watcher.GetStats(), true, max_log_bytes, rotation_required);
         store.Close(); // errors during drain or final sync affect the exit status
         const auto stats = files.Stats();
         if (rotation_required) return 3;

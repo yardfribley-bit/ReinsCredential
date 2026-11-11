@@ -1,4 +1,23 @@
-# macOS Agent Runtime Security Collector
+# ReinsCredential
+
+ReinsCredential shows which desktop AI agent touched a sensitive file on your Mac, and through which tools.
+
+A normal result reads like this:
+
+> Codex read ~/.ssh/id_ed25519 via zsh -> python. The file was open in that process. This is not an upload finding.
+
+That sentence is the whole product claim for this release. "Read" here means the file was open inside that process, or, when the sentence says so, that only the file's access time overlapped one short-lived tool. It does **not** mean the file was uploaded, sent to a model, or received by anyone else. Upload detection is not in this release.
+
+The collector is a user-space Mac app. It does not install a system extension and it does not inspect network contents. The app's own processes are never the suspected agent. Other security tools stay unlabeled programs, not agents.
+
+```sh
+make
+./agent-monitor --log ./evidence.jsonl
+```
+
+Default sensitive locations are `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.npmrc`, `~/.git-credentials`, `~/.docker/config.json`, `~/.kube/config`, `~/.config/gcloud`, `~/.azure`, and `.env` in the launch directory. `--sensitive` adds a path. `--no-default-sensitive` clears the defaults first, which is how a saved configuration replaces them. An existing saved list that is still exactly `~/.ssh` and `~/.aws` is upgraded once; any other saved list is left as you set it.
+
+## Collector details
 
 C++17 用户态 Agent 候选监测与结构化证据收集器，使用 libproc 和 FSEvents。
 

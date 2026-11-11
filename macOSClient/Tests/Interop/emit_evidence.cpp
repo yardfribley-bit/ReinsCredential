@@ -23,8 +23,11 @@ int main() {
     actor.ancestors.push_back(parent);
     actor.chain_complete = false;
     actor.chain_status = "parent_not_observed";
+    actor.owning_agent = OwningAgent{"Codex", "ChatGPT.app", parent.node.identity, "known_name:codex"};
     event.actor_process = actor;
     event.attribution = "observed_fd_only";
+    event.evidence_basis = "fd_observed";
+    event.summary = "Codex read /synthetic/secret via launcher. The file was open in that process. This is not an upload finding.";
     std::cout << ToJson(event, "synthetic-swift-interop", 1) << '\n';
     EvidenceRecord change;
     change.event_id = "22222222-2222-4222-8222-222222222222";

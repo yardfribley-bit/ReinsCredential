@@ -13,6 +13,8 @@ extension EvidenceRecord {
         case "sensitive_network_cooccurrence": return "敏感文件与网络连接同时可见"
         case "activity_observed":
             return targetResource.isEmpty ? "进程活动快照" : "进程持有敏感文件描述符"
+        case "sensitive_access_observed":
+            return evidenceBasis == "inferred" ? "敏感文件访问时间与一个进程重合" : "敏感文件访问时间发生变化"
         case "sensor_gap": return "采集覆盖出现间隙"
         case "fatal_error", "gateway_fatal": return "采集服务错误"
         case "coverage": return "采集健康状态"
@@ -31,9 +33,13 @@ extension EvidenceRecord {
     var recommendedAction: String? {
         switch sourceType {
         case "activity_observed" where !targetResource.isEmpty:
-            return "确认这个进程是否需要接触该文件。若不需要，请在对应 Agent 中缩小工作目录或文件权限。打开的描述符尚不能证明内容被读取。"
+            return "The file was open in this process. That shows who touched it. It does not show an upload."
+        case "sensitive_access_observed" where evidenceBasis == "inferred":
+            return "This link is only a timing overlap. The file was not seen open, and this is not an upload."
+        case "sensitive_access_observed":
+            return "The file's access time changed. No process was identified, and this is not an upload."
         case "sensitive_network_cooccurrence":
-            return "核查进程、敏感路径和连接目的地是否符合预期。这是同次采样中的共现，尚不能证明该文件被发送到此目的地。"
+            return "A sensitive file and a network connection were both open. This is not an upload."
         case "filesystem_change":
             return "检查文件变化是否符合预期。文件系统事件不提供行为进程，无法据此指定某个 Agent。"
         case "sensor_gap":

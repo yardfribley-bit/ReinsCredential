@@ -1,7 +1,7 @@
 CXX := clang++
 CXXFLAGS := -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror -pthread
 LDLIBS := -framework CoreServices -lz
-CORE := ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp
+CORE := ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp
 HEADERS := $(wildcard *.h)
 
 .PHONY: all check audit-check audit-native shutdown-probe integration acceptance clean
@@ -36,9 +36,12 @@ audit-native: all
 # weakened or silently counted as a passing cleanup test.
 shutdown-probe: agent-shutdown-probe
 	./agent-shutdown-probe
-integration: agent-monitor agent-probe
+integration: agent-monitor agent-probe agent-short-read
 	/usr/bin/python3 tests/integration.py
+	/usr/bin/python3 tests/short_read.py
+agent-short-read: tests/short_read_fixture.cpp
+	$(CXX) $(CXXFLAGS) $< -o $@
 acceptance: all
 	/usr/bin/python3 tests/acceptance_matrix.py --require-full-acceptance
 clean:
-	rm -f agent-monitor agent-gateway agent-unit agent-probe agent-generations agent-callback-tests agent-store-tests agent-shutdown-probe
+	rm -f agent-monitor agent-gateway agent-unit agent-probe agent-short-read agent-generations agent-callback-tests agent-store-tests agent-shutdown-probe

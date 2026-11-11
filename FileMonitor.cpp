@@ -1,4 +1,5 @@
 #include "FileMonitor.h"
+#include <cstdlib>
 #include <cstring>
 #include <set>
 #include <stdexcept>
@@ -26,17 +27,29 @@ void FileMonitor::Start() {
         UniqueCF<CFMutableArrayRef> roots(CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
         if (!roots) throw std::runtime_error("CFArray allocation failed");
         std::set<std::string> directories;
+        std::error_code home_error;
+        std::filesystem::path home;
+        if (const auto* env = std::getenv("HOME")) home = std::filesystem::weakly_canonical(env, home_error);
         for (const auto& target : sensitive_) {
             auto path = std::filesystem::path(target);
             if (!std::filesystem::is_directory(path)) path = path.parent_path();
             while (!std::filesystem::exists(path) && path != path.parent_path()) path = path.parent_path();
-            directories.insert(path.string());
+            std::error_code canonical_error;
+            auto canonical = std::filesystem::weakly_canonical(path, canonical_error);
+            if (canonical_error) canonical = path;
+            // A missing dotfile such as ~/.netrc must not subscribe FSEvents to all of $HOME.
+            if (canonical == "/" || (!home_error && !home.empty() && canonical == home)) {
+                broad_roots_skipped_.fetch_add(1, std::memory_order_relaxed); continue;
+            }
+            directories.insert(canonical.string());
         }
         for (const auto& directory : directories) {
             UniqueCF<CFStringRef> value(CFStringCreateWithFileSystemRepresentation(nullptr, directory.c_str()));
             if (!value) throw std::runtime_error("invalid watch directory");
             CFArrayAppendValue(roots.get(), value.get());
         }
+        for (size_t i = 0; i < rings_.size(); ++i) workers_.emplace_back([this, i] { Consume(i); });
+        if (directories.empty()) return;
         dispatch_.reset(dispatch_queue_create("agentsec.files.source", DISPATCH_QUEUE_SERIAL));
         if (!dispatch_) throw std::runtime_error("dispatch queue creation failed");
         FSEventStreamContext context{0, this, nullptr, nullptr, nullptr}; // borrowed context
@@ -47,7 +60,6 @@ void FileMonitor::Start() {
         if (!stream_) throw std::runtime_error("FSEventStreamCreate failed");
         FSEventStreamSetDispatchQueue(stream_.get(), dispatch_.get());
         stream_.get_deleter().scheduled = true;
-        for (size_t i = 0; i < rings_.size(); ++i) workers_.emplace_back([this, i] { Consume(i); });
         if (!FSEventStreamStart(stream_.get())) throw std::runtime_error("FSEventStreamStart failed");
         stream_.get_deleter().started = true;
     } catch (...) { Stop(); throw; }
@@ -75,7 +87,7 @@ void FileMonitor::Stop() noexcept {
     for (auto& worker : workers_) if (worker.joinable()) worker.join();
 }
 FileMonitorStats FileMonitor::Stats() const noexcept {
-    return {queue_dropped_.load(), oversized_paths_.load(), source_gaps_.load()};
+    return {queue_dropped_.load(), oversized_paths_.load(), source_gaps_.load(), broad_roots_skipped_.load()};
 }
 void FileMonitor::Check() const {
     std::lock_guard<std::mutex> lock(error_mutex_);

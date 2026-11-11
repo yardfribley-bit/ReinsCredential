@@ -14,7 +14,9 @@ struct EvidenceDetailView: View {
                     RiskBadge(level: record.riskLevel)
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(record.findingTitle).font(.title3.weight(.semibold))
+                    Text(record.summary.isEmpty ? record.findingTitle : record.summary)
+                        .font(.title3.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
                     if let action = record.recommendedAction {
                         Text(action).font(.subheadline).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -35,6 +37,11 @@ struct EvidenceDetailView: View {
 
                 detailSection("关联依据") {
                     DetailValue(title: "归因状态", value: record.attribution.isEmpty ? "未记录" : record.attribution)
+                    if !record.owningAgentName.isEmpty {
+                        DetailValue(title: "AI agent", value: record.owningAgentBundle.isEmpty
+                            ? record.owningAgentName
+                            : "\(record.owningAgentName) (\(record.owningAgentBundle))")
+                    }
                     if !record.classification.isEmpty {
                         DetailValue(title: "进程分类", value: record.classification)
                     }
@@ -84,10 +91,21 @@ struct EvidenceDetailView: View {
     }
 
     private var chainStatus: String {
-        switch record.chainComplete {
-        case .some(true): return "后端标记：进程链完整。"
-        case .some(false): return "后端标记：进程链不完整，部分祖先不可用。"
-        case .none: return "后端未提供进程链完整性标记。"
+        switch record.chainStatus {
+        case "observed_chain_to_root":
+            return "Process chain reaches the root process."
+        case "observed_chain_to_launchd":
+            return "Process chain reaches launchd (pid 1). launchd's own start time was not readable."
+        case "missing_parent":
+            return "Process chain is incomplete: a parent was not observed."
+        case let status where !status.isEmpty:
+            return "Process chain: \(status)."
+        default:
+            switch record.chainComplete {
+            case .some(true): return "Process chain is marked complete."
+            case .some(false): return "Process chain is incomplete."
+            case .none: return "No process-chain status was recorded."
+            }
         }
     }
 
