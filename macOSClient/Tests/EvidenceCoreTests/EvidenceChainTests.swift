@@ -191,8 +191,8 @@ final class EvidenceChainTests: XCTestCase {
                          tree: codexTree, agent: "Codex", bundle: "Codex.app",
                          basis: "same_identity_descriptor_snapshot",
                          destination: "203.0.113.10:443/protocol=6",
-                         detail: "Sensitive file descriptor and socket peer observed in the same sample; upload_unproven",
-                         complete: true, status: "observed_chain_to_launchd")
+                         complete: true, status: "observed_chain_to_launchd",
+                         detail: "Sensitive file descriptor and socket peer observed in the same sample; upload_unproven")
         let change = event(id: 31, type: "filesystem_change", path: "/synthetic/demo/changed.env",
                            detail: "synthetic change")
         let chains = EvidenceChainBuilder.chains(from: [peer, change])
@@ -238,12 +238,12 @@ final class EvidenceChainTests: XCTestCase {
 
     func testExportWindowKeepsLabelsAndDropsChainsOutsideIt() throws {
         let early = event(id: 40, type: "sensitive_access_closed", path: "/synthetic/demo/early.env",
-                          verdict: "not_visible", basis: "egress_channel_not_visible",
-                          outcome: "udp_or_quic_body_not_visible", destination: "203.0.113.8:53/protocol=17",
+                          basis: "egress_channel_not_visible", destination: "203.0.113.8:53/protocol=17",
+                          outcome: "udp_or_quic_body_not_visible", verdict: "not_visible",
                           at: Date(timeIntervalSince1970: 1_700_000_000))
         let late = event(id: 41, type: "sensitive_access_closed", path: "/synthetic/demo/late.env",
-                         verdict: "not_found", basis: "egress_proxy_watched_http_no_match",
-                         outcome: "watched_http_no_registered_content",
+                         basis: "egress_proxy_watched_http_no_match",
+                         outcome: "watched_http_no_registered_content", verdict: "not_found",
                          at: Date(timeIntervalSince1970: 1_700_000_100))
         let chains = EvidenceChainBuilder.chains(from: [early, late])
         let window = early.timestamp...early.timestamp
@@ -272,9 +272,9 @@ final class EvidenceChainTests: XCTestCase {
     private func hash(_ unit: String) -> String { String(repeating: unit, count: 32) }
 
     private func hidden(id: Int, basis: String, outcome: String, detail: String, destination: String) -> EvidenceRecord {
-        event(id: id, type: "egress_channel_unseen", path: "", basis: basis, destination: destination,
-              outcome: outcome, verdict: "not_visible", detail: detail, complete: true,
-              status: "observed_chain_to_launchd", tree: workbuddyTree, agent: "WorkBuddy", bundle: "WorkBuddy.app")
+        event(id: id, type: "egress_channel_unseen", path: "", tree: workbuddyTree, agent: "WorkBuddy",
+              bundle: "WorkBuddy.app", basis: basis, destination: destination, outcome: outcome,
+              verdict: "not_visible", complete: true, status: "observed_chain_to_launchd", detail: detail)
     }
 
     private func event(id: Int, type: String, path: String, tree: [ProcessNode] = [], agent: String = "",
@@ -286,8 +286,9 @@ final class EvidenceChainTests: XCTestCase {
             id: demoID(id), timestamp: at, riskLevel: .medium, targetResource: path, actionType: "OBSERVE",
             processTree: tree, sourceType: type, attribution: "synthetic_demo", detail: detail,
             destination: destination, chainComplete: complete, evidenceBasis: basis, transferOutcome: outcome,
-            summary: summary, uploadVerdict: verdict, owningAgentName: agent, owningAgentBundle: bundle,
-            chainStatus: status, contentSHA256: hash, relatedEventIDs: related.map(\.uuidString), count: count
+            count: count, summary: summary, uploadVerdict: verdict, owningAgentName: agent,
+            owningAgentBundle: bundle, chainStatus: status, contentSHA256: hash,
+            relatedEventIDs: related.map(\.uuidString)
         )
     }
 
