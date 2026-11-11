@@ -1,0 +1,20 @@
+{
+  "capture_method" : "screencapture-window-id",
+  "captures" : [
+    {
+      "appearance" : "light",
+      "height" : 1634,
+      "width" : 2448
+    },
+    {
+      "appearance" : "dark",
+      "height" : 1634,
+      "width" : 2448
+    }
+  ],
+  "demo_mode" : true,
+  "sample_records" : 3,
+  "scope" : "Own synthetic-data window only; visual review required; not interaction automation",
+  "status" : "rendered",
+  "window_number" : 4568
+}

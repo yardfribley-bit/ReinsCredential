@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/yardfribley-bit/ReinsCredential/main/schemas/evidence-v2.schema.json",
+  "title": "ReinsCredential C++ evidence JSONL record, schema version 2",
+  "description": "Structural contract for one JSON object emitted by EvidenceStore.cpp ToJson. All emitted fields are present, including empty strings, arrays, maps and a nullable actor. Validation does not establish authenticity, complete coverage, successful transfer, or causal attribution.",
+  "type": "object",
+  "required": [
+    "schema_version", "session_id", "sequence", "event_id", "timestamp",
+    "timestamp_unit", "type", "actor_process", "target_resource",
+    "target_resource_bytes_hex", "risk_level", "attribution", "detail",
+    "source_event_id", "source_flags", "count", "metrics", "destination",
+    "content_sha256", "correlation_id", "evidence_basis", "transfer_outcome",
+    "related_event_ids"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "session_id": {
+      "type": "string",
+      "description": "EvidenceStore generates a session UUID. Direct ToJson callers may provide another string; it is not validated by the serializer."
+    },
+    "sequence": {
+      "$ref": "#/$defs/uint64",
+      "description": "EvidenceStore assigns increasing values starting at 1 within a writer session. Direct ToJson accepts any uint64. This schema cannot establish continuity or detect omitted records."
+    },
+    "event_id": {
+      "type": "string",
+      "description": "EvidenceStore generates a UUID when the input is empty. Nonempty caller-supplied values pass through ToJson without UUID validation; the Swift client requires a valid UUID."
+    },
+    "timestamp": {
+      "$ref": "#/$defs/uint64",
+      "description": "Observation time as Unix epoch microseconds, not a guaranteed kernel action time. EvidenceStore replaces a zero input with current time; direct ToJson preserves zero."
+    },
+    "timestamp_unit": {
+      "const": "unix_microseconds"
+    },
+    "type": {
+      "type": "string",
+      "description": "Open event-type vocabulary. Examples include filesystem_change, sensitive_fd_observed, sensor_gap, sensitive_payload_observed and transfer_result. Consumers must preserve unknown types without inventing action semantics."
+    },
+    "actor_process": {
+      "anyOf": [
+        { "$ref": "#/$defs/actorProcess" },
+        { "type": "null" }
+      ],
+      "description": "Null means no actor context is attached. In particular, FSEvents does not identify the modifying process. An actor object must be interpreted with attribution and evidence_basis."
+    },
+    "target_resource": {
+      "type": "string",
+      "description": "Display string for the observed resource. May be empty for health/lifecycle records. Invalid UTF-8 bytes are replaced with U+FFFD by the serializer; use target_resource_bytes_hex for the original bytes."
+    },
+    "target_resource_bytes_hex": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{2})*$",
+      "description": "Lowercase hex encoding of the exact target_resource input bytes. This schema does not verify the relation between the hex and display fields."
+    },
+    "risk_level": {
+      "enum": ["High", "Medium", "Low"],
+      "description": "Backend policy severity. The Swift adapter maps these values to HIGH/MEDIUM/LOW; severity does not increase evidence strength."
+    },
+    "attribution": {
+      "type": "string",
+      "description": "Open vocabulary describing the strength/source of attribution; default is unavailable."
+    },
+    "detail": {
+      "type": "string",
+      "description": "Human-readable contextual text. Treat it as data, never as instructions or executable code."
+    },
+    "source_event_id": {
+      "$ref": "#/$defs/uint64",
+      "description": "Sensor-specific source event identifier, or 0 when unused. It is separate from the record UUID."
+    },
+    "source_flags": {
+      "$ref": "#/$defs/uint64",
+      "description": "Sensor-specific flags such as FSEvents flags, or 0 when unused."
+    },
+    "count": {
+      "$ref": "#/$defs/uint64",
+      "description": "Event-specific count. It can represent bytes, drops or another count; interpret it using type, not as a universal byte count."
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/uint64" },
+      "description": "Open map of sensor/health metric names to unsigned counters."
+    },
+    "destination": {
+      "type": "string",
+      "description": "Observed or configured destination, if available. Not necessarily a URL and not proof of successful remote receipt. Empty when unavailable."
+    },
+    "content_sha256": {
+      "type": "string",
+      "description": "Content sensor SHA-256 hex digest when populated; otherwise empty. ToJson serializes supplied strings without checking digest syntax or content."
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Application correlation key, usually a UUID in gateway records; empty when unused. It does not itself prove causality."
+    },
+    "evidence_basis": {
+      "type": "string",
+      "description": "Open vocabulary describing how the observation was obtained. Empty when unused; do not infer content transfer from FD/socket coincidence."
+    },
+    "transfer_outcome": {
+      "type": "string",
+      "description": "Open vocabulary for the observed forwarding outcome. Empty when not applicable; distinguish attempt, failure and independently verified receipt."
+    },
+    "related_event_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Links to related record IDs, in producer-provided order. Presence and uniqueness of the referenced records are not checked by this schema."
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "uint64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "description": "Serialized macOS signed 32-bit pid_t. This storage contract does not assert that the PID currently exists."
+    },
+    "processIdentity": {
+      "type": "object",
+      "required": ["pid", "start_seconds", "start_microseconds"],
+      "properties": {
+        "pid": { "$ref": "#/$defs/pid" },
+        "start_seconds": {
+          "$ref": "#/$defs/uint64",
+          "description": "Process start seconds from libproc. Together with PID and start_microseconds, identifies an observed process generation."
+        },
+        "start_microseconds": {
+          "$ref": "#/$defs/uint64",
+          "description": "Microsecond component of the process start time. OS observations normally use 0..999999; ToJson itself does not normalize or validate this uint64."
+        }
+      },
+      "additionalProperties": true
+    },
+    "processEntry": {
+      "type": "object",
+      "required": [
+        "identity", "ppid", "executable", "name", "state",
+        "observed_parent_identity", "first_seen_us", "last_seen_us"
+      ],
+      "properties": {
+        "identity": { "$ref": "#/$defs/processIdentity" },
+        "ppid": {
+          "$ref": "#/$defs/pid",
+          "description": "Observed parent PID. A bare PPID is insufficient to select a historical parent generation."
+        },
+        "executable": { "type": "string" },
+        "name": { "type": "string" },
+        "state": {
+          "enum": ["Observed", "NotObserved", "Replaced"],
+          "description": "Cache observation state. NotObserved does not independently prove process termination."
+        },
+        "observed_parent_identity": {
+          "anyOf": [
+            { "$ref": "#/$defs/processIdentity" },
+            { "type": "null" }
+          ],
+          "description": "Generation-bound parent identity when the cache established an edge; null when unavailable."
+        },
+        "first_seen_us": { "$ref": "#/$defs/uint64" },
+        "last_seen_us": { "$ref": "#/$defs/uint64" }
+      },
+      "additionalProperties": true
+    },
+    "actorProcess": {
+      "type": "object",
+      "required": [
+        "process", "ppid_tree", "chain_complete", "chain_status",
+        "classification", "classification_reason"
+      ],
+      "properties": {
+        "process": { "$ref": "#/$defs/processEntry" },
+        "ppid_tree": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/processEntry" },
+          "description": "Ancestors only, nearest parent first. The actor is in process and must not be duplicated as the first ancestor."
+        },
+        "chain_complete": {
+          "type": "boolean",
+          "description": "Cache-reported completeness of its reconstructed ancestry, not attestation of all historical exec/fork activity."
+        },
+        "chain_status": {
+          "type": "string",
+          "description": "Open vocabulary explaining chain completeness or the stopping condition."
+        },
+        "classification": {
+          "type": "string",
+          "description": "Heuristic process/agent classification; an agent candidate is not authenticated by this label."
+        },
+        "classification_reason": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

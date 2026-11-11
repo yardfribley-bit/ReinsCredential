@@ -2,6 +2,8 @@
 
 C++17 用户态 Agent 候选监测与结构化证据收集器，使用 libproc 和 FSEvents。
 
+原生 macOS 客户端第一阶段位于 [macOSClient](macOSClient/README.md)：SwiftUI 风险列表、进程链详情和只读 JSONL 日志导入，支持浅色/暗色和材质背景。开发 Agent 请先读 [AGENTS.md](AGENTS.md)；后端证据契约见 [Schema 2](schemas/README.md)。
+
 **完整读取/外传验收尚未通过。** 最新实测、逐功能检查和真实 Agent 证据见 [ACCEPTANCE_REPORT.md](ACCEPTANCE_REPORT.md)：45 个行为用例为 17 TP、22 TN、0 FP、6 FN；已接入内容通道的真实 Codex 本机发送验证通过，模型目的地、未接入发送和公网收件仍未通过。
 
 ```sh
