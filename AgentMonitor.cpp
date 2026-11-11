@@ -178,7 +178,7 @@ void AnnotateActor(ActorProcess& actor, const AgentRules& rules) {
 std::string SummarizeAccess(const ActorProcess* actor, const std::string& path, const std::string& basis, const AgentRules& rules) {
     const auto shown = DisplayPath(path);
     if (!actor || basis == "access_time_change")
-        return "The access time changed for " + shown + ". No process was identified. This is not an agent attribution or an upload.";
+        return "The access time changed for " + shown + ". No process was identified. This is not an agent attribution, and it is not an upload.";
     if (actor->classification == "collector_self")
         return "ReinsCredential opened " + shown + ". This is the monitoring app itself, not an AI agent, and it is not an upload.";
     const auto subject_via = SubjectAndVia(*actor, rules);
