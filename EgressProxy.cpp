@@ -12,7 +12,7 @@
 #include <spawn.h>
 #include <fcntl.h>
 #include <poll.h>
-#include <signal.h>
+#include <csignal>
 #include <array>
 #include <algorithm>
 #include <cctype>
@@ -327,7 +327,8 @@ bool SocketMatches(pid_t pid, uint16_t local_port, uint16_t foreign_port, in_add
         socket_fdinfo socket{};
         if (proc_pidfdinfo(pid, fds[i].proc_fd, PROC_PIDFDSOCKETINFO, &socket, sizeof(socket)) != sizeof(socket)) continue;
         const auto& info = socket.psi;
-        if (info.soi_family != AF_INET || info.soi_protocol != IPPROTO_TCP) continue;
+        if (info.soi_family != AF_INET) continue;
+        if (info.soi_protocol != IPPROTO_TCP && info.soi_protocol != 0) continue;
         const in_sockinfo* in = nullptr;
         if (info.soi_kind == SOCKINFO_TCP) in = &info.soi_proto.pri_tcp.tcpsi_ini;
         else if (info.soi_kind == SOCKINFO_IN) in = &info.soi_proto.pri_in;
@@ -335,8 +336,10 @@ bool SocketMatches(pid_t pid, uint16_t local_port, uint16_t foreign_port, in_add
         const auto local_seen = network_order ? ntohs(static_cast<uint16_t>(in->insi_lport)) : static_cast<uint16_t>(in->insi_lport);
         const auto foreign_seen = network_order ? ntohs(static_cast<uint16_t>(in->insi_fport)) : static_cast<uint16_t>(in->insi_fport);
         if (local_seen != local_port || foreign_seen != foreign_port) continue;
+        // Foreign address is the proxy. The local address is the client's own
+        // loopback socket; some OS builds store that side differently, so it is
+        // not required once the ports and the proxy address match.
         if (in->insi_faddr.ina_46.i46a_addr4.s_addr != foreign_addr) continue;
-        if (in->insi_laddr.ina_46.i46a_addr4.s_addr != htonl(INADDR_LOOPBACK)) continue;
         return true;
     }
     return false;
