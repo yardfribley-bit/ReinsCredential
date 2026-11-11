@@ -98,7 +98,7 @@ bool WriteAll(int fd, const std::string& bytes, std::chrono::milliseconds budget
     while (sent < bytes.size()) {
         auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - MonoClock::now()).count();
         if (left <= 0 || !WaitFd(fd, POLLOUT, std::chrono::milliseconds(left))) return false;
-        auto n = ::send(fd, bytes.data() + sent, bytes.size() - sent, 0);
+        auto n = ::write(fd, bytes.data() + sent, bytes.size() - sent);
         if (n < 0 && errno == EINTR) continue;
         if (n <= 0) return false;
         sent += static_cast<size_t>(n);
