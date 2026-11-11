@@ -2,6 +2,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/SecImportExport.h>
 #include <Security/SecItem.h>
+#include <Security/SecPolicy.h>
 #include <Security/SecTrust.h>
 #include <Security/SecureTransport.h>
 #include <arpa/inet.h>
