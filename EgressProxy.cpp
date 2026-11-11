@@ -683,6 +683,7 @@ struct Session {
             if (!match_kind.empty()) record.detail = "match=" + match_kind + ";raw_bytes_not_stored";
             else record.detail = "no_registered_content_in_inspected_body_or_channel_not_visible";
             if (!launched) record.detail += ";already_running_not_redirected;app_settings_not_modified";
+            if (closed.destination.rfind("https://", 0) == 0) record.detail += ";tls_intercept";
             if (closed.verdict == UploadVerdict::Uploaded || closed.verdict == UploadVerdict::Attempted)
                 record.content_sha256 = digest;
             record.risk_level = closed.verdict == UploadVerdict::Uploaded || closed.verdict == UploadVerdict::Attempted
