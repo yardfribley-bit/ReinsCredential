@@ -25,7 +25,9 @@ ProcessNode Node(pid_t pid, uint64_t birth, pid_t parent = 0) {
 class FakeSource final : public IProcessSource {
 public:
     std::vector<ProcessNode> nodes;
-    bool fail_sample = false, recycle_during_inspect = false;
+    bool fail_sample = false, recycle_during_inspect = false, confirm_launchd = false;
+    // Empty means every inspected process reports the synthetic file and peer.
+    std::optional<std::set<pid_t>> sensitive_pids;
     ProcessSample Sample() override {
         if (fail_sample) throw std::runtime_error("injected snapshot failure");
         return {nodes, 0, true};
@@ -38,10 +40,17 @@ public:
     bool ValidateParent(const ProcessNode& child, const ProcessNode& parent) override {
         return child.ppid == parent.identity.pid && Validate(child) && Validate(parent);
     }
+    bool ConfirmParentPid(const ProcessNode& node, pid_t ppid) override {
+        return confirm_launchd && ppid == 1 && node.ppid == 1;
+    }
     ActivitySample Inspect(const ProcessNode& node, const std::vector<std::string>&, bool) override {
         if (recycle_during_inspect) for (auto& current : nodes)
             if (current.identity == node.identity) ++current.identity.start_seconds;
-        ActivitySample result; result.sensitive_files.insert("/synthetic/secret"); result.socket_peers.insert("127.0.0.1:1234/protocol=6"); return result;
+        ActivitySample result;
+        if (sensitive_pids && !sensitive_pids->count(node.identity.pid)) return result;
+        result.sensitive_files.insert("/synthetic/secret");
+        if (!sensitive_pids) result.socket_peers.insert("127.0.0.1:1234/protocol=6");
+        return result;
     }
 };
 void CacheTests() {
@@ -312,16 +321,9 @@ void AttributionTests() {
     auto incomplete = cache.View()->Resolve(source->nodes[0].identity);
     assert(incomplete && !incomplete->chain_complete && incomplete->chain_status == "missing_parent");
 
-    class LaunchdSource final : public FakeSource {
-    public:
-        bool ConfirmParentPid(const ProcessNode& node, pid_t ppid) override { return ppid == 1 && node.ppid == 1; }
-        ActivitySample Inspect(const ProcessNode& node, const std::vector<std::string>&, bool) override {
-            ActivitySample result;
-            if (node.identity.pid == 90 || node.identity.pid == 92) result.sensitive_files.insert("/synthetic/secret");
-            return result;
-        }
-    };
-    auto launchd = std::make_shared<LaunchdSource>();
+    auto launchd = std::make_shared<FakeSource>();
+    launchd->confirm_launchd = true;
+    launchd->sensitive_pids = std::set<pid_t>{};
     launchd->nodes = {Named(80, 5, 1, "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", "ChatGPT"),
         Named(81, 6, 80, "/usr/local/bin/codex", "codex"), Named(82, 7, 81, "/bin/zsh", "zsh")};
     ProcessCache ready(launchd, {}); ready.Refresh();
@@ -373,7 +375,9 @@ void AttributionTests() {
     assert(ambiguous->summary.find("No process was identified") != std::string::npos);
     assert(ambiguous->summary.find("not an upload") != std::string::npos);
 
-    auto self_source = std::make_shared<LaunchdSource>();
+    auto self_source = std::make_shared<FakeSource>();
+    self_source->confirm_launchd = true;
+    self_source->sensitive_pids = std::set<pid_t>{90};
     self_source->nodes = {Named(90, 4, 1, "/Applications/ReinsCredential.app/Contents/Helpers/agent-monitor", "agent-monitor"),
         Named(91, 5, 90, "/bin/cat", "cat")};
     ProcessCache self_cache(self_source, {}); self_cache.Refresh();
@@ -395,7 +399,9 @@ void AttributionTests() {
     auto self_summary = SummarizeAccess(&collector, "/synthetic/secret", "fd_observed", {});
     assert(self_summary.find("monitoring app itself") != std::string::npos && self_summary.find("not an upload") != std::string::npos);
 
-    auto security = std::make_shared<LaunchdSource>();
+    auto security = std::make_shared<FakeSource>();
+    security->confirm_launchd = true;
+    security->sensitive_pids = std::set<pid_t>{92};
     security->nodes = {Named(92, 4, 1, "/Applications/AgentReins.app/Contents/MacOS/AgentReins", "AgentReins")};
     ProcessCache security_cache(security, {}); security_cache.Refresh();
     Sink security_sink;
