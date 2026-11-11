@@ -10,7 +10,7 @@
     "target_resource_bytes_hex", "risk_level", "attribution", "detail",
     "source_event_id", "source_flags", "count", "metrics", "destination",
     "content_sha256", "correlation_id", "evidence_basis", "transfer_outcome",
-    "summary", "related_event_ids"
+    "upload_verdict", "summary", "related_event_ids"
   ],
   "properties": {
     "schema_version": {
@@ -102,11 +102,16 @@
     },
     "summary": {
       "type": "string",
-      "description": "Plain-language sentence for the event, safe to show to a non-expert. Empty when unused. A sentence that names an agent and a file describes an open or a weaker access-time signal. It is not an upload finding."
+      "description": "Plain-language sentence for the event, safe to show to a non-expert. Empty when unused. A sentence that names an agent and a file, and says the file was open, describes an open or a weaker access-time signal. A sentence that starts with 已上传 is written only when upload_verdict is uploaded. 未发现 means inspected egress did not contain the registered content. 看不到 means that channel's bytes were not visible and is not a clean bill."
     },
     "transfer_outcome": {
       "type": "string",
-      "description": "Open vocabulary for the observed forwarding outcome. Empty when not applicable; distinguish attempt, failure and independently verified receipt."
+      "description": "Open vocabulary for the observed forwarding outcome. Empty when not applicable; distinguish attempt, failure and independently verified receipt. HTTP 2xx is the proxy's observation of the response, not an independent remote receipt."
+    },
+    "upload_verdict": {
+      "type": "string",
+      "enum": ["", "uploaded", "attempted", "not_found", "not_visible"],
+      "description": "Closing word for a sensitive-file access or an egress observation. uploaded requires a registered-content match and an observed successful transfer. attempted is a match whose transfer did not succeed. not_found means the watched plaintext HTTP egress did not contain the content. not_visible means the bytes on that channel were not observed. Empty when this record is not a verdict."
     },
     "related_event_ids": {
       "type": "array",

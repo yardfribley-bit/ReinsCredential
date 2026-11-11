@@ -76,8 +76,12 @@ struct EvidenceRecord {
     // evidence_basis/type distinguishes them; content hashes and transfer outcomes
     // must never be fabricated from descriptor co-occurrence.
     std::string destination, content_sha256, correlation_id, evidence_basis, transfer_outcome;
-    // Plain-language description for people who are not reading the raw fields.
-    // It must not claim an upload. target_resource remains the absolute path.
+    // Empty unless an egress observation closed this record. Values: uploaded,
+    // attempted, not_found, not_visible. Never infer one from a socket peer alone.
+    std::string upload_verdict;
+    // Plain-language description. A file-open sentence is not an upload.
+    // A sentence that starts with 已上传 is only written after a body match and
+    // an observed transfer result. target_resource remains the absolute path.
     std::string summary;
     std::vector<std::string> related_event_ids;
 };

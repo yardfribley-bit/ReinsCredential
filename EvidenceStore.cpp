@@ -93,8 +93,8 @@ std::string EncodeFields(const EvidenceRecord& record) {
         ",\"count\":" + std::to_string(record.count) + ",\"metrics\":" + metrics +
         ",\"destination\":" + Quote(record.destination) + ",\"content_sha256\":" + Quote(record.content_sha256) +
         ",\"correlation_id\":" + Quote(record.correlation_id) + ",\"evidence_basis\":" + Quote(record.evidence_basis) +
-        ",\"transfer_outcome\":" + Quote(record.transfer_outcome) + ",\"summary\":" + Quote(record.summary) +
-        ",\"related_event_ids\":" + related + "}";
+        ",\"transfer_outcome\":" + Quote(record.transfer_outcome) + ",\"upload_verdict\":" + Quote(record.upload_verdict) +
+        ",\"summary\":" + Quote(record.summary) + ",\"related_event_ids\":" + related + "}";
 }
 std::string Envelope(const std::string& session, uint64_t sequence) {
     return "{\"schema_version\":2,\"session_id\":" + Quote(session) + ",\"sequence\":" + std::to_string(sequence);

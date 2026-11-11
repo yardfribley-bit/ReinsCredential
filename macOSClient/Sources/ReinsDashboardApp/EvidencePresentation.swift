@@ -24,6 +24,11 @@ extension EvidenceRecord {
         case "sensitive_content_delivery_attempt": return "准备交付敏感内容"
         case "sensitive_content_delivered": return "内容已写入本地连接"
         case "transfer_result": return "网关转发结果"
+        case "egress_transfer": return "本地出口代理看到的传输"
+        case "sensitive_access_closed": return "敏感文件访问的出口结论"
+        case "egress_channel_unseen": return "出口通道内容不可见"
+        case "egress_proxy_ready": return "本地出口代理已启动"
+        case "egress_proxy_stopped": return "本地出口代理已停止"
         case "gateway_request_failed": return "网关请求失败"
         case "gateway_ready": return "内容网关已启动"
         default: return actionType
@@ -48,8 +53,18 @@ extension EvidenceRecord {
             return "查看下方错误说明和监控状态，处理权限、空间或配置问题后重新启动监控。"
         case "sensitive_payload_observed":
             return "提交内容已匹配受监控数据。核查目的地与关联的传输结果；提交记录本身不代表远端已接收。"
-        case "transfer_result":
+        case "transfer_result", "egress_transfer":
             return "根据传输结果和证据来源核查发送是否完成；远端接收需要独立回执支持。"
+        case "sensitive_access_closed" where uploadVerdict == "uploaded":
+            return "请求体与已登记内容匹配，并且目的地返回了成功状态。这不是对端的独立回执。"
+        case "sensitive_access_closed" where uploadVerdict == "attempted":
+            return "请求体与已登记内容匹配，但这次传输没有成功。"
+        case "sensitive_access_closed" where uploadVerdict == "not_found":
+            return "已查看明文 HTTP 出口，没有看到已登记内容。"
+        case "sensitive_access_closed" where uploadVerdict == "not_visible":
+            return "这个通道的内容看不到。不能把它写成未发现。"
+        case "egress_channel_unseen":
+            return "只看到了通道或对端，没有看到字节。这不是未发现。"
         default: return nil
         }
     }

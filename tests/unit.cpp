@@ -2,6 +2,7 @@
 #include "SensitiveDefaults.h"
 #include "SpscRing.h"
 #include "ContentMatcher.h"
+#include "EgressVerdict.h"
 #include <zlib.h>
 #include <algorithm>
 #include <atomic>
@@ -418,7 +419,57 @@ void AttributionTests() {
     assert(security_monitor.Stats().candidates == 0);
     std::cout << "PASS: launchd boundary, owning agent, plain-language sensitive access, self exclusion, security tool stays unclassified\n";
 }
+EgressObservation Http(bool match, bool ok, const std::string& destination) {
+    EgressObservation item;
+    item.kind = EgressObservation::Kind::HttpInspected;
+    item.content_match = match;
+    item.transfer_succeeded = ok;
+    item.destination = destination;
+    item.transfer_outcome = ok ? "upstream_http_2xx" : "connect_failed";
+    return item;
+}
+void VerdictTests() {
+    const auto uploaded = CloseAccess(true, {Http(true, true, "http://127.0.0.1:9/upload")});
+    assert(uploaded.verdict == UploadVerdict::Uploaded);
+    assert(uploaded.destination == "http://127.0.0.1:9/upload");
+    assert(uploaded.transfer_outcome == "upstream_http_2xx");
+    assert(std::string(UploadVerdictLabel(uploaded.verdict)) == "已上传");
+    const auto attempted = CloseAccess(true, {Http(true, false, "http://127.0.0.1:9/upload")});
+    assert(attempted.verdict == UploadVerdict::Attempted);
+    assert(std::string(UploadVerdictLabel(attempted.verdict)) == "已尝试未成功");
+    const auto benign = CloseAccess(true, {Http(false, true, "http://127.0.0.1:9/upload")});
+    assert(benign.verdict == UploadVerdict::NotFound);
+    assert(benign.transfer_outcome == "watched_http_no_registered_content");
+    assert(std::string(UploadVerdictLabel(benign.verdict)) == "未发现");
+    const auto idle = CloseAccess(true, {});
+    assert(idle.verdict == UploadVerdict::NotFound && idle.transfer_outcome == "watched_http_egress_idle");
+    EgressObservation tunnel;
+    tunnel.kind = EgressObservation::Kind::OpaqueTunnel;
+    tunnel.destination = "127.0.0.1:9";
+    tunnel.transfer_outcome = "opaque_tunnel_body_not_visible";
+    const auto hidden = CloseAccess(true, {Http(false, true, "http://127.0.0.1:9/upload"), tunnel});
+    assert(hidden.verdict == UploadVerdict::NotVisible);
+    assert(hidden.destination == "127.0.0.1:9");
+    assert(hidden.transfer_outcome == "opaque_tunnel_body_not_visible");
+    assert(std::string(UploadVerdictLabel(hidden.verdict)) == "看不到");
+    const auto unwatched = CloseAccess(false, {});
+    assert(unwatched.verdict == UploadVerdict::NotVisible && unwatched.transfer_outcome == "egress_not_watched");
+    const auto success_beats_tunnel = CloseAccess(true, {tunnel, Http(true, true, "http://127.0.0.1:9/ok")});
+    assert(success_beats_tunnel.verdict == UploadVerdict::Uploaded);
+    assert(success_beats_tunnel.destination == "http://127.0.0.1:9/ok");
+    const auto summary = UploadVerdictSummary(hidden, "python3", "/tmp/synthetic.env");
+    assert(summary.rfind("看不到", 0) == 0);
+    assert(summary.find("127.0.0.1:9") != std::string::npos);
+    assert(summary.find("opaque_tunnel_body_not_visible") != std::string::npos);
+    EvidenceRecord record;
+    record.upload_verdict = "not_visible";
+    const auto json = ToJson(record, "verdict", 1);
+    assert(json.find("\"upload_verdict\":\"not_visible\"") != std::string::npos);
+    EvidenceRecord blank;
+    assert(ToJson(blank, "verdict", 2).find("\"upload_verdict\":\"\"") != std::string::npos);
+    std::cout << "PASS: upload verdicts stay uploaded, attempted, not-found, or not-visible\n";
+}
 } // namespace
 int main() {
-    CacheTests(); RingTests(); StoreTests(); ClassificationTests(); UnknownProcessTests(); ContentTests(); AttributionTests();
+    CacheTests(); RingTests(); StoreTests(); ClassificationTests(); UnknownProcessTests(); ContentTests(); AttributionTests(); VerdictTests();
 }

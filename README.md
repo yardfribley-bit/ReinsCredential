@@ -6,9 +6,11 @@ A normal result reads like this:
 
 > Codex read ~/.ssh/id_ed25519 via zsh -> python. The file was open in that process. This is not an upload finding.
 
-That sentence is the whole product claim for this release. "Read" here means the file was open inside that process, or, when the sentence says so, that only the file's access time overlapped one short-lived tool. It does **not** mean the file was uploaded, sent to a model, or received by anyone else. Upload detection is not in this release.
+That sentence means the file was open inside that process, or, when the sentence says so, that only the file's access time overlapped one short-lived tool. It does not by itself mean the file was uploaded.
 
-The collector is a user-space Mac app. It does not install a system extension and it does not inspect network contents. The app's own processes are never the suspected agent. Other security tools stay unlabeled programs, not agents.
+An upload sentence is separate, and it is written only by the local egress proxy. The closing words are **已上传** (the registered content was in the request and the destination returned success), **已尝试未成功** (the content matched and the transfer failed), **未发现** (the proxy watched that tree's plaintext HTTP and the content was not in it), and **看不到** (that channel's bytes were not visible). 看不到 is not a clean bill. A socket peer or a TLS tunnel is not an upload.
+
+The collector is a user-space Mac app. It does not install a system extension and it does not decrypt TLS. The app's own processes are never the suspected agent. Other security tools stay unlabeled programs, not agents.
 
 ```sh
 make
@@ -59,4 +61,11 @@ CLI 默认敏感路径为 ~/.ssh、~/.aws、启动目录的 .env。日志模式�
 
 FSEvents 不提供修改者 PID，也不监测纯读取。文件变更的 actor_process 必须为空；敏感文件描述符与网络对端共现只提示风险，不能证明数据上传。缓存使用 PID+启动时间防止常见复用误关联，但轮询不能保证观测所有 Agent 或彻底消除竞态。本项目尚未完成长期生产负载与部署验收。
 
-新增实验性 `agent-gateway` 提供显式接入的文件内容交付与发送审计。它以 Unix socket audit token 验证连接方身份，记录来源版本 hash、内容匹配、目的地、传输结果及关联事件。原文、JSON、Base64 和有界 gzip 已测试；跨请求分片和绕过仍漏报。它不是透明 HTTPS 监控，也不会自动接入已安装 Agent。用法、边界、真实会话与故障测试均见最新验收报告。
+新增实验性 `agent-gateway` 提供显式接入的文件内容交付与发送审计。它以 Unix socket audit token 验证连接方身份，记录来源版本 hash、内容匹配、目的地、传输结果及关联事件。原文、JSON、Base64 和有界 gzip 已测试；跨请求分片和未进入该套接字的发送仍会漏报。它不是透明 HTTPS 监控，也不会自动接入已安装 Agent。
+
+`agent-egress` 是另一条通道：它在 `127.0.0.1` 上提供本地 HTTP 代理，并且只覆盖它自己启动的那棵进程树（通过该进程的环境变量，不改 Cursor、Codex、Claude 或 WorkBuddy 的 MCP 配置）。代理检查明文 HTTP 请求体里有没有已登记敏感文件的指纹，不把原文写入日志。成功的 HTTP 响应记为已上传，失败记为已尝试未成功。看过的明文请求里没有指纹，记为未发现。CONNECT 隧道、没经过代理的套接字，以及没有对上进程的连接，记为看不到。它不做 TLS 中间人。用法和实测见最新验收报告。
+
+```sh
+./agent-egress --log ./evidence.jsonl --sensitive-file ./synthetic.env \
+  --launch -- python3 your-synthetic-case.py
+```

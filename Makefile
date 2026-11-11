@@ -1,15 +1,17 @@
 CXX := clang++
 CXXFLAGS := -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror -pthread
 LDLIBS := -framework CoreServices -lz
-CORE := ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp
+CORE := ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp EgressVerdict.cpp
 HEADERS := $(wildcard *.h)
 
 .PHONY: all check audit-check audit-native shutdown-probe integration acceptance clean
-all: agent-monitor agent-gateway
+all: agent-monitor agent-gateway agent-egress
 agent-gateway: ContentGateway.cpp $(CORE) $(HEADERS)
 	$(CXX) $(CXXFLAGS) ContentGateway.cpp $(CORE) $(LDLIBS) -lcurl -lbsm -o $@
 agent-monitor: main.cpp $(CORE) $(HEADERS)
 	$(CXX) $(CXXFLAGS) main.cpp $(CORE) $(LDLIBS) -o $@
+agent-egress: EgressProxy.cpp $(CORE) $(HEADERS)
+	$(CXX) $(CXXFLAGS) EgressProxy.cpp $(CORE) $(LDLIBS) -o $@
 agent-unit: tests/unit.cpp $(CORE) $(HEADERS)
 	$(CXX) $(CXXFLAGS) -I. tests/unit.cpp $(CORE) $(LDLIBS) -o $@
 agent-probe: tests/fixture.cpp
@@ -36,12 +38,13 @@ audit-native: all
 # weakened or silently counted as a passing cleanup test.
 shutdown-probe: agent-shutdown-probe
 	./agent-shutdown-probe
-integration: agent-monitor agent-probe agent-short-read
+integration: agent-monitor agent-probe agent-short-read agent-egress
 	/usr/bin/python3 tests/integration.py
 	/usr/bin/python3 tests/short_read.py
+	/usr/bin/python3 tests/egress_verdict.py
 agent-short-read: tests/short_read_fixture.cpp
 	$(CXX) $(CXXFLAGS) $< -o $@
 acceptance: all
 	/usr/bin/python3 tests/acceptance_matrix.py --require-full-acceptance
 clean:
-	rm -f agent-monitor agent-gateway agent-unit agent-probe agent-short-read agent-generations agent-callback-tests agent-store-tests agent-shutdown-probe
+	rm -f agent-monitor agent-gateway agent-egress agent-unit agent-probe agent-short-read agent-generations agent-callback-tests agent-store-tests agent-shutdown-probe

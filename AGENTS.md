@@ -15,6 +15,9 @@ mean complete agent discovery or exfiltration detection has been achieved.
   transfer. Keep observation, correlation, local send and remote receipt distinct.
 - Agent names/bundle matches are candidate classification, not authentication.
 - The explicit content gateway is not transparent system-wide TLS inspection.
+- The local egress proxy sees plaintext HTTP only for a tree it launched. A socket
+  peer is still not a payload. TLS and any channel that did not enter the proxy
+  are 看不到, not 未发现.
 - Append-only application I/O alone does not establish tamper-proof or legal evidence.
 
 ## Code map
@@ -29,6 +32,7 @@ mean complete agent discovery or exfiltration detection has been achieved.
 | Resource ownership | `SystemResources.h`: RAII for native handles |
 | Evidence writer | `EvidenceStore.h/.cpp`: schema, JSON escaping, admission and persistence |
 | Explicit content channel | `ContentGateway.cpp`, `ContentMatcher.cpp`: opt-in delivery/transfer evidence |
+| Launched-tree egress | `EgressProxy.cpp`, `EgressVerdict.cpp`: local HTTP proxy, fingerprints, honest upload verdicts |
 | Native client | `macOSClient/Package.swift`: EvidenceCore / RuntimeCore / ReinsDashboardApp / ReinsRuntime |
 | Client model | `macOSClient/Sources/EvidenceCore/Models/Evidence.swift`: backend-to-UI decoding |
 | Client input | `EvidenceLogReader.swift`: bounded, read-only JSONL snapshot importer |
