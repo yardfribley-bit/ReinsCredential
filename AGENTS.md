@@ -32,7 +32,7 @@ mean complete agent discovery or exfiltration detection has been achieved.
 | Resource ownership | `SystemResources.h`: RAII for native handles |
 | Evidence writer | `EvidenceStore.h/.cpp`: schema, JSON escaping, admission and persistence |
 | Explicit content channel | `ContentGateway.cpp`, `ContentMatcher.cpp`: opt-in delivery/transfer evidence |
-| Launched-tree egress | `EgressProxy.cpp`, `EgressVerdict.cpp`: local HTTP proxy, fingerprints, honest upload verdicts |
+| Launched-tree egress | `EgressProxy.cpp`, `EgressVerdict.cpp`, `TlsIntercept.cpp`: local HTTP proxy, optional HTTPS inspection, live-agent watching, fingerprints, honest upload verdicts |
 | Native client | `macOSClient/Package.swift`: EvidenceCore / RuntimeCore / ReinsDashboardApp / ReinsRuntime |
 | Client model | `macOSClient/Sources/EvidenceCore/Models/Evidence.swift`: backend-to-UI decoding |
 | Client input | `EvidenceLogReader.swift`: bounded, read-only JSONL snapshot importer |
