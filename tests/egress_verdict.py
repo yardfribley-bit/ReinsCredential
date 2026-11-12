@@ -526,14 +526,17 @@ def live_after_canary(directory, unknown, secret):
     env = os.environ.copy()
     for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "all_proxy", "no_proxy", "NO_PROXY"):
         env.pop(key, None)
+    # The launched canary must stay alive. agent-egress stops when that child
+    # exits, and the later agent would never be sampled.
+    env["EGRESS_HOLD_MS"] = "12000"
     proc = subprocess.Popen(
-        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "14",
+        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--timeout-sec", "20",
          "--sample-ms", "40", "--launch", "--", sys.executable, str(CASE), "plaintext", canary_sink.url("/upload"), str(secret)],
         cwd=str(ROOT), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     time.sleep(1.5)
     ready = directory / "live-after-canary.ready"
     agent = subprocess.Popen([str(unknown), "direct", str(secret), host, str(offhost.port), str(ready)])
-    time.sleep(1.0)
+    time.sleep(2.0)
     ready.write_text("go\n")
     _out, err = finish(proc)
     try:

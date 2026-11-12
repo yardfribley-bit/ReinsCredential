@@ -160,9 +160,11 @@ bool IsToolchainBundle(const std::string& bundle, const std::string& executable)
     return path.find("/contents/developer/") != std::string::npos;
 }
 void ApplyBehaviorOwner(ActorProcess& actor) {
-    if (IsCollectorProcess(actor.process.node)) {
+    // The collector and its launched children are not desktop agents. Do not
+    // replace that classification with a toolchain bundle such as Xcode.app.
+    if (IsCollectorProcess(actor.process.node) || actor.classification == "collector_self") {
         actor.classification = "collector_self";
-        actor.classification_reason = "self_process";
+        if (actor.classification_reason.empty()) actor.classification_reason = "self_process";
         actor.owning_agent.reset();
         return;
     }
