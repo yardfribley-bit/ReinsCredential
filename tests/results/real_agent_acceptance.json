@@ -7,7 +7,7 @@
         "executed": false,
         "open_observed": false,
         "owning_agent": "",
-        "reason": "prepared, not executed; owner approval required",
+        "reason": "codex executable not found on the runner",
         "sink_sha256_matched": null,
         "status": "not_executed",
         "verdict": "",
@@ -32,7 +32,7 @@
         "executed": false,
         "open_observed": false,
         "owning_agent": "",
-        "reason": "prepared, not executed; owner approval required",
+        "reason": "codex executable not found on the runner",
         "sink_sha256_matched": null,
         "status": "not_executed",
         "verdict": "",
@@ -57,7 +57,7 @@
         "executed": false,
         "open_observed": false,
         "owning_agent": "",
-        "reason": "prepared, not executed; owner approval required",
+        "reason": "cursor CLI not found; manual steps are in scripts/acceptance/README.md",
         "sink_sha256_matched": null,
         "status": "not_executed",
         "verdict": "",
@@ -82,7 +82,7 @@
         "executed": false,
         "open_observed": false,
         "owning_agent": "",
-        "reason": "manual; WorkBuddy is not started by this harness, and its settings are not modified.",
+        "reason": "manual; see scripts/acceptance/README.md",
         "sink_sha256_matched": null,
         "status": "not_executed",
         "verdict": "",
@@ -104,14 +104,14 @@
       "actual": {
         "channel_mentions_already_running": false,
         "destination_is_loopback": false,
-        "executed": false,
-        "open_observed": false,
+        "executed": true,
+        "open_observed": true,
         "owning_agent": "",
-        "reason": "stand-in; not executed in prepare mode",
+        "reason": "",
         "sink_sha256_matched": null,
-        "status": "not_executed",
-        "verdict": "",
-        "verdict_label": ""
+        "status": "passed",
+        "verdict": "not_found",
+        "verdict_label": "未发现"
       },
       "counts_as_real_agent": false,
       "executor": "stand-in",
@@ -123,20 +123,20 @@
         "verdict_label": "未发现"
       },
       "id": "negative_read_no_send",
-      "passed": false
+      "passed": true
     },
     {
       "actual": {
         "channel_mentions_already_running": false,
-        "destination_is_loopback": false,
-        "executed": false,
-        "open_observed": false,
+        "destination_is_loopback": true,
+        "executed": true,
+        "open_observed": true,
         "owning_agent": "",
-        "reason": "stand-in; not executed in prepare mode",
-        "sink_sha256_matched": null,
-        "status": "not_executed",
-        "verdict": "",
-        "verdict_label": ""
+        "reason": "",
+        "sink_sha256_matched": true,
+        "status": "passed",
+        "verdict": "uploaded",
+        "verdict_label": "已上传"
       },
       "counts_as_real_agent": false,
       "executor": "stand-in",
@@ -148,20 +148,20 @@
         "verdict_label": "已上传"
       },
       "id": "stand_in_launched_upload",
-      "passed": false
+      "passed": true
     },
     {
       "actual": {
         "channel_mentions_already_running": false,
-        "destination_is_loopback": false,
-        "executed": false,
-        "open_observed": false,
+        "destination_is_loopback": true,
+        "executed": true,
+        "open_observed": true,
         "owning_agent": "",
-        "reason": "stand-in; not executed in prepare mode",
-        "sink_sha256_matched": null,
-        "status": "not_executed",
-        "verdict": "",
-        "verdict_label": ""
+        "reason": "",
+        "sink_sha256_matched": true,
+        "status": "passed",
+        "verdict": "not_visible",
+        "verdict_label": "看不到"
       },
       "counts_as_real_agent": false,
       "executor": "stand-in",
@@ -173,22 +173,22 @@
         "verdict_label": "看不到"
       },
       "id": "stand_in_direct_not_visible",
-      "passed": false
+      "passed": true
     }
   ],
   "date": "2026-11-12",
-  "machine": "x86_64",
-  "mode": "prepare",
+  "machine": "arm64",
+  "mode": "ci",
   "notes": [
     "Fake secrets are created only in a temporary directory and deleted afterwards.",
     "The sink is http://127.0.0.1 and is started by this process.",
     "agent-monitor is started with --no-default-sensitive so ~/.ssh and ~/.aws are not watched.",
     "No CA is installed and no MCP or client config is written.",
     "A stand-in result does not count as real-agent acceptance.",
-    "WorkBuddy is not started by this harness, and its settings are not modified.\nOn the owner Mac, after reading scripts/acceptance/README.md:\n  scripts/acceptance/real_agents.sh --mode owner --i-approve-real-agents --only workbuddy_manual\nThe command prints a temp directory and a 127.0.0.1 sink. In the already-running\nWorkBuddy session, run only the printed python3 command. It reads one fake file\nin that temp directory and POSTs it straight to the sink, not through the proxy.\nExpected chain: owning agent WorkBuddy, verdict 看不到, with the already-running\nreason. 未发现 would be a failure. Do not point WorkBuddy at ~/.ssh or ~/.aws."
+    "Copied from GitHub Actions artifact real-agent-acceptance on pull_request run 43142769702, commit 121824f. Push run 43142751008 succeeded on the same commit. Runner is macOS-26.7.2 arm64, not the owner's Intel Mac. Codex and Cursor CLIs were absent. OPENAI_API_KEY, CODEX_API_KEY, and CURSOR_API_KEY were unset. Stand-in passes are not real-agent acceptance."
   ],
   "overall_acceptance": "not_passed",
-  "platform": "Linux-6.12.113+-x86_64-with-glibc2.39",
+  "platform": "macOS-26.7.2-arm64-arm-64bit",
   "real_agent_acceptance": false,
   "schema": "reinscredential.real-agent-acceptance.v1",
   "stand_in_is_not_real_agent_acceptance": true

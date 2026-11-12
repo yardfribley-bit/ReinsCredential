@@ -12,17 +12,17 @@
 
 | 用例 | 期望 | 本次实际 | 计入真实 Agent |
 | --- | --- | --- | --- |
-| `codex_launched_upload` | Codex，已上传，打开被看到，目的地是本机 sink | 未执行。需要主人同意，或 CI 上同时有 Codex 可执行文件和 API key secret | 否 |
+| `codex_launched_upload` | Codex，已上传，打开被看到，目的地是本机 sink | 未执行。runner 上没有 `codex`，API key secret 也是空的 | 否 |
 | `codex_already_running_not_visible` | Codex，看不到，并写明已经在运行、没有改道 | 未执行。同上 | 否 |
-| `cursor_cli_upload` | Cursor，已上传。没有可脚本化 CLI 时不代跑 | 未执行。CI 上没有 Cursor CLI 和 `CURSOR_API_KEY` 时保持未执行 | 否 |
+| `cursor_cli_upload` | Cursor，已上传。没有可脚本化 CLI 时不代跑 | 未执行。runner 上没有 Cursor CLI | 否 |
 | `workbuddy_manual` | 已运行的 WorkBuddy，看不到，不能写成未发现 | 未执行。手工步骤在 `scripts/acceptance/README.md` | 否 |
-| `negative_read_no_send` | 替身只读假 AWS 文件，未发现，并且看到打开 | 见 CI 替身结果。本环境是 Linux，没有跑采集器 | 否 |
-| `stand_in_launched_upload` | 替身经代理发送，已上传 | 见 CI 替身结果 | 否 |
-| `stand_in_direct_not_visible` | 替身绕过代理直连，看不到，不能写成未发现 | 见 CI 替身结果。这不是“已经在运行的 Codex” | 否 |
+| `negative_read_no_send` | 替身只读假 AWS 文件，未发现，并且看到打开 | 未发现。打开被看到，没有产品 Agent 名。替身通过 | 否 |
+| `stand_in_launched_upload` | 替身经代理发送，已上传 | 已上传。打开被看到，目的地是 127.0.0.1，本机 sink 的 SHA-256 与假文件一致。没有产品 Agent 名 | 否 |
+| `stand_in_direct_not_visible` | 替身绕过代理直连，看不到，不能写成未发现 | 看不到。打开被看到，sink 确实收到了字节，结论没有被写成未发现或已上传。这不是“已经在运行的 Codex” | 否 |
 
-本仓库这次提交时所在的环境不是主人的 Intel Mac，真实 Agent 没有执行。`scripts/acceptance/self_check.py` 只检查假密钥的形状、结论检查器，以及 prepare 模式不会把验收写成通过。
+实测来自 GitHub Actions `macos-latest`，平台 `macOS-26.7.2`，架构 arm64，不是主人的 Intel Mac。命令：`scripts/acceptance/real_agents.sh --mode ci`。pull request run [43142769702](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43142769702)，同一提交 `121824f` 的 push run [43142751008](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43142751008)，两个都成功。机器可读结果是 artifact `real-agent-acceptance`，已记入 [real_agent_acceptance.json](tests/results/real_agent_acceptance.json)。`self_check_ok` 先通过。Codex、Cursor 都没有安装，三个 API key secret 都是空的，所以真实用例没有启动。三例替身与期望一致，并且都标了 `counts_as_real_agent=false`。
 
-GitHub Actions `macos-latest` 运行 `scripts/acceptance/real_agents.sh --mode ci`。有 Codex 可执行文件且 secret `OPENAI_API_KEY` 或 `CODEX_API_KEY` 非空时才启动 Codex；否则跳过真实用例，只跑替身。结果在 workflow 日志和 artifact `real-agent-acceptance`。这一节在 CI 跑完后补上 run id 和替身的实际结论。
+本仓库的开发环境是 Linux，没有在这里跑采集器，也没有在主人的 Intel Mac 上执行。真实 Agent 仍然没有跑过。
 
 主人在自己的 Intel Mac 上先读 `scripts/acceptance/README.md`，再运行：
 
