@@ -1206,7 +1206,9 @@ int main(int argc, char** argv) {
             std::cerr << "egress child " << child.pid << "\n";
         }
         const auto started = MonoClock::now();
-        const bool serve_until_signal = command.empty() && watch_live && duration == 0;
+        // --watch-live and duration 0 keep the proxy up until SIGTERM even if a
+        // --launch child is also running (required for the installed supervisor).
+        const bool serve_until_signal = watch_live && duration == 0;
         const auto limit = command.empty() ? std::chrono::seconds(duration ? duration : 1) : std::chrono::seconds(timeout_sec);
         while (!stopping) {
             if (!serve_until_signal && MonoClock::now() - started >= limit) break;
