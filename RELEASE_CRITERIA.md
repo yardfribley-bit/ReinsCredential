@@ -40,6 +40,8 @@ Evidence logs are mode `0600`. The monitor asks to rotate at 16 MiB and keeps a 
 
 `make integration` starts 40 extra `sleep` processes and then runs `agent-egress --watch-live` against that table. The run fails if the proxy's median RSS exceeds 150000 KB or its median CPU sample exceeds 150 percent of one core. The same run prints `idle_rss_median_kb` and `idle_cpu_median`.
 
+Measured on macOS CI run 43242914536 (2026-11-12): idle median CPU 1.6 percent, idle median RSS 6608 KB, with 12 samples. The active HTTPS sample in that run was median CPU 0.4 percent and median RSS 11888 KB.
+
 ## 5. Packaging
 
 `macOSClient/scripts/build-app.sh` produces `ReinsCredential.app` at version 0.2.0. With `REINS_SIGNING_IDENTITY` unset or `-`, the signature is ad-hoc and the local LaunchAgent flag is set. A Developer ID value in that variable is used when a person provides it. `package-local.sh` writes `ReinsCredential-0.2.0-local.dmg`, `ReinsCredential-0.2.0-local.zip`, and `SHA256SUMS.txt`. `notarize-local.sh` notarizes only when `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD` are set; otherwise it exits 0.
