@@ -22,10 +22,15 @@ app_dir="$staging/ReinsCredential.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Helpers" "$app_dir/Contents/Library/LaunchAgents"
 cp "$bin_dir/ReinsDashboard" "$app_dir/Contents/MacOS/ReinsDashboard"
 cp "$bin_dir/ReinsRuntime" "$app_dir/Contents/MacOS/ReinsRuntime"
-sources=(main.cpp ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp)
-for ((i=0; i<${#sources[@]}; i++)); do sources[i]="$repo_dir/${sources[i]}"; done
+core=(ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp EgressVerdict.cpp)
+monitor_sources=(main.cpp "${core[@]}")
+egress_sources=(EgressProxy.cpp TlsIntercept.cpp "${core[@]}")
+for ((i=0; i<${#monitor_sources[@]}; i++)); do monitor_sources[i]="$repo_dir/${monitor_sources[i]}"; done
+for ((i=0; i<${#egress_sources[@]}; i++)); do egress_sources[i]="$repo_dir/${egress_sources[i]}"; done
 /usr/bin/clang++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread -mmacosx-version-min=13.0 \
-  ${cxx_arch[@]+"${cxx_arch[@]}"} "${sources[@]}" -framework CoreServices -lz -o "$app_dir/Contents/Helpers/agent-monitor"
+  ${cxx_arch[@]+"${cxx_arch[@]}"} "${monitor_sources[@]}" -framework CoreServices -lz -o "$app_dir/Contents/Helpers/agent-monitor"
+/usr/bin/clang++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread -mmacosx-version-min=13.0 \
+  ${cxx_arch[@]+"${cxx_arch[@]}"} "${egress_sources[@]}" -framework CoreServices -lz -framework Security -framework CoreFoundation -o "$app_dir/Contents/Helpers/agent-egress"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -36,7 +41,7 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key><string>ReinsDashboard</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.2.0</string>
-  <key>CFBundleVersion</key><string>2</string>
+  <key>CFBundleVersion</key><string>3</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -60,6 +65,7 @@ cat > "$app_dir/Contents/Library/LaunchAgents/io.github.yardfribley-bit.ReinsCre
 PLIST
 identity="${REINS_SIGNING_IDENTITY:--}"
 /usr/bin/codesign --force --sign "$identity" "$app_dir/Contents/Helpers/agent-monitor"
+/usr/bin/codesign --force --sign "$identity" "$app_dir/Contents/Helpers/agent-egress"
 /usr/bin/codesign --force --sign "$identity" "$app_dir/Contents/MacOS/ReinsRuntime"
 /usr/bin/codesign --force --sign "$identity" "$app_dir"
 /usr/bin/codesign --verify --deep --strict "$app_dir"
