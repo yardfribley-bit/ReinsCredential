@@ -27,6 +27,45 @@ LABELS = {
     "not_found": "未发现",
     "not_visible": "看不到",
 }
+# None is a transfer with no access close. It is not an access-level verdict.
+LAUNCHED_VERDICTS = {
+    "plaintext": "uploaded",
+    "json": "uploaded",
+    "base64": "uploaded",
+    "gzip": "uploaded",
+    "fail500": "attempted",
+    "refused": "attempted",
+    "bypass": "uploaded",
+    "benign": "not_found",
+    "direct": "not_visible",
+    "connect": "not_visible",
+    "noopen": None,
+    "https": "uploaded",
+    "https-json": "uploaded",
+    "https-fail": "attempted",
+    "https-pinned": "not_visible",
+}
+LIVE_VERDICTS = {
+    "live-proxy": "uploaded",
+    "live-direct": "not_found",
+    "live-udp": "not_visible",
+    "live-offhost": "uploaded",
+    "live-attempt": "attempted",
+}
+
+
+def matrix_counts(verdicts):
+    uploaded = attempted = true_negative = unseen = 0
+    for verdict in verdicts.values():
+        if verdict == "uploaded":
+            uploaded += 1
+        elif verdict == "attempted":
+            attempted += 1
+        elif verdict in ("not_found", "not_visible"):
+            true_negative += 1
+            if verdict == "not_visible":
+                unseen += 1
+    return uploaded, attempted, true_negative, unseen
 
 
 def redact(text):
@@ -382,26 +421,7 @@ def one_case(directory, mode, measure=False, ca=None):
             raise SystemExit(f"{mode} receiver captured nothing\n{redact(err)}")
     records = load_records(log)
     try:
-        kind = assert_case(mode, {
-            "plaintext": "uploaded",
-            "json": "uploaded",
-            "base64": "uploaded",
-            "gzip": "uploaded",
-            "fail500": "attempted",
-            "refused": "attempted",
-            "bypass": "uploaded",
-            "benign": "not_found",
-            "direct": "not_visible",
-            "connect": "not_visible",
-            "noopen": None,
-            "https": "uploaded",
-            "https-json": "uploaded",
-            "https-fail": "attempted",
-            "https-pinned": "not_visible",
-            "live-proxy": "uploaded",
-            "live-direct": "not_visible",
-            "live-udp": "not_visible",
-        }[mode], records, receipt)
+        kind = assert_case(mode, LAUNCHED_VERDICTS[mode], records, receipt)
     except SystemExit:
         sys.stderr.write(redact(err))
         raise
@@ -465,8 +485,7 @@ def live_case(directory, mode, binary, secret):
         receipt["data"] = server.box.get("data", b"")
         receipt["error"] = server.box.get("error")
     records = load_records(log)
-    expected = {"live-proxy": "uploaded", "live-direct": "not_found", "live-udp": "not_visible",
-                "live-offhost": "uploaded", "live-attempt": "attempted"}[mode]
+    expected = LIVE_VERDICTS[mode]
     try:
         kind = assert_live_case(mode, expected, records, receipt, secret.name)
     except SystemExit:
@@ -498,9 +517,7 @@ def main():
         if idle.returncode != 0:
             raise SystemExit(f"idle proxy failed\n{idle_out}\n{idle_err}")
         active_cpu, active_rss = [], []
-        modes = ("plaintext", "json", "base64", "gzip", "fail500", "refused", "bypass", "benign", "direct", "connect",
-                 "noopen", "https", "https-json", "https-fail", "https-pinned")
-        for mode in modes:
+        for mode in LAUNCHED_VERDICTS:
             kind, cpu, rss, _err = one_case(directory, mode, measure=(mode == "https"), ca=ca)
             if mode == "https":
                 active_cpu, active_rss = cpu, rss
@@ -516,9 +533,11 @@ def main():
                 fn += 1
         binary = directory / "codex"
         subprocess.check_call(["/usr/bin/clang", "-O2", "-o", str(binary), str(ROOT / "tests/live_agent.c")])
-        for mode in ("live-proxy", "live-direct", "live-udp", "live-offhost", "live-attempt"):
+        skipped = set()
+        for mode in LIVE_VERDICTS:
             kind = live_case(directory, mode, binary, secret)
             if kind == "skipped":
+                skipped.add(mode)
                 print(f"SKIP {mode} no routable address")
                 continue
             if kind == "uploaded":
@@ -544,8 +563,17 @@ def main():
     )
     if not idle_cpu or not active_cpu:
         raise SystemExit(f"missing cpu samples idle={len(idle_cpu)} active={len(active_cpu)}")
-    if upload_tp != 8 or attempted_tp != 3 or tn != 6 or content_unseen != 5:
-        raise SystemExit("verdict counts did not match the synthetic matrix")
+    counted = dict(LAUNCHED_VERDICTS)
+    counted.update({mode: verdict for mode, verdict in LIVE_VERDICTS.items() if mode not in skipped})
+    expect_upload, expect_attempted, expect_tn, expect_unseen = matrix_counts(counted)
+    if (upload_tp, attempted_tp, tn, content_unseen, fp, fn) != (expect_upload, expect_attempted, expect_tn, expect_unseen, 0, 0):
+        raise SystemExit(
+            "verdict counts did not match the synthetic matrix: "
+            f"got upload_tp={upload_tp} attempted_tp={attempted_tp} tn={tn} "
+            f"content_unseen={content_unseen} fp={fp} fn={fn}; "
+            f"expected upload_tp={expect_upload} attempted_tp={expect_attempted} tn={expect_tn} "
+            f"content_unseen={expect_unseen} fp=0 fn=0"
+        )
 
 
 if __name__ == "__main__":
