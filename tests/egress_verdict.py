@@ -51,6 +51,7 @@ LIVE_VERDICTS = {
     "live-udp": "not_visible",
     "live-offhost": "uploaded",
     "live-attempt": "attempted",
+    "live-unknown-app": "uploaded",
 }
 
 
@@ -336,7 +337,17 @@ def finish_close(mode, expected, record, records, receipt):
             raise SystemExit(f"attempt basis {record['evidence_basis']}")
         if "203.0.113.10" not in record["destination"]:
             raise SystemExit(f"attempt destination {record['destination']}")
-    if expected == "uploaded" and mode != "live-offhost" and "upstream_http_2xx" not in record["transfer_outcome"]:
+    if mode == "live-unknown-app":
+        owner = ((record.get("actor_process") or {}).get("owning_agent") or {})
+        if owner.get("bundle") != "UnknownAgent.app" or owner.get("name") != "UnknownAgent":
+            raise SystemExit(f"unknown app owner {owner}")
+        if record.get("evidence_basis") != "flow_txbytes":
+            raise SystemExit(f"unknown app basis {record.get('evidence_basis')}")
+        if "left_host" not in (record.get("transfer_outcome") or ""):
+            raise SystemExit(f"unknown app outcome {record.get('transfer_outcome')}")
+        if MARKER not in receipt.get("data", b""):
+            raise SystemExit("unknown app receiver did not get the synthetic bytes")
+    if expected == "uploaded" and mode not in ("live-offhost", "live-unknown-app") and "upstream_http_2xx" not in record["transfer_outcome"]:
         raise SystemExit(f"uploaded outcome {record['transfer_outcome']}")
     if mode in ("plaintext", "json", "base64", "gzip", "bypass", "fail500", "noopen", "https", "https-json", "https-fail", "live-proxy", "live-direct"):
         if not receipt or MARKER.split(b"\n")[0] not in receipt["data"] and mode != "base64" and mode != "gzip":
@@ -453,7 +464,7 @@ def live_case(directory, mode, binary, secret):
     elif mode == "live-attempt":
         host = "203.0.113.10"
         port = 443
-    elif mode == "live-offhost":
+    elif mode in ("live-offhost", "live-unknown-app"):
         host = routable_ip()
         if not host:
             return "skipped"
@@ -463,7 +474,7 @@ def live_case(directory, mode, binary, secret):
         server = Server(accept_timeout=10)
         port = server.port
     port_file = directory / f"{mode}.port"
-    duration = "8" if mode == "live-proxy" else "6"
+    duration = "8" if mode == "live-proxy" else "12"
     if mode == "live-proxy":
         agent = subprocess.Popen([str(binary), "proxy", str(secret), str(port_file), server.url("/upload")])
         time.sleep(0.3)
@@ -472,13 +483,16 @@ def live_case(directory, mode, binary, secret):
              "--sample-ms", "40", "--port-file", str(port_file)],
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
-        action = {"live-direct": "direct", "live-offhost": "direct", "live-udp": "udp", "live-attempt": "attempt"}[mode]
-        agent = subprocess.Popen([str(binary), action, str(secret), host, str(port)])
+        action = {"live-direct": "direct", "live-offhost": "direct", "live-unknown-app": "direct", "live-udp": "udp", "live-attempt": "attempt"}[mode]
+        ready = directory / f"{mode}.ready"
+        agent = subprocess.Popen([str(binary), action, str(secret), host, str(port), str(ready)])
         time.sleep(0.2)
         proc = subprocess.Popen(
             [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", duration,
              "--sample-ms", "40"],
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        time.sleep(1.0)
+        ready.write_text("go\n")
     _out, err = finish(proc)
     try:
         agent.wait(timeout=5)
@@ -540,9 +554,13 @@ def main():
                 fn += 1
         binary = directory / "codex"
         subprocess.check_call(["/usr/bin/clang", "-O2", "-o", str(binary), str(ROOT / "tests/live_agent.c")])
+        unknown = directory / "UnknownAgent.app" / "Contents" / "MacOS" / "x"
+        unknown.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.check_call(["/usr/bin/clang", "-O2", "-o", str(unknown), str(ROOT / "tests/live_agent.c")])
+        os.chmod(unknown, 0o755)
         skipped = set()
         for mode in LIVE_VERDICTS:
-            kind = live_case(directory, mode, binary, secret)
+            kind = live_case(directory, mode, unknown if mode == "live-unknown-app" else binary, secret)
             if kind == "skipped":
                 skipped.add(mode)
                 print(f"SKIP {mode} no routable address")

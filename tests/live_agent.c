@@ -52,6 +52,16 @@ static int send_all(int fd, const char* data, size_t length) {
     return 0;
 }
 
+static void wait_ready(const char* path) {
+    if (!path || !path[0]) {
+        usleep(300000);
+        return;
+    }
+    for (int attempt = 0; attempt < 80; ++attempt) {
+        if (access(path, R_OK) == 0) return;
+        usleep(100000);
+    }
+}
 static int wait_port(const char* path) {
     for (int attempt = 0; attempt < 50; ++attempt) {
         FILE* file = fopen(path, "r");
@@ -74,8 +84,8 @@ int main(int argc, char** argv) {
     size_t body_len = 0;
     if (strcmp(mode, "sleep") != 0 && read_all(argv[2], &body, &body_len)) { close(held); return 4; }
     int rc = 0;
-    if (strcmp(mode, "direct") == 0 && argc == 5) {
-        usleep(300000);
+    if (strcmp(mode, "direct") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
         int fd = connect_ip(argv[3], atoi(argv[4]));
         if (fd < 0) rc = 5;
         else {
@@ -102,8 +112,8 @@ int main(int argc, char** argv) {
             recv(fd, scratch, sizeof(scratch), 0);
             close(fd);
         }
-    } else if (strcmp(mode, "attempt") == 0 && argc == 5) {
-        usleep(300000);
+    } else if (strcmp(mode, "attempt") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) rc = 5;
         else {
@@ -121,8 +131,8 @@ int main(int argc, char** argv) {
             }
             close(fd);
         }
-    } else if (strcmp(mode, "udp") == 0 && argc == 5) {
-        usleep(300000);
+    } else if (strcmp(mode, "udp") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
         int fd = socket(AF_INET, SOCK_DGRAM, 0);
         struct sockaddr_in address;
         memset(&address, 0, sizeof(address));

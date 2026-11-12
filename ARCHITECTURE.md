@@ -62,7 +62,7 @@ classDiagram
 
 所有可见进程的敏感文件描述符由最多 4 个并发扫描任务检查。未知进程持有目标文件时才展开 socket 对端，减少无关连接收集；已知候选可直接观测对端。健康指标记录扫描进程数、候选数、身份校验失败数、描述符不完整数和实际扫描耗时。这里的“可见”包括权限/身份校验限制，不等于内核中所有进程。
 
-新应用可通过 `--agent-bundle 'Example.app'` 添加标签，无需改代码。即使没有标签，敏感文件活动也会记录。内置桌面应用现在包括 Kiro.app、Grok.app 和较早的 Grok Bot.app，和 Cursor、WorkBuddy 一样会得到所属 Agent。固定名单不是“所有未来的桌面 Agent”：普通 `.app` 不会因为是应用就被当成 Agent，未列入且未配置的进程保持 `unclassified_process`。实时出口只对内置或配置命中的 Agent 下出口结论。Codex 可执行文件若在 ChatGPT.app 里，名称匹配仍是 `known_name:codex`，但 `owning_agent` 仍取 bundle 根，也就是 ChatGPT.app；给人读的句子仍以 Codex 为主语。
+实时出口不靠内置名单决定跟踪谁。任何非采集器进程打开已登记敏感文件，就跟踪它，并沿父进程走到最外层 `.app`（名字里可以有空格，例如 `Grok Bot.app`、`WorkBuddy AI.app`；Helper 里的内层 `.app` 不算属主）。没有 bundle 时，属主是最靠近根的非系统祖先。已知名称只用于显示，例如 `Grok Bot.app` 显示为 Grok，不作为入选条件。采集器自身不跟踪。`/System`、`/usr/libexec`、`/usr/sbin` 里的守护进程会为索引或维护打开用户文件，所以不把它们当属主；`/bin` 和 `/usr/bin` 里的 shell 仍算用户工具，属主继续往上找。Codex 在 ChatGPT.app 里时，最外层 bundle 仍是 ChatGPT.app。`--agent-bundle` 仍可为采集器清单加标签。
 
 默认清单记录可执行路径、进程身份和父链，会增加日志量和隐私范围；原始整机日志不纳入公开测试报告。真实测试使用独立 ps 路径基线、隔离合成文件、子进程自报 PID、脚本校验和、回环服务端收件和采集器记录交叉核对；模型回答不能代替执行凭据。
 

@@ -36,9 +36,9 @@ std::optional<std::string> BundleComponent(const std::string& path) {
     start = start == std::string::npos ? 0 : start + 1;
     return path.substr(start, pos + 4 - start);
 }
-bool IsCollectorImage(const ProcessNode& node) {
+bool CollectorPath(const ProcessNode& node) {
     const auto base = BaseName(node.executable);
-    if (base == "agent-monitor" || base == "ReinsRuntime" || base == "ReinsDashboard") return true;
+    if (base == "agent-monitor" || base == "agent-egress" || base == "agent-gateway" || base == "ReinsRuntime" || base == "ReinsDashboard") return true;
     return Lower(node.executable).find("/reinscredential.app/") != std::string::npos;
 }
 bool IsDirectAgentMatch(const std::string& reason) {
@@ -115,6 +115,81 @@ std::pair<std::string, std::string> SubjectAndVia(const ActorProcess& actor, con
     return {name, via};
 }
 } // namespace
+bool IsCollectorProcess(const ProcessNode& node) noexcept { return CollectorPath(node); }
+bool IsAppleSystemDaemon(const ProcessNode& node) noexcept {
+    if (node.identity.pid == 1 || node.ppid == 0) return true;
+    const auto path = Lower(node.executable);
+    // Indexing and maintenance daemons open user files without acting for the user.
+    return path.rfind("/system/", 0) == 0 || path.rfind("/usr/libexec/", 0) == 0 || path.rfind("/usr/sbin/", 0) == 0;
+}
+std::optional<std::string> OutermostAppBundle(const std::string& executable) {
+    const auto lower = Lower(executable);
+    auto pos = lower.find(".app/");
+    if (pos == std::string::npos && lower.size() >= 4 && lower.compare(lower.size() - 4, 4, ".app") == 0)
+        pos = lower.size() - 4;
+    if (pos == std::string::npos || pos == 0) return std::nullopt;
+    auto start = executable.rfind('/', pos - 1);
+    start = start == std::string::npos ? 0 : start + 1;
+    if (start >= pos) return std::nullopt;
+    return executable.substr(start, pos + 4 - start);
+}
+std::string DisplayBundleName(const std::string& bundle) {
+    if (bundle.size() < 4) return bundle;
+    const auto stem = bundle.substr(0, bundle.size() - 4);
+    const auto folded = Lower(stem);
+    if (folded == "chatgpt") return "ChatGPT";
+    if (folded == "workbuddy ai" || folded == "workbuddy" || folded == "codebuddy") return "WorkBuddy";
+    if (folded == "cursor") return "Cursor";
+    if (folded == "claude") return "Claude";
+    if (folded == "codex") return "Codex";
+    if (folded == "windsurf") return "Windsurf";
+    if (folded == "trae") return "Trae";
+    if (folded == "kiro") return "Kiro";
+    if (folded == "grok" || folded == "grok bot") return "Grok";
+    return stem;
+}
+void ApplyBehaviorOwner(ActorProcess& actor) {
+    if (IsCollectorProcess(actor.process.node)) {
+        actor.classification = "collector_self";
+        actor.classification_reason = "self_process";
+        actor.owning_agent.reset();
+        return;
+    }
+    std::vector<const ProcessNode*> chain;
+    for (auto it = actor.ancestors.rbegin(); it != actor.ancestors.rend(); ++it) chain.push_back(&it->node);
+    chain.push_back(&actor.process.node);
+    const ProcessNode* chosen = nullptr;
+    std::string bundle;
+    bool from_app = false;
+    for (const auto* node : chain) {
+        if (IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) continue;
+        if (auto found = OutermostAppBundle(node->executable)) {
+            chosen = node;
+            bundle = *found;
+            from_app = true;
+            break;
+        }
+        if (!chosen) chosen = node;
+    }
+    if (!chosen) return;
+    OwningAgent owner;
+    owner.root = chosen->identity;
+    owner.bundle = from_app ? bundle : "";
+    if (from_app) owner.name = DisplayBundleName(bundle);
+    else {
+        const auto hint = MatchAgent(*chosen, {});
+        owner.name = !hint.empty() && hint != "generic_runtime_candidate" ? FriendlyName(*chosen, hint)
+            : (chosen->name.empty() ? BaseName(chosen->executable) : chosen->name);
+    }
+    owner.match_reason = from_app ? "outermost_app_bundle" : "top_non_system_ancestor";
+    const auto hint = MatchAgent(*chosen, {});
+    if (!hint.empty() && hint != "generic_runtime_candidate") owner.match_reason += ";label:" + hint;
+    actor.owning_agent = owner;
+    if (actor.classification == "collector_self") return;
+    if (actor.classification.empty() || actor.classification == "unclassified_process")
+        actor.classification = hint.empty() || hint == "generic_runtime_candidate" ? "behavior_tracked" : "known_agent_candidate";
+    if (actor.classification_reason.empty()) actor.classification_reason = owner.match_reason;
+}
 std::string MatchAgent(const ProcessNode& node, const AgentRules& rules) {
     const auto base = Lower(BaseName(node.executable));
     const auto path = Lower(node.executable);
@@ -145,8 +220,8 @@ std::string MatchAgent(const ProcessNode& node, const AgentRules& rules) {
     return runtime && rules.include_runtimes ? "generic_runtime_candidate" : "";
 }
 void AnnotateActor(ActorProcess& actor, const AgentRules& rules) {
-    const bool self = IsCollectorImage(actor.process.node) ||
-        std::any_of(actor.ancestors.begin(), actor.ancestors.end(), [](const ProcessEntry& entry) { return IsCollectorImage(entry.node); });
+    const bool self = IsCollectorProcess(actor.process.node) ||
+        std::any_of(actor.ancestors.begin(), actor.ancestors.end(), [](const ProcessEntry& entry) { return IsCollectorProcess(entry.node); });
     if (self) {
         actor.classification = "collector_self";
         actor.classification_reason = "self_process";
@@ -164,7 +239,7 @@ void AnnotateActor(ActorProcess& actor, const AgentRules& rules) {
     }
     std::optional<OwningAgent> bundle_owner, direct_owner;
     auto consider = [&](const ProcessNode& node) {
-        if (IsCollectorImage(node)) return;
+        if (IsCollectorProcess(node)) return;
         const auto match = MatchAgent(node, rules);
         if (!IsDirectAgentMatch(match)) return;
         OwningAgent owner;

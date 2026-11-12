@@ -468,6 +468,7 @@ ActorProcess Describe(IProcessSource& source, const ProcessNode& node) {
         }
     }
     AnnotateActor(actor, {});
+    ApplyBehaviorOwner(actor);
     return actor;
 }
 struct StoredObservation {
@@ -875,30 +876,24 @@ struct Session {
             next_discover = MonoClock::now() + std::chrono::milliseconds(200);
             try {
                 auto sample = source.Sample();
-                std::map<pid_t, const ProcessNode*> by_pid;
-                for (const auto& node : sample.processes) by_pid.emplace(node.identity.pid, &node);
-                auto agent_process = [](const ProcessNode& node) {
-                    auto reason = MatchAgent(node, {});
-                    return !reason.empty() && reason != "generic_runtime_candidate";
-                };
                 for (const auto& node : sample.processes) {
-                    if (!agent_process(node)) continue;
-                    bool nested = false;
-                    pid_t parent = node.ppid;
-                    for (int hop = 0; parent > 1 && !nested && hop < 32; ++hop) {
-                        auto found = by_pid.find(parent);
-                        if (found == by_pid.end()) break;
-                        nested = agent_process(*found->second);
-                        parent = found->second->ppid;
+                    // Name lists do not decide who is watched. A registered file open does.
+                    if (IsCollectorProcess(node) || IsAppleSystemDaemon(node)) continue;
+                    auto activity = source.Inspect(node, roots, false);
+                    if (activity.sensitive_files.empty()) continue;
+                    auto actor = Describe(source, node);
+                    auto owner = node.identity;
+                    std::string label = node.name.empty() ? node.executable : node.name;
+                    if (actor.owning_agent) {
+                        owner = actor.owning_agent->root;
+                        label = actor.owning_agent->bundle.empty() ? actor.owning_agent->name : actor.owning_agent->bundle;
                     }
-                    // A helper inside an agent bundle is sampled from that agent's root.
-                    if (nested) continue;
                     bool known = false;
-                    for (const auto& root : watched) if (root.identity == node.identity) known = true;
+                    for (const auto& root : watched) if (root.identity == owner) known = true;
                     if (known) continue;
                     if (watched.size() >= 64) { tree_truncated = true; break; }
-                    watched.push_back(Root{node.identity, node.identity.pid, false});
-                    std::cerr << "egress live " << node.identity.pid << " " << node.name << "\n";
+                    watched.push_back(Root{owner, owner.pid, false});
+                    std::cerr << "egress live " << owner.pid << " " << label << "\n";
                 }
             } catch (const std::exception& error) {
                 std::cerr << "egress live scan failed: " << error.what() << "\n";
