@@ -285,8 +285,13 @@ public:
                     if (auto sent = TcpDataBytes(flow.flow_id)) {
                         flow.bytes_known = true;
                         flow.tx_bytes = *sent;
+                    } else if (tcp.tcpsi_state < 4) {
+                        // SYN_SENT, SYN_RECEIVED, or CLOSED. The pcb list has no
+                        // span because the connect never established.
+                        flow.bytes_known = true;
+                        flow.tx_bytes = 0;
                     }
-                } else if (s.soi_protocol == IPPROTO_TCP) {
+                } else if (s.soi_protocol == IPPROTO_TCP || s.soi_protocol == 0) {
                     // ECONNREFUSED and RST leave a TCP socket without a PCB.
                     // libproc reports SOCKINFO_IN. No sequence span exists, and
                     // the connect did not become established.
