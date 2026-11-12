@@ -98,7 +98,7 @@
     },
     "evidence_basis": {
       "type": "string",
-      "description": "Open vocabulary describing how the observation was obtained. Sensitive-file values include fd_observed (a descriptor was seen; bytes read are not proven), access_time_change (atime advanced and no process was identified) and inferred (exactly one agent descendant's lifetime overlapped an atime change; not a confirmed open). Upload closes add flow_txbytes (same-process TCP send counter can contain the file; not decrypted bytes), flow_attempt (off-host connect did not deliver the file), live_agent_observed (process and TCP counters were inspected) and observation_impossible (descriptors or the only channel could not be read). exact_bytes remains a proxy body match. Empty when unused. fd_observed does not prove an upload."
+      "description": "Open vocabulary describing how the observation was obtained. Sensitive-file values include fd_observed (a descriptor was seen; bytes read are not proven), access_time_change (atime advanced and no process was identified) and inferred (exactly one agent descendant's lifetime overlapped an atime change; not a confirmed open). Upload closes add flow_txbytes (process-tree TCP send counters, summed, fall in the compression window; not decrypted bytes), flow_txbytes_udp (the same window carried by UDP/QUIC), flow_attempt (off-host connect did not deliver the file), live_agent_observed (every off-host channel in the window was measured and the total is below the compression lower bound) and observation_impossible (a channel closed before its byte count was captured, or the measured total is above the window). exact_bytes remains a proxy body match. Empty when unused. fd_observed does not prove an upload."
     },
     "summary": {
       "type": "string",
@@ -111,7 +111,7 @@
     "upload_verdict": {
       "type": "string",
       "enum": ["", "uploaded", "attempted", "not_found", "not_visible"],
-      "description": "Closing word for a sensitive-file access or an egress observation. uploaded is either a registered-content match with an observed HTTP transfer, or flow_txbytes: the same process's off-host TCP send counter grew by at least the file size and at most that size plus 65536 after the file was open. attempted is a body match whose transfer failed, or an off-host connect that did not deliver that many bytes. not_found means the agent or its watched plaintext HTTP was inspected and no off-host upload was observed, including a loopback send. not_visible means inspection was impossible (missing descriptors, or UDP/QUIC was the only channel while a file was open). Empty when this record is not a verdict."
+      "description": "Closing word for a sensitive-file access or an egress observation. uploaded is either a registered-content match with an observed HTTP transfer, or a measured off-host send (TCP plus UDP/QUIC, summed over the process tree for the hold and a short tail) between the compression lower bound and the raw size plus 65536. attempted is a body match whose transfer failed, or an off-host connect that did not deliver that many bytes, including a short refused connect. not_found means every off-host channel in that window was measured and the total is below the lower bound, including a loopback-only send. not_visible means a channel was not measured, closed before its byte count was captured, or the measured total is above the window. It is not rewritten as not_found. Empty when this record is not a verdict."
     },
     "related_event_ids": {
       "type": "array",

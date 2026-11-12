@@ -84,4 +84,29 @@ std::string MatchContent(const std::string& payload, const std::string& sensitiv
     match = MatchPlainContent(expanded, sensitive);
     return match.empty() ? std::string{} : "gzip:" + match;
 }
+uint64_t ContentLowerBound(const std::string& bytes) {
+    if (bytes.empty() || bytes.size() > 1024 * 1024) return bytes.size();
+    uint64_t best = bytes.size();
+    for (const int window : {15 + 16, 15, -15}) {
+        z_stream stream{};
+        if (deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, window, 8, Z_DEFAULT_STRATEGY) != Z_OK) continue;
+        struct Finish {
+            z_stream* stream;
+            ~Finish() { deflateEnd(stream); }
+        } finish{&stream};
+        const auto bound = deflateBound(&stream, static_cast<uLong>(bytes.size()));
+        std::string out(static_cast<size_t>(bound) + 16, '\0');
+        stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(bytes.data()));
+        stream.avail_in = static_cast<uInt>(bytes.size());
+        stream.next_out = reinterpret_cast<Bytef*>(out.data());
+        stream.avail_out = static_cast<uInt>(out.size());
+        if (deflate(&stream, Z_FINISH) == Z_STREAM_END && stream.total_out > 0 && stream.total_out < best)
+            best = stream.total_out;
+        for (char& byte : out) {
+            volatile char* cell = &byte;
+            *cell = 0;
+        }
+    }
+    return best;
+}
 }

@@ -24,6 +24,8 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <chrono>
+#include <mutex>
 #include <thread>
 
 extern char** environ;
@@ -46,10 +48,11 @@ void Wipe(std::string& bytes) noexcept {
 }
 struct Version {
     std::string path, sha256, bytes;
+    uint64_t lower_bound = 0;
     Version() = default;
-    Version(Version&& other) noexcept : path(std::move(other.path)), sha256(std::move(other.sha256)), bytes(std::move(other.bytes)) {}
+    Version(Version&& other) noexcept : path(std::move(other.path)), sha256(std::move(other.sha256)), bytes(std::move(other.bytes)), lower_bound(other.lower_bound) {}
     Version& operator=(Version&& other) noexcept {
-        if (this != &other) { Wipe(bytes); path = std::move(other.path); sha256 = std::move(other.sha256); bytes = std::move(other.bytes); }
+        if (this != &other) { Wipe(bytes); path = std::move(other.path); sha256 = std::move(other.sha256); bytes = std::move(other.bytes); lower_bound = other.lower_bound; }
         return *this;
     }
     Version(const Version&) = delete;
@@ -512,6 +515,55 @@ struct ChildProcess {
         return false;
     }
 };
+std::string SanitizePeer(const std::string& name) {
+    std::string clean;
+    for (unsigned char c : name) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-')
+            clean.push_back(static_cast<char>(c));
+        if (clean.size() >= 253) break;
+    }
+    return clean;
+}
+// Reverse DNS for a numeric peer. ClientHello SNI is not on a socket we can
+// read, so a resolver name is the only hostname available without decryption.
+// The lookup runs off the sample thread and is skipped when it is still pending.
+std::string PeerName(const std::string& destination) {
+    if (destination.empty()) return {};
+    std::string host = destination;
+    if (!host.empty() && host[0] == '[') {
+        const auto end = host.find(']');
+        host = end == std::string::npos ? std::string() : host.substr(1, end - 1);
+    } else {
+        const auto colon = host.rfind(':');
+        if (colon != std::string::npos) host.resize(colon);
+    }
+    if (host.empty() || host.rfind("127.", 0) == 0 || host == "::1" || host == "0.0.0.0") return {};
+    in_addr parsed{};
+    if (inet_pton(AF_INET, host.c_str(), &parsed) != 1) return {};
+    struct Entry { bool done = false; std::string name; };
+    static std::mutex mu;
+    static std::map<std::string, Entry> cache;
+    {
+        std::lock_guard<std::mutex> lock(mu);
+        auto found = cache.find(host);
+        if (found != cache.end()) return found->second.done ? found->second.name : std::string();
+        cache[host] = Entry{};
+    }
+    std::thread([host] {
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_port = htons(80);
+        inet_pton(AF_INET, host.c_str(), &address.sin_addr);
+        char node[NI_MAXHOST];
+        std::string resolved;
+        if (getnameinfo(reinterpret_cast<sockaddr*>(&address), sizeof(address), node, sizeof(node), nullptr, 0, NI_NAMEREQD) == 0)
+            resolved = SanitizePeer(node);
+        if (resolved == host) resolved.clear();
+        std::lock_guard<std::mutex> lock(mu);
+        cache[host] = Entry{true, resolved};
+    }).detach();
+    return {};
+}
 struct Session {
     EvidenceStore& store;
     IProcessSource& source;
@@ -587,6 +639,10 @@ struct Session {
         const auto* version = FindVersion(path);
         return version ? version->bytes.size() : 0;
     }
+    uint64_t RegisteredLower(const std::string& path) const {
+        const auto* version = FindVersion(path);
+        return version ? version->lower_bound : 0;
+    }
     std::string RegisteredHash(const std::string& path) const {
         const auto* version = FindVersion(path);
         return version ? version->sha256 : std::string();
@@ -615,7 +671,13 @@ struct Session {
         bool known = false;
         bool inspection_complete = true;
         int samples = 0;
-        std::map<std::string, std::string> files;
+        struct FileHold {
+            std::string event_id;
+            bool open_now = false;
+            bool saw_close = false;
+            MonoClock::time_point closed_at{};
+        };
+        std::map<std::string, FileHold> files;
         std::map<std::string, FlowMemory> flows;
         std::map<std::string, int> emitted_rank;
         std::map<std::string, std::string> emitted_outcome;
@@ -631,10 +693,23 @@ struct Session {
         proc.root = root;
         proc.actor = actor;
         if (!activity.descriptors_complete || !activity.identity_validated) proc.inspection_complete = false;
-        for (const auto& path : activity.sensitive_files) {
-            if (proc.files.count(path)) continue;
-            auto noted = accesses.find(path);
-            proc.files.emplace(path, noted == accesses.end() ? std::string() : noted->second.event_id);
+        std::set<std::string> open_now(activity.sensitive_files.begin(), activity.sensitive_files.end());
+        for (const auto& path : open_now) {
+            auto& hold = proc.files[path];
+            if (hold.event_id.empty()) {
+                auto noted = accesses.find(path);
+                if (noted != accesses.end()) hold.event_id = noted->second.event_id;
+            }
+            hold.open_now = true;
+            hold.saw_close = false;
+            (void)path;
+        }
+        for (auto& item : proc.files) {
+            if (open_now.count(item.first)) continue;
+            if (!item.second.open_now) continue;
+            item.second.open_now = false;
+            item.second.saw_close = true;
+            item.second.closed_at = MonoClock::now();
         }
         std::set<std::string> seen;
         for (const auto& flow : activity.flows) {
@@ -650,6 +725,7 @@ struct Session {
             if (flow.bytes_known) memory.bytes_known = true;
             if (flow.loopback) memory.loopback = true;
             memory.latest = std::max(memory.latest, flow.tx_bytes);
+            (void)PeerName(flow.destination);
             memory.seen_now = true;
             memory.closed = false;
             // BSD TCP states: ESTABLISHED is 4, TIME_WAIT is 10. SYN_SENT is 2.
@@ -658,6 +734,7 @@ struct Session {
             if (flow.bytes_known && !flow.loopback && flow.tcp_state >= 0 && flow.tcp_state < 4)
                 memory.failed = true;
         }
+        MergeRetained(proc, seen);
         for (auto& item : proc.flows) {
             if (seen.count(item.first) || item.second.destination.empty()) continue;
             item.second.closed = true;
@@ -665,6 +742,32 @@ struct Session {
             item.second.seen_now = false;
         }
         ++proc.samples;
+    }
+    void MergeRetained(LiveProc& proc, std::set<std::string>& seen) {
+        for (const auto& flow : source.RetainedFlows(proc.identity.pid)) {
+            if (flow.flow_id.empty()) continue;
+            seen.insert(flow.flow_id);
+            auto& memory = proc.flows[flow.flow_id];
+            if (memory.destination.empty()) {
+                memory.destination = flow.destination;
+                memory.loopback = flow.loopback;
+                memory.udp = flow.udp;
+                memory.preexisting = false;
+                memory.baseline = 0;
+            }
+            if (flow.bytes_known) {
+                memory.bytes_known = true;
+                memory.latest = std::max(memory.latest, flow.tx_bytes);
+            }
+            if (flow.loopback) memory.loopback = true;
+            if (flow.tcp_state >= 4 && flow.tcp_state <= 10) {
+                memory.established = true;
+                memory.failed = false;
+            } else if (flow.bytes_known && !flow.loopback && flow.tcp_state >= 0 && flow.tcp_state < 4) {
+                memory.failed = true;
+            }
+            (void)PeerName(flow.destination);
+        }
     }
     static int VerdictRank(UploadVerdict verdict) {
         switch (verdict) {
@@ -688,7 +791,8 @@ struct Session {
         // attempt. A finished connection that sent some other, smaller payload
         // is ordinary traffic, not an upload attempt.
         flow.failed = (memory.failed || memory.closed) && !memory.established;
-        if (!memory.bytes_known && memory.udp) flow.kind = LiveFlowKind::UdpOrQuic;
+        flow.measured = memory.bytes_known;
+        if (memory.udp) flow.kind = LiveFlowKind::UdpOrQuic;
         else if (!memory.bytes_known) flow.kind = LiveFlowKind::Unreadable;
         else flow.kind = LiveFlowKind::TcpMeasured;
         return flow;
@@ -719,7 +823,9 @@ struct Session {
         if (closed.verdict == UploadVerdict::Uploaded || closed.verdict == UploadVerdict::Attempted)
             record.content_sha256 = RegisteredHash(path);
         auto noted = proc.files.find(path);
-        if (noted != proc.files.end() && !noted->second.empty()) record.related_event_ids.push_back(noted->second);
+        if (noted != proc.files.end() && !noted->second.event_id.empty()) record.related_event_ids.push_back(noted->second.event_id);
+        const auto peer_name = PeerName(closed.destination);
+        if (!peer_name.empty()) record.detail += ";peer_name=" + peer_name;
         if (!previous.empty()) record.related_event_ids.push_back(previous);
         const auto process = proc.actor.process.node.name.empty() ? proc.actor.process.node.executable : proc.actor.process.node.name;
         record.summary = LiveVerdictSummary(closed, process, path);
@@ -731,19 +837,29 @@ struct Session {
                   << " outcome=" << record.transfer_outcome << "\n";
         Emit(std::move(record));
     }
-    void FlushLive() {
+    void FlushLive(bool finishing = false) {
         if (!watch_live) return;
         std::set<ProcessIdentity> roots_with_file;
         for (auto& item : live_procs) {
             auto& proc = item.second;
             if (proc.samples < 1) continue;
+            if (proc.files.empty()) continue;
+            std::set<std::string> retained_seen;
+            MergeRetained(proc, retained_seen);
+            roots_with_file.insert(proc.root);
+            if (!proc.inspection_complete && proc.samples < 2 && !finishing) continue;
             LiveAccessView shared;
             shared.agent_visible = true;
             shared.inspection_complete = proc.inspection_complete;
-            for (const auto& flow : proc.flows) shared.flows.push_back(ToLiveFlow(flow.second));
-            if (proc.files.empty()) continue;
-            roots_with_file.insert(proc.root);
-            if (!proc.inspection_complete && proc.samples < 2) continue;
+            std::set<std::string> seen_flows;
+            for (const auto& other : live_procs) {
+                if (other.second.root != proc.root && other.first != proc.root) continue;
+                if (!other.second.inspection_complete) shared.inspection_complete = false;
+                for (const auto& flow : other.second.flows) {
+                    if (!seen_flows.insert(flow.first).second) continue;
+                    shared.flows.push_back(ToLiveFlow(flow.second));
+                }
+            }
             for (const auto& file : proc.files) {
                 // The startup canary's exact_bytes match covers that launched
                 // process only. A later actor on the same file still closes.
@@ -751,9 +867,14 @@ struct Session {
                 LiveAccessView view = shared;
                 view.file_open = true;
                 view.file_bytes = RegisteredSize(file.first);
+                view.content_lower_bound = RegisteredLower(file.first);
+                const auto tail = std::chrono::milliseconds(500);
+                view.window_settled = finishing ||
+                    (file.second.saw_close && MonoClock::now() - file.second.closed_at >= tail);
                 const auto closed = CloseLiveAccess(view);
+                if (closed.defer) continue;
                 const auto rank = VerdictRank(closed.verdict);
-                if (rank < 3 && proc.samples < 2) continue;
+                if (rank < 3 && proc.samples < 2 && !finishing) continue;
                 EmitLiveClose(proc, file.first, closed, proc.emitted_event[file.first]);
             }
         }
@@ -974,7 +1095,7 @@ struct Session {
             stored.observation.transfer_outcome = "process_tree_scan_truncated";
             observations.push_back(std::move(stored));
         }
-        FlushLive();
+        FlushLive(true);
         bool inspected_http = false, unseen = false;
         for (const auto& stored : observations) {
             if (stored.observation.kind == EgressObservation::Kind::HttpInspected) inspected_http = true;
@@ -1417,6 +1538,7 @@ int main(int argc, char** argv) {
             version.path = path;
             version.bytes = ReadFile(path);
             version.sha256 = Sha256(version.bytes);
+            version.lower_bound = ContentLowerBound(version.bytes);
             session.roots.push_back(path);
             session.versions.push_back(std::move(version));
         }

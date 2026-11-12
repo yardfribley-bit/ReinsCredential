@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
             }
             close(fd);
         }
-    } else if (strcmp(mode, "udp") == 0 && (argc == 5 || argc == 6)) {
+    } else if ((strcmp(mode, "udp") == 0 || strcmp(mode, "udp-file") == 0) && (argc == 5 || argc == 6)) {
         wait_ready(argc == 6 ? argv[5] : NULL);
         int fd = socket(AF_INET, SOCK_DGRAM, 0);
         struct sockaddr_in address;
@@ -159,8 +159,92 @@ int main(int argc, char** argv) {
         if (fd < 0 || inet_pton(AF_INET, argv[3], &address.sin_addr) != 1 ||
             connect(fd, (struct sockaddr*)&address, sizeof(address))) rc = 5;
         else {
-            send(fd, "Q", 1, 0);
+            if (strcmp(mode, "udp-file") == 0) {
+                if (send_all(fd, body, body_len)) rc = 6;
+            } else if (send(fd, "Q", 1, 0) != 1) rc = 6;
             sleep(2);
+            close(fd);
+        }
+    } else if (strcmp(mode, "payload") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
+        char send_path[1024];
+        int wrote = snprintf(send_path, sizeof(send_path), "%s.send", argv[2]);
+        char* payload = NULL;
+        size_t payload_len = 0;
+        int fd = -1;
+        if (wrote < 0 || (size_t)wrote >= sizeof(send_path) || read_all(send_path, &payload, &payload_len)) rc = 4;
+        else if ((fd = connect_ip(argv[3], atoi(argv[4]))) < 0 || send_all(fd, payload, payload_len)) rc = 5;
+        else {
+            sleep(2);
+        }
+        if (fd >= 0) close(fd);
+        if (payload) { memset(payload, 0, payload_len); free(payload); }
+    } else if (strcmp(mode, "chunk3") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
+        int fds[3] = {-1, -1, -1};
+        size_t offset = 0;
+        for (int i = 0; i < 3; ++i) {
+            size_t part = body_len / 3;
+            if (i == 2) part = body_len - offset;
+            fds[i] = connect_ip(argv[3], atoi(argv[4]));
+            if (fds[i] < 0 || send_all(fds[i], body + offset, part)) { rc = 5; break; }
+            offset += part;
+        }
+        if (rc == 0) sleep(2);
+        for (int i = 0; i < 3; ++i) if (fds[i] >= 0) close(fds[i]);
+    } else if (strcmp(mode, "partial") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
+        int tcp = connect_ip(argv[3], atoi(argv[4]));
+        int udp = socket(AF_INET, SOCK_DGRAM, 0);
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_port = htons((unsigned short)atoi(argv[4]));
+        if (tcp < 0 || udp < 0 || inet_pton(AF_INET, argv[3], &address.sin_addr) != 1 ||
+            connect(udp, (struct sockaddr*)&address, sizeof(address)) ||
+            send(tcp, "Q", 1, 0) != 1 || send(udp, "Q", 1, 0) != 1) rc = 5;
+        else sleep(4);
+        if (tcp >= 0) close(tcp);
+        if (udp >= 0) close(udp);
+    } else if (strcmp(mode, "short") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
+        int fd = connect_ip(argv[3], atoi(argv[4]));
+        if (fd < 0) rc = 5;
+        else {
+            char header[512];
+            int header_len = snprintf(header, sizeof(header),
+                "POST /upload HTTP/1.1\r\nHost: %s:%s\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
+                argv[3], argv[4], body_len);
+            if (header_len < 0 || send_all(fd, header, (size_t)header_len) || send_all(fd, body, body_len)) rc = 6;
+            else usleep(100000);
+            close(fd);
+        }
+    } else if (strcmp(mode, "udp-short") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        struct sockaddr_in address;
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_port = htons((unsigned short)atoi(argv[4]));
+        if (fd < 0 || inet_pton(AF_INET, argv[3], &address.sin_addr) != 1 ||
+            connect(fd, (struct sockaddr*)&address, sizeof(address)) ||
+            send_all(fd, body, body_len)) rc = 5;
+        else usleep(100000);
+        if (fd >= 0) close(fd);
+    } else if (strcmp(mode, "refused-short") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) rc = 5;
+        else {
+            struct sockaddr_in address;
+            memset(&address, 0, sizeof(address));
+            address.sin_family = AF_INET;
+            address.sin_port = htons((unsigned short)atoi(argv[4]));
+            if (inet_pton(AF_INET, argv[3], &address.sin_addr) != 1) rc = 5;
+            else {
+                connect(fd, (struct sockaddr*)&address, sizeof(address));
+                usleep(100000);
+            }
             close(fd);
         }
     } else if (strcmp(mode, "sleep") == 0) {

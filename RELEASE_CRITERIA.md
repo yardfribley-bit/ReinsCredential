@@ -16,9 +16,13 @@ Any non-collector process that opens a registered sensitive file is attributed t
 | (b) Shell child of a desktop agent, with Xcode's Python between the shell and `Grok Bot.app` | `uploaded`, owner `Grok Bot.app`, actor `hold-upload` | `make integration` mode `live-toolchain-chain`; unit test `ApplyBehaviorOwner` on the same shape |
 | (c) Loopback-only send | `not_found`, outcome `loopback_not_off_host` | `make integration` mode `live-direct` |
 | (d) Failed connect | `attempted` | `make integration` mode `live-attempt` (SYN_SENT to TEST-NET) and `live-refused` (blocking `connect` to a closed port on this host's own address) |
-| (e) UDP | `not_visible` | `make integration` mode `live-udp` |
-| (f) Later actor on a file the startup canary already matched | a new `uploaded` close with `flow_txbytes`, plus the canary's `exact_bytes` close | `make integration` mode `live-after-canary` |
-| (g) Proxy-launched body match | `uploaded` with `exact_bytes` | `make integration` launched modes `plaintext`, `json`, `base64`, `gzip` |
+| (e) Measured UDP large enough for the file, including a socket that stays open about 100 ms | `uploaded`, `flow_txbytes_udp` | `make integration` modes `live-udp-large` and `live-short-udp` |
+| (f) Fully measured off-host UDP smaller than the compression lower bound | `not_found` | `make integration` mode `live-udp-small` |
+| (g) Short HTTP POST of about 100 ms to a routable address | `uploaded`, `flow_txbytes` | `make integration` mode `live-short-post` |
+| (h) Short refused connect | `attempted`, `flow_attempt` | `make integration` mode `live-short-refused` |
+| (i) Short off-host datagram whose byte count was not captured | `not_visible`, not `not_found` | `make integration` mode `live-short-unmeasured` |
+| (j) Later actor on a file the startup canary already matched | a new `uploaded` close with `flow_txbytes`, plus the canary's `exact_bytes` close | `make integration` mode `live-after-canary` |
+| (k) Proxy-launched body match | `uploaded` with `exact_bytes` | `make integration` launched modes `plaintext`, `json`, `base64`, `gzip` |
 
 Known-name matches are display labels. They are not the reason a process is tracked.
 
@@ -57,7 +61,7 @@ Check: `bash -n` on those scripts in the macOS workflow, plus `make-icon.sh` whi
 - Install, upgrade, uninstall: `macOSClient/INSTALL.md`, `macOSClient/INSTALL.zh-CN.md`, and `macOSClient/scripts/uninstall-local.sh`
 - History and this version: `CHANGELOG.md`, `CHANGELOG.zh-CN.md`, `RELEASE_NOTES_0.2.0.md`, `RELEASE_NOTES_0.2.0.zh-CN.md`
 
-Limits that stay true in those docs: TLS bodies are not decrypted, a flow-byte match is not a remote receipt, and UDP/QUIC is `not_visible`. `not_visible` is an unresolved blind, not an acceptance pass. Short opens that die before the subtree sweep are not claimed as complete read coverage.
+Limits that stay true in those docs: TLS bodies are not decrypted, a flow-byte match is not a remote receipt, and `not_visible` is an unresolved blind, not an acceptance pass. Short opens that die before the subtree sweep are not claimed as complete read coverage. A send above the file-size window stays `not_visible`. The compression lower bound does not include zstd.
 
 ## 7. CI and tagged release
 

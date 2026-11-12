@@ -13,7 +13,19 @@ LiveFlow Tcp(const std::string& destination, uint64_t baseline, uint64_t latest,
     flow.tx_baseline = baseline;
     flow.tx_latest = latest;
     flow.established = established;
+    flow.measured = true;
     flow.preexisting = baseline != 0;
+    return flow;
+}
+
+LiveFlow Udp(const std::string& destination, uint64_t baseline, uint64_t latest, bool loopback = false) {
+    LiveFlow flow;
+    flow.destination = destination;
+    flow.kind = LiveFlowKind::UdpOrQuic;
+    flow.loopback = loopback;
+    flow.measured = true;
+    flow.tx_baseline = baseline;
+    flow.tx_latest = latest;
     return flow;
 }
 
@@ -96,7 +108,9 @@ int main() {
     const auto slack = CloseLiveAccess(Seen(file_bytes, {Tcp(off, 10, 10 + file_bytes + kFlowTxSlack, true)}));
     assert(slack.verdict == UploadVerdict::Uploaded);
     const auto too_wide = CloseLiveAccess(Seen(file_bytes, {Tcp(off, 0, file_bytes + kFlowTxSlack + 1, true)}));
-    assert(too_wide.verdict == UploadVerdict::NotFound);
+    assert(too_wide.verdict == UploadVerdict::NotVisible);
+    assert(too_wide.verdict != UploadVerdict::NotFound);
+    assert(too_wide.transfer_outcome == "aggregate_above_window");
     assert(!IsProviderOrRelay(off));
     assert(IsProviderOrRelay("api.anthropic.com:443"));
     assert(IsProviderOrRelay("relay.openai.com:443"));
@@ -183,6 +197,40 @@ int main() {
     const auto no_size = CloseLiveAccess(unknown_size);
     assert(no_size.verdict == UploadVerdict::NotVisible);
     assert(no_size.transfer_outcome == "registered_file_size_unknown");
+
+    const auto udp_large = CloseLiveAccess(Seen(file_bytes, {Udp(off, 0, file_bytes)}));
+    assert(udp_large.verdict == UploadVerdict::Uploaded);
+    assert(udp_large.match_basis == "flow_txbytes_udp");
+    assert(udp_large.transfer_outcome.find("left_host") != std::string::npos);
+    const auto udp_small = CloseLiveAccess(Seen(file_bytes, {Udp(off, 0, 1)}));
+    assert(udp_small.verdict == UploadVerdict::NotFound);
+    assert(udp_small.verdict != UploadVerdict::NotVisible);
+    assert(udp_small.match_basis == "live_agent_observed");
+    auto compressed = Seen(1000, {Tcp(off, 0, 80, true)});
+    compressed.content_lower_bound = 40;
+    const auto compressed_upload = CloseLiveAccess(compressed);
+    assert(compressed_upload.verdict == UploadVerdict::Uploaded);
+    assert(compressed_upload.match_basis == "flow_txbytes");
+    assert(compressed_upload.detail.find("lower_bound=40") != std::string::npos);
+    const auto chunked = CloseLiveAccess(Seen(file_bytes, {
+        Tcp("203.0.113.10:443", 0, 16, true),
+        Tcp("203.0.113.11:443", 0, 16, true),
+        Tcp("203.0.113.12:443", 0, 16, true)}));
+    assert(chunked.verdict == UploadVerdict::Uploaded);
+    assert(chunked.match_basis == "flow_txbytes");
+    LiveFlow partial_gap;
+    partial_gap.destination = "198.51.100.8:443";
+    partial_gap.kind = LiveFlowKind::Unreadable;
+    const auto partial = CloseLiveAccess(Seen(file_bytes, {Tcp(off, 0, 4, true), partial_gap}));
+    assert(partial.verdict == UploadVerdict::NotVisible);
+    assert(partial.verdict != UploadVerdict::NotFound);
+    assert(partial.transfer_outcome == "off_host_measurement_incomplete");
+    assert(!IsProviderOrRelay(partial_gap.destination));
+    auto waiting = Seen(file_bytes, {Tcp(off, 100, 100, true)});
+    waiting.window_settled = false;
+    const auto still_open = CloseLiveAccess(waiting);
+    assert(still_open.defer);
+    assert(still_open.verdict != UploadVerdict::NotVisible || still_open.defer);
 
     std::cout << "PASS: live-agent flow verdicts\n";
     return 0;

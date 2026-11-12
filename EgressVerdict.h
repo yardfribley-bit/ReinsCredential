@@ -56,6 +56,9 @@ struct LiveFlow {
     // Traffic the process itself sent into the local egress proxy. That path
     // is closed with exact body matching, not with this byte-count rule.
     bool to_local_proxy = false;
+    // True when a kernel counter supplied tx_latest. TcpMeasured implies this.
+    // An unmeasured UDP, QUIC, or TLS socket stays false and cannot support 未发现.
+    bool measured = false;
     uint64_t tx_baseline = 0;
     uint64_t tx_latest = 0;
     bool preexisting = false;
@@ -65,11 +68,18 @@ struct LiveFlow {
 };
 
 // What was visible for one already-running agent, or for one file it opened.
+// Flows are the process tree's off-host sockets over the hold and the tail.
 struct LiveAccessView {
     bool agent_visible = false;
     bool inspection_complete = false;
     bool file_open = false;
+    // Raw registered size. The upload window's upper edge is this plus slack.
     uint64_t file_bytes = 0;
+    // Smallest compressed size computed at registration. Zero means use file_bytes.
+    uint64_t content_lower_bound = 0;
+    // True after the file has been closed and the tail has elapsed, or when
+    // the watch itself is finishing. 未发现 waits for this.
+    bool window_settled = true;
     std::vector<LiveFlow> flows;
 };
 
@@ -77,9 +87,12 @@ struct LiveClose {
     UploadVerdict verdict = UploadVerdict::NotVisible;
     std::string destination;
     std::string transfer_outcome;
-    // flow_txbytes, flow_attempt, live_agent_observed, or observation_impossible.
+    // flow_txbytes, flow_txbytes_udp, flow_attempt, live_agent_observed,
+    // or observation_impossible.
     std::string match_basis;
     std::string detail;
+    // The watch is still open. The caller keeps this close off the chain.
+    bool defer = false;
 };
 
 // Sent-byte slack above the registered file size. A TLS handshake and request
@@ -87,13 +100,15 @@ struct LiveClose {
 constexpr uint64_t kFlowTxSlack = 65536;
 
 // Verdict for an agent that was already running.
-// 已上传 requires a measured off-host TCP send whose byte delta can contain the
-// file, or a proxied body match with success. 已尝试未成功 is a connect that
-// never established. 未发现 is only when the channels that were open could be
-// measured and none of them was an off-host send, including to a model
-// provider or relay. An off-host peer whose body was not inspected is
-// 看不到: unresolved, not a clean bill, and not rewritten as 未发现.
-// UDP/QUIC and undecrypted TLS stay 看不到.
+// 已上传 requires the tree's measured off-host send, summed across TCP and
+// UDP/QUIC for the whole hold and the tail, to fall in the compression-aware
+// window: at least the registered lower bound and at most the raw size plus
+// slack. UDP/QUIC uses flow_txbytes_udp. A proxied body match with success is
+// the other 已上传 path. 已尝试未成功 is a connect that never established.
+// 未发现 is only when every off-host channel was measured for that whole
+// window and the aggregate is below the lower bound. Anything less complete,
+// including a send larger than the window, is 看不到. Provider names do not
+// pick a different verdict.
 LiveClose CloseLiveAccess(const LiveAccessView& view);
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path);
 

@@ -14,16 +14,16 @@ A file-open sentence means the file was open in that process, or, when the sente
 
 | Code | English | 中文 | Meaning |
 | --- | --- | --- | --- |
-| `uploaded` | Uploaded | 已上传 | Registered content was in a proxied request that succeeded, or the same process sent an off-host TCP byte span large enough for the file (`flow_txbytes`). |
+| `uploaded` | Uploaded | 已上传 | Registered content was in a proxied request that succeeded, or the process tree's measured off-host send, summed across TCP and UDP/QUIC, falls between the compression lower bound and the raw size plus 64 KiB (`flow_txbytes`, or `flow_txbytes_udp` when the datagrams carry it). |
 | `attempted` | Attempted | 已尝试未成功 | The content matched and the transfer failed, or an off-host connect failed, including a refused connection. |
-| `not_found` | Not found | 未发现 | The process was visible and no off-host upload of the file was observed. A loopback send stays here. |
-| `not_visible` | Not visible | 看不到 | The descriptors or the channel could not be read. UDP and QUIC stay here. This is not a clean bill. |
+| `not_found` | Not found | 未发现 | Every off-host channel in the hold and the tail was measured, and the total is below the compression lower bound. A loopback send stays here. |
+| `not_visible` | Not visible | 看不到 | A channel was missing, closed before its byte count was captured, or the measured total is above the window. This is unresolved, not a clean bill. |
 
 Limits:
 
-- TLS that did not enter the local proxy is not decrypted.
-- A flow-byte match is a TCP send count on the same process. It is not a remote receipt.
-- UDP and QUIC stay Not visible.
+- TLS that did not enter the local proxy is not decrypted. The verdict uses the measured send count and, when the resolver returns one, a reverse-DNS name. ClientHello SNI is not read.
+- A flow-byte match is a local send count. It is not a remote receipt.
+- A send larger than the file plus 64 KiB stays Not visible. The file may be inside that traffic, and the count does not isolate it.
 
 ## Quick start
 
@@ -59,4 +59,4 @@ make integration
 
 ## Limits
 
-FSEvents do not name the process that changed a file, and they do not report a pure read. A file-change record leaves the actor empty. An open descriptor is not proof the bytes were read. A socket peer is not a payload. A subtree sweep can still miss an open that ends before the next child scan; immediate `cat` recall is incomplete and is not claimed as full read coverage. A registered file held while the process connects to a model provider or relay whose body cannot be inspected is not closed as Not found. UDP, QUIC, and TLS that never entered the proxy stay Not visible. That is unsolved, not a clean bill. An optional TLS CA file is used only for CONNECT bodies that enter the proxy. It is not written to the login keychain.
+FSEvents do not name the process that changed a file, and they do not report a pure read. A file-change record leaves the actor empty. An open descriptor is not proof the bytes were read. A socket peer is not a payload. A subtree sweep can still miss an open that ends before the next child scan; immediate `cat` recall is incomplete and is not claimed as full read coverage. Short off-host sends are kept after the socket closes, from a 5 ms descriptor poll and from `com.apple.network.statistics` when that kernel control is available. A connection that disappears between polls and is absent from that control can still be missed. The compression lower bound is the smaller of the raw size, gzip, zlib, and raw deflate. A zstd payload smaller than that bound can still be closed as Not found. An optional TLS CA file is used only for CONNECT bodies that enter the proxy. It is not written to the login keychain.

@@ -16,9 +16,13 @@
 | (b) 桌面 Agent 的 shell 子进程，中间有 Xcode 的 Python，上面是 `Grok Bot.app` | `uploaded`，属主 `Grok Bot.app`，行为者 `hold-upload` | `make integration` 的 `live-toolchain-chain`；同一形状的 `ApplyBehaviorOwner` 单元测试 |
 | (c) 只向回环发送 | `not_found`，结果 `loopback_not_off_host` | `make integration` 的 `live-direct` |
 | (d) 连接失败 | `attempted` | `live-attempt`（向 TEST-NET 停在 SYN_SENT）和 `live-refused`（对本机地址上已关闭的端口做阻塞 `connect`） |
-| (e) UDP | `not_visible` | `make integration` 的 `live-udp` |
-| (f) 启动自检已经证明过的文件上，后来又有一个行为者 | 新的 `uploaded` / `flow_txbytes`，同时保留自检的 `exact_bytes` | `live-after-canary` |
-| (g) 代理启动的进程做正文匹配 | `uploaded` 且为 `exact_bytes` | 启动模式 `plaintext`、`json`、`base64`、`gzip` |
+| (e) 测到的 UDP 大到能装下文件，包括只开约 100 毫秒的套接字 | `uploaded`，`flow_txbytes_udp` | `live-udp-large` 和 `live-short-udp` |
+| (f) 离机 UDP 已完整测到，且小于压缩下界 | `not_found` | `live-udp-small` |
+| (g) 约 100 毫秒的 HTTP POST，发往可路由地址 | `uploaded`，`flow_txbytes` | `live-short-post` |
+| (h) 短的被拒绝连接 | `attempted`，`flow_attempt` | `live-short-refused` |
+| (i) 短的离机数据报，字节数没有拿到 | `not_visible`，不是 `not_found` | `live-short-unmeasured` |
+| (j) 启动自检已经证明过的文件上，后来又有一个行为者 | 新的 `uploaded` / `flow_txbytes`，同时保留自检的 `exact_bytes` | `live-after-canary` |
+| (k) 代理启动的进程做正文匹配 | `uploaded` 且为 `exact_bytes` | 启动模式 `plaintext`、`json`、`base64`、`gzip` |
 
 已知名称只是显示标签，不是跟踪的原因。
 
@@ -57,7 +61,7 @@
 - 安装、升级、卸载：`macOSClient/INSTALL.md`、`INSTALL.zh-CN.md` 和 `uninstall-local.sh`
 - 历史和本版本：`CHANGELOG.md`、`CHANGELOG.zh-CN.md`、`RELEASE_NOTES_0.2.0.md`、`RELEASE_NOTES_0.2.0.zh-CN.md`
 
-这些文档里保持的限制：TLS 正文不解密，流量字节匹配不是远端回执，UDP/QUIC 是看不到。看不到是尚未解决的盲区，不是验收通过。子进程扫描之前就结束的短打开，不写成已经覆盖所有读取。
+这些文档里保持的限制：TLS 正文不解密，流量字节匹配不是远端回执，看不到是尚未解决的盲区，不是验收通过。子进程扫描之前就结束的短打开，不写成已经覆盖所有读取。大于文件窗口的发送保持看不到。压缩下界不包含 zstd。
 
 ## 7. CI 和带标签的发布
 

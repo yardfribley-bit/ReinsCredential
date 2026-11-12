@@ -10,14 +10,14 @@ Open `ReinsCredential-0.2.0-local.dmg` or unzip `ReinsCredential-0.2.0-local.zip
 
 ## What the four verdicts mean
 
-- **已上传 / uploaded.** The registered bytes were in a proxied HTTP body that returned success, or the same process sent an off-host TCP byte span large enough to hold the file (`flow_txbytes`). The flow count is not a decrypted body and not a receipt from the far side.
-- **已尝试未成功 / attempted.** A matching body was sent and the transfer failed, or an off-host connect failed before the file's bytes went out.
-- **未发现 / not_found.** The process and its TCP counters were visible, and no off-host upload of the file was observed. A send that stays on `127.0.0.1` is this verdict (`loopback_not_off_host`).
-- **看不到 / not_visible.** The descriptor list or the channel could not be read. UDP and QUIC are this verdict. It is not a clean bill.
+- **已上传 / uploaded.** The registered bytes were in a proxied HTTP body that returned success, or the process tree's measured off-host send, summed across TCP and UDP/QUIC for the hold and a short tail, falls between the compression lower bound and the raw size plus 64 KiB (`flow_txbytes`, or `flow_txbytes_udp`). A connection that lasts about 100 ms is included after it closes. The count is not a decrypted body and not a receipt from the far side.
+- **已尝试未成功 / attempted.** A matching body was sent and the transfer failed, or an off-host connect failed before the file's bytes went out, including a short refused connect.
+- **未发现 / not_found.** Every off-host channel in that window was measured, and the total is below the compression lower bound. A send that stays on `127.0.0.1` is this verdict (`loopback_not_off_host`).
+- **看不到 / not_visible.** A channel closed before its byte count was captured, the descriptor list was incomplete, or the measured total is above the window. It is not a clean bill and it is not rewritten as 未发现.
 
 ## Limits
 
-TLS that never entered the local proxy is not decrypted. The proxy is not system-wide. No CA is added to the keychain, and other apps' MCP settings are not changed. FSEvents still do not name the process that read a file.
+TLS that never entered the local proxy is not decrypted. The peer name is reverse DNS when the resolver returns one; ClientHello SNI is not read. The compression lower bound is gzip, zlib, or raw deflate, not zstd. The proxy is not system-wide. No CA is added to the keychain, and other apps' MCP settings are not changed. FSEvents still do not name the process that read a file. A connect that vanishes between the 5 ms poll and is missing from the network-statistics control can still be missed.
 
 ## Upgrade and uninstall
 

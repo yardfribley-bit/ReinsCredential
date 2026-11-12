@@ -309,6 +309,11 @@ void ContentTests() {
     assert(MatchContent(corrupt, secret).empty());
     assert(MatchContent(gzip(std::string(1024 * 1024 + 1, 'x') + secret), secret).empty());
     assert(MatchContent(gzip(secret) + "trailing", secret).empty());
+    const std::string compressible(4000, 'A');
+    const auto compressed_bound = ContentLowerBound(compressible);
+    assert(compressed_bound > 0 && compressed_bound < compressible.size());
+    const auto incompressible_bound = ContentLowerBound(secret);
+    assert(incompressible_bound > 0 && incompressible_bound <= secret.size());
     EvidenceRecord evidence; evidence.destination = "https://example.invalid/ingest";
     evidence.related_event_ids = {"id\"quoted"}; evidence.content_sha256 = Sha256(secret);
     const auto json = ToJson(evidence, "test", 1);

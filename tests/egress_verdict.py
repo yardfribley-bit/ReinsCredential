@@ -55,7 +55,16 @@ IDLE_CPU_PERCENT_MAX = 150
 LIVE_VERDICTS = {
     "live-proxy": "uploaded",
     "live-direct": "not_found",
-    "live-udp": "not_visible",
+    "live-udp": "not_found",
+    "live-udp-large": "uploaded",
+    "live-udp-small": "not_found",
+    "live-compressed": "uploaded",
+    "live-chunked": "uploaded",
+    "live-partial": "not_visible",
+    "live-short-post": "uploaded",
+    "live-short-udp": "uploaded",
+    "live-short-refused": "attempted",
+    "live-short-unmeasured": "not_visible",
     "live-offhost": "uploaded",
     "live-attempt": "attempted",
     "live-refused": "attempted",
@@ -106,17 +115,18 @@ def sample_process(pid, seconds):
 
 
 class Server:
-    def __init__(self, status=200, raw=False, tls_cert=None, tls_key=None, accept_timeout=15, bind_host="127.0.0.1"):
+    def __init__(self, status=200, raw=False, tls_cert=None, tls_key=None, accept_timeout=15, bind_host="127.0.0.1", accepts=1):
         self.status = status
         self.raw = raw
         self.tls_cert = tls_cert
         self.tls_key = tls_key
         self.bind_host = bind_host
+        self.accepts = accepts
         self.box = {}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((bind_host, 0))
-        self.sock.listen(1)
+        self.sock.listen(max(self.accepts, 1))
         self.sock.settimeout(accept_timeout)
         self.port = self.sock.getsockname()[1]
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -126,11 +136,44 @@ class Server:
         return f"{scheme}://127.0.0.1:{self.port}{path}"
 
     def _run(self):
+        collected = b""
+        for index in range(self.accepts):
+            try:
+                conn, _addr = self.sock.accept()
+            except Exception as error:
+                self.box["error"] = str(error)
+                self.box["data"] = collected
+                return
+            if index == 0:
+                self._read_one(conn, first=True)
+                collected = self.box.get("data", b"")
+            else:
+                collected += self._read_raw(conn)
+        self.box["data"] = collected
         try:
-            conn, _addr = self.sock.accept()
-        except Exception as error:
-            self.box["error"] = str(error)
-            return
+            self.sock.close()
+        except Exception:
+            pass
+
+    def _read_raw(self, conn):
+        conn.settimeout(3)
+        data = b""
+        try:
+            while len(data) < 2 * 1024 * 1024:
+                block = conn.recv(8192)
+                if not block:
+                    break
+                data += block
+        except socket.timeout:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return data
+
+    def _read_one(self, conn, first=True):
+        del first
         if self.tls_cert:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             chain = self.tls_cert
@@ -179,10 +222,6 @@ class Server:
                     + body
                 )
             conn.close()
-        except Exception:
-            pass
-        try:
-            self.sock.close()
         except Exception:
             pass
 
@@ -325,8 +364,61 @@ def finish_close(mode, expected, record, records, receipt):
         raise SystemExit("pinned TLS was treated as a successful inspected upload")
     if mode == "live-proxy" and "live_agent_connected_to_proxy" not in record["detail"]:
         raise SystemExit(f"{mode} detail does not say the live agent connected itself: {record['detail']}")
-    if mode == "live-udp" and "udp_or_quic" not in record["transfer_outcome"]:
-        raise SystemExit(f"udp outcome {record['transfer_outcome']}")
+    if mode == "live-udp":
+        if record["evidence_basis"] != "live_agent_observed":
+            raise SystemExit(f"loopback udp basis {record['evidence_basis']} outcome {record['transfer_outcome']}")
+        if record["upload_verdict"] != "not_found":
+            raise SystemExit(f"measured loopback udp closed as {record['upload_verdict']}")
+    if mode == "live-udp-large":
+        if record["evidence_basis"] != "flow_txbytes_udp":
+            raise SystemExit(f"udp large basis {record['evidence_basis']} outcome {record['transfer_outcome']}")
+        if "left_host" not in record["transfer_outcome"]:
+            raise SystemExit(f"udp large outcome {record['transfer_outcome']}")
+    if mode == "live-udp-small":
+        if record["evidence_basis"] != "live_agent_observed" or "aggregate_below_lower_bound" not in record["detail"]:
+            raise SystemExit(f"udp small basis {record['evidence_basis']} detail {record['detail']}")
+        if record["upload_verdict"] != "not_found":
+            raise SystemExit("fully measured small udp was not 未发现")
+    if mode == "live-compressed":
+        if record["evidence_basis"] != "flow_txbytes" or "lower_bound=" not in record["detail"]:
+            raise SystemExit(f"compressed basis {record['evidence_basis']} detail {record['detail']}")
+        detail = record["detail"]
+        def field(name):
+            token = name + "="
+            start = detail.find(token)
+            if start < 0:
+                raise SystemExit(f"compressed detail missing {name}: {detail}")
+            start += len(token)
+            end = detail.find(";", start)
+            return int(detail[start:end if end >= 0 else len(detail)])
+        if not (field("lower_bound") <= field("tx_sum") < field("file_bytes")):
+            raise SystemExit(f"compressed window {detail}")
+    if mode == "live-chunked":
+        if record["evidence_basis"] != "flow_txbytes" or "left_host" not in record["transfer_outcome"]:
+            raise SystemExit(f"chunked basis {record['evidence_basis']} outcome {record['transfer_outcome']}")
+    if mode == "live-partial":
+        if record["upload_verdict"] != "not_visible" or record["transfer_outcome"] != "off_host_measurement_incomplete":
+            raise SystemExit(f"partial measurement closed as {record['upload_verdict']} {record['transfer_outcome']}")
+        if "not_rewritten_as_not_found" not in record["detail"]:
+            raise SystemExit(f"partial detail {record['detail']}")
+    if mode == "live-short-post":
+        if record["evidence_basis"] != "flow_txbytes" or "left_host" not in record["transfer_outcome"]:
+            raise SystemExit(f"short post basis {record['evidence_basis']} outcome {record['transfer_outcome']}")
+        if MARKER not in receipt.get("data", b""):
+            raise SystemExit("short post receiver did not get the synthetic bytes")
+    if mode == "live-short-udp":
+        if record["evidence_basis"] != "flow_txbytes_udp" or "left_host" not in record["transfer_outcome"]:
+            raise SystemExit(f"short udp basis {record['evidence_basis']} outcome {record['transfer_outcome']}")
+        if MARKER not in receipt.get("data", b""):
+            raise SystemExit("short udp receiver did not get the synthetic bytes")
+    if mode == "live-short-refused":
+        if record["evidence_basis"] != "flow_attempt":
+            raise SystemExit(f"short refused basis {record['evidence_basis']} outcome {record['transfer_outcome']}")
+    if mode == "live-short-unmeasured":
+        if record["upload_verdict"] != "not_visible":
+            raise SystemExit(f"short unmeasured closed as {record['upload_verdict']} {record['transfer_outcome']}")
+        if record["upload_verdict"] == "not_found":
+            raise SystemExit("short unmeasured connection was called 未发现")
     if mode == "live-direct":
         if "loopback_not_off_host" not in record["transfer_outcome"]:
             raise SystemExit(f"live direct outcome {record['transfer_outcome']}")
@@ -364,7 +456,7 @@ def finish_close(mode, expected, record, records, receipt):
             raise SystemExit(f"unknown app outcome {record.get('transfer_outcome')}")
         if MARKER not in receipt.get("data", b""):
             raise SystemExit("unknown app receiver did not get the synthetic bytes")
-    if expected == "uploaded" and mode not in ("live-offhost", "live-unknown-app") and "upstream_http_2xx" not in record["transfer_outcome"]:
+    if expected == "uploaded" and mode not in ("live-offhost", "live-unknown-app", "live-udp-large", "live-compressed", "live-chunked", "live-short-post", "live-short-udp") and "upstream_http_2xx" not in record["transfer_outcome"]:
         raise SystemExit(f"uploaded outcome {record['transfer_outcome']}")
     if mode in ("plaintext", "json", "base64", "gzip", "bypass", "fail500", "noopen", "https", "https-json", "https-fail", "live-proxy", "live-direct"):
         if not receipt or MARKER.split(b"\n")[0] not in receipt["data"] and mode != "base64" and mode != "gzip":
@@ -474,9 +566,22 @@ def live_case(directory, mode, binary, secret):
     dummy = None
     host = "127.0.0.1"
     port = 0
+    held = secret
+    if mode == "live-compressed":
+        held = directory / "compressible.env"
+        held.write_bytes(MARKER + b"A" * 4000)
+        os.chmod(held, 0o600)
+        Path(str(held) + ".send").write_bytes(gzip.compress(held.read_bytes(), mtime=0))
     if mode == "live-udp":
         dummy = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         dummy.bind(("127.0.0.1", 0))
+        port = dummy.getsockname()[1]
+    elif mode in ("live-udp-large", "live-udp-small", "live-short-udp", "live-short-unmeasured"):
+        host = routable_ip()
+        if not host:
+            return "skipped"
+        dummy = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        dummy.bind((host, 0))
         port = dummy.getsockname()[1]
     elif mode == "live-attempt":
         host = "203.0.113.10"
@@ -494,33 +599,62 @@ def live_case(directory, mode, binary, secret):
             probe.bind(("0.0.0.0", 0))
         port = probe.getsockname()[1]
         probe.close()
-    elif mode in ("live-offhost", "live-unknown-app"):
+    elif mode == "live-chunked":
         host = routable_ip()
         if not host:
             return "skipped"
-        server = Server(accept_timeout=10, bind_host="0.0.0.0")
+        server = Server(accept_timeout=10, bind_host="0.0.0.0", raw=True, accepts=3)
+        port = server.port
+    elif mode == "live-short-refused":
+        host = routable_ip()
+        if not host:
+            return "skipped"
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind((host, 0))
+        except OSError:
+            probe.close()
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.bind(("0.0.0.0", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+    elif mode in ("live-offhost", "live-unknown-app", "live-compressed", "live-partial", "live-short-post"):
+        host = routable_ip()
+        if not host:
+            return "skipped"
+        server = Server(accept_timeout=10, bind_host="0.0.0.0", raw=(mode == "live-compressed"))
         port = server.port
     else:
         server = Server(accept_timeout=10)
         port = server.port
     port_file = directory / f"{mode}.port"
     duration = "8" if mode == "live-proxy" else "16" if mode == "live-refused" else "12"
+    proxy_env = os.environ.copy()
+    if mode in ("live-partial", "live-short-unmeasured"):
+        proxy_env["REINS_DISABLE_NTSTAT"] = "1"
     if mode == "live-proxy":
-        agent = subprocess.Popen([str(binary), "proxy", str(secret), str(port_file), server.url("/upload")])
+        agent = subprocess.Popen([str(binary), "proxy", str(held), str(port_file), server.url("/upload")])
         time.sleep(0.3)
         proc = subprocess.Popen(
-            [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", duration,
+            [str(PROXY), "--log", str(log), "--sensitive-file", str(held), "--watch-live", "--duration", duration,
              "--sample-ms", "40", "--port-file", str(port_file)],
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=proxy_env)
     else:
-        action = {"live-direct": "direct", "live-offhost": "direct", "live-unknown-app": "direct", "live-udp": "udp", "live-attempt": "attempt", "live-refused": "refused"}[mode]
+        action = {
+            "live-direct": "direct", "live-offhost": "direct", "live-unknown-app": "direct",
+            "live-udp": "udp", "live-udp-small": "udp", "live-udp-large": "udp-file",
+            "live-attempt": "attempt", "live-refused": "refused", "live-compressed": "payload",
+            "live-chunked": "chunk3", "live-partial": "partial", "live-short-post": "short",
+            "live-short-udp": "udp-short", "live-short-unmeasured": "udp-short",
+            "live-short-refused": "refused-short",
+        }[mode]
         ready = directory / f"{mode}.ready"
-        agent = subprocess.Popen([str(binary), action, str(secret), host, str(port), str(ready)])
+        agent = subprocess.Popen([str(binary), action, str(held), host, str(port), str(ready)])
         time.sleep(0.2)
         proc = subprocess.Popen(
-            [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", duration,
+            [str(PROXY), "--log", str(log), "--sensitive-file", str(held), "--watch-live", "--duration", duration,
              "--sample-ms", "40"],
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=proxy_env)
         time.sleep(1.0)
         ready.write_text("go\n")
     _out, err = finish(proc)
@@ -528,9 +662,16 @@ def live_case(directory, mode, binary, secret):
         agent.wait(timeout=5)
     except subprocess.TimeoutExpired:
         agent.kill()
+    udp_payload = b""
+    if dummy and mode in ("live-udp-large", "live-short-udp"):
+        dummy.settimeout(1)
+        try:
+            udp_payload, _addr = dummy.recvfrom(65536)
+        except socket.timeout:
+            udp_payload = b""
     if dummy:
         dummy.close()
-    receipt = {"port": port, "data": b"", "error": None}
+    receipt = {"port": port, "data": udp_payload, "error": None}
     if server:
         server.join()
         receipt["data"] = server.box.get("data", b"")
@@ -538,7 +679,7 @@ def live_case(directory, mode, binary, secret):
     records = load_records(log)
     expected = LIVE_VERDICTS[mode]
     try:
-        kind = assert_live_case(mode, expected, records, receipt, secret.name)
+        kind = assert_live_case(mode, expected, records, receipt, held.name)
     except SystemExit:
         sys.stderr.write(redact(err))
         raise

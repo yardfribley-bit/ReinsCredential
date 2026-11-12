@@ -43,6 +43,8 @@ public:
     virtual bool ConfirmParentPid(const ProcessNode& node, pid_t ppid) { (void)node; (void)ppid; return false; }
     virtual std::optional<ProcessNode> Lookup(pid_t pid) { (void)pid; return std::nullopt; }
     virtual ActivitySample Inspect(const ProcessNode& node, const std::vector<std::string>& roots, bool include_idle_peers) = 0;
+    // Flows this source saw for the pid, including sockets that have already closed.
+    virtual std::vector<SocketFlow> RetainedFlows(pid_t pid) const { (void)pid; return {}; }
 };
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource();
 struct ProcessSnapshot {

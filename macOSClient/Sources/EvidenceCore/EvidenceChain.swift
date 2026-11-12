@@ -212,7 +212,7 @@ public enum EvidenceRedaction {
 
 public enum EvidenceChainExport {
     public static let schema = "reinscredential.evidence-chain.v1"
-    public static let glossaryText = "结论用词：已上传、已尝试未成功、未发现、看不到。看不到不能写成未发现。已看到的 Agent 如果没有访问或上传，结论是未发现。flow_txbytes 是同一进程上的 TCP 发送字节数，不是解密后的正文。没有出口结论表示记录里没有这四句。打开的描述符、同时出现的连接，都不是上传。原始密钥字节不包含在导出里。"
+    public static let glossaryText = "结论用词：已上传、已尝试未成功、未发现、看不到。看不到不能写成未发现。未发现只在离机通道都测过、并且合计低于压缩下界时使用。flow_txbytes 和 flow_txbytes_udp 是进程树上的发送字节数，不是解密后的正文。没有出口结论表示记录里没有这四句。打开的描述符、同时出现的连接，都不是上传。原始密钥字节不包含在导出里。"
 
     public static func markdown(_ chains: [EvidenceChain], window: ClosedRange<Date>? = nil) -> String {
         EvidenceRedaction.display(renderMarkdown(select(chains, window: window), window: normalized(window)))
@@ -679,7 +679,7 @@ public enum EvidenceChainBuilder {
              "exact_bytes", "json_escaped_bytes", "base64_whole_value", "no_registered_whole_version_match",
              "socket_peer_without_payload", "tls_intercept_handshake_failed", "tls_intercept_body_unreadable",
              "opaque_tunnel_not_inspected", "live_agent_tree_not_attached", "tcp_4tuple_not_matched",
-             "flow_txbytes", "flow_attempt", "live_agent_observed", "observation_impossible":
+             "flow_txbytes", "flow_txbytes_udp", "flow_attempt", "live_agent_observed", "observation_impossible":
             return true
         default:
             return basis.hasPrefix("gzip:")
@@ -764,8 +764,10 @@ public enum EvidenceChainBuilder {
             if basis == "socket_peer_without_payload" && !outcome.contains("udp_or_quic") {
                 add("只看到了套接字对端，没有看到发送的字节。")
             }
-            if basis == "flow_txbytes" || outcome.contains("flow_txbytes") {
-                add("同一进程打开已登记文件之后，发往非回环地址的 TCP 发送字节数与文件大小相符。没有解密 TLS，没有安装 CA，也没有系统代理。")
+            if basis == "flow_txbytes_udp" || outcome.contains("flow_txbytes_udp") {
+                add("打开已登记文件之后，发往非回环地址的 UDP/QUIC 发送字节数落在压缩下界和文件窗口之间。没有解密，没有安装 CA，也没有系统代理。")
+            } else if basis == "flow_txbytes" || outcome.contains("flow_txbytes") {
+                add("打开已登记文件之后，进程树上发往非回环地址的发送字节数合计落在压缩下界和文件窗口之间。没有解密 TLS，没有安装 CA，也没有系统代理。")
             }
             if basis == "flow_attempt" || outcome.contains("flow_attempt") {
                 add("看到了文件打开，以及一次没有把不少于文件大小的字节送出本机的外连。")
@@ -978,9 +980,13 @@ public enum EvidenceChainBuilder {
         let outcomeNote = outcome.isEmpty ? "" : "传输结果：\(outcome)。"
         switch verdict {
         case .uploaded:
+            if outcome.contains("flow_txbytes_udp") {
+                return EvidenceChainLink(kind: .verdict, presence: .present, value: verdict.chineseLabel,
+                                         note: "打开已登记文件之后，UDP/QUIC 发送字节数落在压缩下界和文件窗口之间。这是流量关联，不是解密后的正文，也不是对端回执。\(outcomeNote)")
+            }
             if outcome.contains("flow_txbytes") {
                 return EvidenceChainLink(kind: .verdict, presence: .present, value: verdict.chineseLabel,
-                                         note: "同一进程在打开已登记文件之后，向外的 TCP 发送字节数不少于文件大小。这是流量关联，不是解密后的正文，也不是对端回执。\(outcomeNote)")
+                                         note: "打开已登记文件之后，进程树上的离机发送字节数合计落在压缩下界和文件窗口之间。这是流量关联，不是解密后的正文，也不是对端回执。\(outcomeNote)")
             }
             return EvidenceChainLink(kind: .verdict, presence: .present, value: verdict.chineseLabel,
                                      note: "请求体与已登记内容匹配，并且代理看到了成功的 HTTP 结果。这不是对端的独立回执。\(outcomeNote)")

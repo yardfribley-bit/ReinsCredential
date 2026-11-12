@@ -100,32 +100,25 @@ namespace {
 uint64_t TxDelta(const LiveFlow& flow) {
     return flow.tx_latest >= flow.tx_baseline ? flow.tx_latest - flow.tx_baseline : 0;
 }
-bool ConsistentOffHostSend(const LiveFlow& flow, uint64_t file_bytes) {
-    if (flow.kind != LiveFlowKind::TcpMeasured || flow.loopback || flow.to_local_proxy || !flow.established) return false;
-    if (file_bytes == 0) return false;
-    const auto delta = TxDelta(flow);
-    return delta >= file_bytes && delta <= file_bytes + kFlowTxSlack;
+uint64_t LowerBound(const LiveAccessView& view) {
+    if (view.content_lower_bound == 0 || view.content_lower_bound > view.file_bytes) return view.file_bytes;
+    return view.content_lower_bound;
 }
-bool FailedOffHostAttempt(const LiveFlow& flow, uint64_t file_bytes) {
-    if (flow.kind != LiveFlowKind::TcpMeasured || flow.loopback || flow.to_local_proxy || !flow.failed) return false;
-    if (flow.established) return false;
-    // A refused connect is often already on the socket at the first sample.
-    // It never became established and did not carry the file.
-    return file_bytes == 0 || TxDelta(flow) < file_bytes;
+bool Measured(const LiveFlow& flow) {
+    return flow.measured || flow.kind == LiveFlowKind::TcpMeasured;
 }
-bool OpaqueOffHost(const LiveFlow& flow, uint64_t file_bytes) {
-    if (flow.to_local_proxy) return false;
-    // UDP, QUIC, and any channel with no byte count stay unresolved, including
-    // a datagram to 127.0.0.1. Measured loopback TCP is handled separately.
-    if (flow.kind != LiveFlowKind::TcpMeasured) return true;
-    if (flow.loopback) return false;
-    if (!IsProviderOrRelay(flow.destination)) return false;
-    if (ConsistentOffHostSend(flow, file_bytes) || FailedOffHostAttempt(flow, file_bytes)) return false;
-    return true;
+std::string SumText(uint64_t sum, uint64_t lower, uint64_t file_bytes) {
+    return "tx_sum=" + std::to_string(sum) + ";lower_bound=" + std::to_string(lower) +
+        ";file_bytes=" + std::to_string(file_bytes) + ";slack=" + std::to_string(kFlowTxSlack);
 }
-std::string DeltaText(const LiveFlow& flow, uint64_t file_bytes) {
-    return "tx_delta=" + std::to_string(TxDelta(flow)) + ";file_bytes=" + std::to_string(file_bytes) +
-        ";slack=" + std::to_string(kFlowTxSlack);
+LiveClose Defer(UploadVerdict verdict) {
+    LiveClose result;
+    result.defer = true;
+    result.verdict = verdict;
+    result.match_basis = "live_agent_observed";
+    result.transfer_outcome = "watch_window_open";
+    result.detail = "hold_or_tail_still_open;not_emitted;app_settings_not_modified";
+    return result;
 }
 } // namespace
 
@@ -138,81 +131,133 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.detail = "inspection_incomplete;not_a_clean_bill;app_settings_not_modified";
         return result;
     }
-    if (view.file_open && view.file_bytes == 0) {
+    if (!view.file_open) {
+        if (!view.inspection_complete) {
+            result.verdict = UploadVerdict::NotVisible;
+            result.match_basis = "observation_impossible";
+            result.transfer_outcome = "descriptors_or_flows_incomplete";
+            result.detail = "inspection_incomplete;not_a_clean_bill;app_settings_not_modified";
+            return result;
+        }
+        result.verdict = UploadVerdict::NotFound;
+        result.match_basis = "live_agent_observed";
+        result.transfer_outcome = "live_agent_observed_no_access";
+        result.detail = "agent_seen;no_registered_file_open;no_offhost_upload;app_settings_not_modified";
+        return result;
+    }
+    if (view.file_bytes == 0) {
         result.verdict = UploadVerdict::NotVisible;
         result.match_basis = "observation_impossible";
         result.transfer_outcome = "registered_file_size_unknown";
         result.detail = "file_open_observed;size_unknown;cannot_correlate_send;app_settings_not_modified";
         return result;
     }
-    const LiveFlow* upload = nullptr;
+    const auto lower = LowerBound(view);
+    const auto upper = view.file_bytes + kFlowTxSlack;
+    uint64_t tcp_sum = 0;
+    uint64_t udp_sum = 0;
+    const LiveFlow* upload_peer = nullptr;
     const LiveFlow* attempt = nullptr;
+    const LiveFlow* unmeasured = nullptr;
     const LiveFlow* loopback_send = nullptr;
-    const LiveFlow* opaque = nullptr;
+    bool any_offhost = false;
+    bool any_measured_offhost = false;
     for (const auto& flow : view.flows) {
         if (flow.to_local_proxy) continue;
-        if (view.file_open && !opaque && OpaqueOffHost(flow, view.file_bytes)) opaque = &flow;
-        if (!upload && ConsistentOffHostSend(flow, view.file_bytes)) upload = &flow;
-        else if (!attempt && view.file_open && FailedOffHostAttempt(flow, view.file_bytes)) attempt = &flow;
-        if (view.file_open && flow.kind == LiveFlowKind::TcpMeasured && flow.loopback && !flow.to_local_proxy &&
-            flow.established && view.file_bytes > 0 && TxDelta(flow) >= view.file_bytes && !loopback_send) {
-            loopback_send = &flow;
+        const auto delta = TxDelta(flow);
+        const bool measured = Measured(flow);
+        if (flow.loopback) {
+            if (measured && flow.kind == LiveFlowKind::TcpMeasured && flow.established && delta >= lower && !loopback_send)
+                loopback_send = &flow;
+            // A datagram whose byte count never arrived is still unresolved,
+            // including one aimed at 127.0.0.1.
+            if (!measured && !unmeasured) unmeasured = &flow;
+            continue;
+        }
+        any_offhost = true;
+        if (!measured) {
+            if (!unmeasured) unmeasured = &flow;
+            continue;
+        }
+        any_measured_offhost = true;
+        if (flow.kind == LiveFlowKind::UdpOrQuic) {
+            udp_sum += delta;
+            if (!upload_peer && delta > 0) upload_peer = &flow;
+            continue;
+        }
+        if (flow.established) {
+            tcp_sum += delta;
+            if (delta > 0 && !upload_peer) upload_peer = &flow;
+        } else if (flow.failed && !attempt && delta < lower) {
+            attempt = &flow;
         }
     }
-    if (upload) {
+    const auto sum = tcp_sum + udp_sum;
+    const bool in_window = sum >= lower && sum <= upper && upload_peer;
+    if (in_window) {
+        const bool udp_carried = udp_sum > 0 && tcp_sum < lower;
         result.verdict = UploadVerdict::Uploaded;
-        result.destination = upload->destination;
-        result.match_basis = "flow_txbytes";
-        result.transfer_outcome = "flow_txbytes;left_host;" + DeltaText(*upload, view.file_bytes);
-        result.detail = "match=flow_txbytes;plaintext_not_recovered;no_ca;no_system_proxy;app_settings_not_modified";
+        result.destination = upload_peer->destination;
+        result.match_basis = udp_carried ? "flow_txbytes_udp" : "flow_txbytes";
+        result.transfer_outcome = result.match_basis + ";left_host;" + SumText(sum, lower, view.file_bytes);
+        result.detail = "match=" + result.match_basis + ";" + SumText(sum, lower, view.file_bytes) +
+            ";plaintext_not_recovered;no_ca;no_system_proxy;app_settings_not_modified";
+        return result;
+    }
+    if (unmeasured) {
+        if (!view.window_settled) return Defer(UploadVerdict::NotVisible);
+        result.verdict = UploadVerdict::NotVisible;
+        result.destination = unmeasured->destination;
+        result.match_basis = "observation_impossible";
+        if (any_measured_offhost) result.transfer_outcome = "off_host_measurement_incomplete";
+        else if (IsProviderOrRelay(unmeasured->destination)) result.transfer_outcome = "provider_or_relay_body_not_visible";
+        else if (unmeasured->kind == LiveFlowKind::UdpOrQuic) result.transfer_outcome = "udp_or_quic_body_not_visible";
+        else result.transfer_outcome = "channel_bytes_unreadable";
+        result.detail = "off_host_body_not_fully_measured;unresolved_not_a_clean_bill;not_rewritten_as_not_found;app_settings_not_modified";
+        if (!view.inspection_complete) result.detail += ";descriptors_or_flows_incomplete";
         return result;
     }
     if (attempt) {
         result.verdict = UploadVerdict::Attempted;
         result.destination = attempt->destination;
         result.match_basis = "flow_attempt";
-        result.transfer_outcome = "flow_attempt;connect_not_completed;" + DeltaText(*attempt, view.file_bytes);
+        result.transfer_outcome = "flow_attempt;connect_not_completed;" + SumText(TxDelta(*attempt), lower, view.file_bytes);
         result.detail = "match=flow_attempt;file_open_observed;off_host_payload_not_delivered;app_settings_not_modified";
         return result;
     }
-    if (loopback_send && !opaque) {
-        result.verdict = UploadVerdict::NotFound;
-        result.destination = loopback_send->destination;
-        result.match_basis = "live_agent_observed";
-        result.transfer_outcome = "live_agent_observed_loopback_not_off_host;" + DeltaText(*loopback_send, view.file_bytes);
-        result.detail = "agent_seen;loopback_send_did_not_leave_host;app_settings_not_modified";
-        if (!view.inspection_complete) result.detail += ";descriptors_or_flows_incomplete";
-        return result;
-    }
-    // Off-host bytes we could not read are unresolved. That includes a model
-    // provider or relay, UDP/QUIC, and undecrypted TLS. It is not 未发现.
-    if (view.file_open && opaque) {
+    if (sum > upper) {
         result.verdict = UploadVerdict::NotVisible;
-        result.destination = opaque->destination;
+        if (upload_peer) result.destination = upload_peer->destination;
         result.match_basis = "observation_impossible";
-        if (IsProviderOrRelay(opaque->destination)) result.transfer_outcome = "provider_or_relay_body_not_visible";
-        else if (opaque->kind == LiveFlowKind::UdpOrQuic) result.transfer_outcome = "udp_or_quic_body_not_visible";
-        else result.transfer_outcome = "channel_bytes_unreadable";
-        result.detail = "off_host_body_not_inspected;unresolved_not_a_clean_bill;not_rewritten_as_not_found;app_settings_not_modified";
-        if (!view.inspection_complete) result.detail += ";descriptors_or_flows_incomplete";
+        result.transfer_outcome = "aggregate_above_window";
+        result.detail = "measured_send_larger_than_file_plus_slack;file_may_be_inside;not_rewritten_as_not_found;" +
+            SumText(sum, lower, view.file_bytes) + ";app_settings_not_modified";
         return result;
     }
-    if (!view.inspection_complete) {
+    if (!view.inspection_complete && !loopback_send) {
+        if (!view.window_settled) return Defer(UploadVerdict::NotVisible);
         result.verdict = UploadVerdict::NotVisible;
         result.match_basis = "observation_impossible";
         result.transfer_outcome = "descriptors_or_flows_incomplete";
         result.detail = "inspection_incomplete;not_a_clean_bill;app_settings_not_modified";
         return result;
     }
+    if (!view.window_settled) return Defer(UploadVerdict::NotFound);
+    if (loopback_send && !any_offhost) {
+        result.verdict = UploadVerdict::NotFound;
+        result.destination = loopback_send->destination;
+        result.match_basis = "live_agent_observed";
+        result.transfer_outcome = "live_agent_observed_loopback_not_off_host;" +
+            SumText(TxDelta(*loopback_send), lower, view.file_bytes);
+        result.detail = "agent_seen;loopback_send_did_not_leave_host;app_settings_not_modified";
+        if (!view.inspection_complete) result.detail += ";descriptors_or_flows_incomplete";
+        return result;
+    }
     result.verdict = UploadVerdict::NotFound;
     result.match_basis = "live_agent_observed";
-    if (view.file_open) {
-        result.transfer_outcome = "live_agent_observed_no_upload";
-        result.detail = "agent_seen;file_open_observed;no_offhost_upload;app_settings_not_modified";
-    } else {
-        result.transfer_outcome = "live_agent_observed_no_access";
-        result.detail = "agent_seen;no_registered_file_open;no_offhost_upload;app_settings_not_modified";
-    }
+    result.transfer_outcome = "live_agent_observed_no_upload";
+    result.detail = "agent_seen;file_open_observed;every_offhost_channel_measured;aggregate_below_lower_bound;" +
+        SumText(sum, lower, view.file_bytes) + ";app_settings_not_modified";
     return result;
 }
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path) {
@@ -222,15 +267,18 @@ std::string LiveVerdictSummary(const LiveClose& close, const std::string& proces
     const std::string file = path.empty() ? "已登记文件" : path;
     switch (close.verdict) {
     case UploadVerdict::Uploaded:
+        if (close.match_basis == "flow_txbytes_udp")
+            return label + "。" + who + " 在打开 " + file + " 之后，向非回环地址 " + dest +
+                " 发送的 UDP/QUIC 字节数落在压缩下界和文件大小加余量之间。匹配依据是 flow_txbytes_udp。这不是解密后的正文，也不是对端的独立回执。没有安装 CA 或系统代理。";
         return label + "。" + who + " 在打开 " + file + " 之后，向非回环地址 " + dest +
-            " 发送的 TCP 字节数不少于该文件，并且没有超过登记的余量。匹配依据是 flow_txbytes（同一进程上的发送字节数）。这不是解密后的正文，也不是对端的独立回执。没有安装 CA 或系统代理。";
+            " 发送的字节数落在压缩下界和文件大小加余量之间。匹配依据是 flow_txbytes（进程树上的发送字节数合计）。这不是解密后的正文，也不是对端的独立回执。没有安装 CA 或系统代理。";
     case UploadVerdict::Attempted:
         return label + "。" + who + " 打开了 " + file + "，并向 " + dest +
-            " 发起了离开本机的连接，但没有把不少于文件大小的字节送出去。结果：" + close.transfer_outcome + "。";
+            " 发起了离开本机的连接，但没有把不少于压缩下界的字节送出去。结果：" + close.transfer_outcome + "。";
     case UploadVerdict::NotFound:
         if (path.empty())
             return label + "。已看到 " + who + "，没有发现它打开已登记文件，也没有看到离开本机的上传。结果：" + close.transfer_outcome + "。";
-        return label + "。已看到 " + who + " 打开 " + file + "。已查看的 TCP 发送字节数里没有离开本机的上传。结果：" +
+        return label + "。已看到 " + who + " 打开 " + file + "。整段观察窗口里已测量的离机发送字节数低于压缩下界。结果：" +
             close.transfer_outcome + "。";
     case UploadVerdict::NotVisible:
         return label + "。看不到能否判断 " + who + " 把 " + file + " 发出了本机。结果：" + close.transfer_outcome + "。";
