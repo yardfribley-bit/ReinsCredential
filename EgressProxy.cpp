@@ -615,6 +615,7 @@ struct Session {
         std::map<std::string, std::string> files;
         std::map<std::string, FlowMemory> flows;
         std::map<std::string, int> emitted_rank;
+        std::map<std::string, std::string> emitted_outcome;
         std::map<std::string, std::string> emitted_event;
     };
     std::map<ProcessIdentity, LiveProc> live_procs;
@@ -640,12 +641,13 @@ struct Session {
             if (memory.destination.empty()) {
                 memory.destination = flow.destination;
                 memory.loopback = flow.loopback;
-                memory.udp = flow.udp || !flow.bytes_known;
-                memory.bytes_known = flow.bytes_known;
+                memory.udp = flow.udp;
                 memory.preexisting = first;
                 memory.baseline = first ? flow.tx_bytes : 0;
             }
-            memory.latest = flow.tx_bytes;
+            if (flow.bytes_known) memory.bytes_known = true;
+            if (flow.loopback) memory.loopback = true;
+            memory.latest = std::max(memory.latest, flow.tx_bytes);
             memory.seen_now = true;
             memory.closed = false;
             // BSD TCP states: ESTABLISHED is 4, TIME_WAIT is 10. SYN_SENT is 2.
@@ -692,7 +694,13 @@ struct Session {
         const auto key = path.empty() ? std::string("*") : path;
         const auto rank = VerdictRank(closed.verdict);
         auto& prior = proc.emitted_rank[key];
-        if (rank <= prior) return;
+        auto& prior_outcome = proc.emitted_outcome[key];
+        // Same-rank updates still matter: a file can be open before the send
+        // starts, and the first close is then "no upload" until the flow appears.
+        if (rank < prior) return;
+        if (rank == prior && prior_outcome == closed.transfer_outcome) return;
+        if (rank == prior && prior_outcome.find("loopback_not_off_host") != std::string::npos &&
+            closed.transfer_outcome.find("loopback_not_off_host") == std::string::npos) return;
         EvidenceRecord record;
         record.type = "sensitive_access_closed";
         record.actor_process = proc.actor;
@@ -715,6 +723,7 @@ struct Session {
         record.event_id = NewUuid();
         proc.emitted_event[key] = record.event_id;
         prior = rank;
+        prior_outcome = closed.transfer_outcome;
         std::cerr << "egress live-close " << record.upload_verdict << " basis=" << record.evidence_basis
                   << " outcome=" << record.transfer_outcome << "\n";
         Emit(std::move(record));

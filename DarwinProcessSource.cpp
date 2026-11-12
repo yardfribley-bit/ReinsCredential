@@ -39,6 +39,21 @@ std::string Executable(pid_t pid) {
 bool Same(const ProcessNode& node, const proc_bsdinfo& info) {
     return node.identity == Identity(info);
 }
+std::string NormalizeAddress(bool v4, const char* text) {
+    if (v4) return text;
+    const std::string value(text);
+    const std::string mapped = "::ffff:";
+    if (value.rfind(mapped, 0) == 0) {
+        const auto rest = value.substr(mapped.size());
+        in_addr parsed{};
+        if (inet_pton(AF_INET, rest.c_str(), &parsed) == 1) return rest;
+    }
+    return value;
+}
+std::string PeerText(bool v4, const std::string& address, uint16_t port) {
+    if (v4 || address.find(':') == std::string::npos) return address + ":" + std::to_string(port);
+    return "[" + address + "]:" + std::to_string(port);
+}
 // tcp_sockinfo has no cumulative send counter in the public SDK. The pcb list
 // does: snd_max - iss is the sequence span for that connection (SYN plus data).
 std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
@@ -81,10 +96,16 @@ std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
                                 inet_ntop(v4 ? AF_INET : AF_INET6, foreign_addr, foreign_text.data(), foreign_text.size())) {
                                 const auto local_port = ntohs(inp.inp_lport);
                                 const auto foreign_port = ntohs(inp.inp_fport);
-                                const std::string peer = std::string(v4 ? "" : "[") + foreign_text.data() + (v4 ? ":" : "]:") + std::to_string(foreign_port);
-                                const std::string key = std::to_string(IPPROTO_TCP) + "|" + local_text.data() + ":" + std::to_string(local_port) + "|" + peer;
+                                const auto local_address = NormalizeAddress(v4, local_text.data());
+                                const auto foreign_address = NormalizeAddress(v4, foreign_text.data());
+                                const bool foreign_v4 = foreign_address.find(':') == std::string::npos;
+                                const auto peer = PeerText(foreign_v4, foreign_address, foreign_port);
                                 const auto span = static_cast<std::uint32_t>(record.snd_max - record.iss);
-                                cache.bytes[key] = span > 0 ? static_cast<uint64_t>(span - 1) : 0;
+                                const auto data = span > 0 ? static_cast<uint64_t>(span - 1) : 0;
+                                const auto exact = std::to_string(IPPROTO_TCP) + "|" + local_address + ":" + std::to_string(local_port) + "|" + peer;
+                                const auto any_local = std::to_string(IPPROTO_TCP) + "|*:" + std::to_string(local_port) + "|" + peer;
+                                cache.bytes[exact] = data;
+                                cache.bytes[any_local] = std::max(cache.bytes[any_local], data);
                             }
                         }
                         cursor += record_len;
@@ -94,6 +115,13 @@ std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
         }
     }
     auto found = cache.bytes.find(flow_id);
+    if (found == cache.bytes.end()) {
+        const auto first = flow_id.find('|');
+        const auto second = first == std::string::npos ? std::string::npos : flow_id.find('|', first + 1);
+        const auto colon = second == std::string::npos ? std::string::npos : flow_id.rfind(':', second);
+        if (first != std::string::npos && second != std::string::npos && colon != std::string::npos && colon > first)
+            found = cache.bytes.find(flow_id.substr(0, first + 1) + "*:" + flow_id.substr(colon + 1));
+    }
     if (found == cache.bytes.end()) return std::nullopt;
     return found->second;
 }
