@@ -58,6 +58,8 @@ std::string FriendlyName(const ProcessNode& node, const std::string& reason) {
     if (base == "roo") return "Roo";
     if (base == "windsurf") return "Windsurf";
     if (base == "trae") return "Trae";
+    if (base == "kiro") return "Kiro";
+    if (base == "grok") return "Grok";
     auto from_bundle = [](const std::string& bundle) {
         auto stem = bundle.substr(0, bundle.size() - 4);
         const auto folded = Lower(stem);
@@ -68,6 +70,8 @@ std::string FriendlyName(const ProcessNode& node, const std::string& reason) {
         if (folded == "codex") return std::string("Codex");
         if (folded == "windsurf") return std::string("Windsurf");
         if (folded == "trae") return std::string("Trae");
+        if (folded == "kiro") return std::string("Kiro");
+        if (folded == "grok" || folded == "grok bot") return std::string("Grok");
         return stem;
     };
     if (auto bundle = BundleComponent(node.executable)) return from_bundle(*bundle);
@@ -119,10 +123,14 @@ std::string MatchAgent(const ProcessNode& node, const AgentRules& rules) {
         const auto component = "/" + Lower(bundle) + "/";
         if (path.find(component) != std::string::npos) return "configured_bundle:" + bundle;
     }
-    for (const std::string name : {"claude", "codex", "cursor", "cursor-agent", "workbuddy", "workbuddy-ai", "codebuddy", "aider", "goose", "opencode", "gemini", "cline", "roo"})
+    for (const std::string name : {"claude", "codex", "cursor", "cursor-agent", "workbuddy", "workbuddy-ai", "codebuddy", "aider", "goose", "opencode", "gemini", "cline", "roo", "kiro", "grok"})
         if (base == name) return "known_name:" + name;
-    // ChatGPT.app is the desktop host for Codex. Grok Bot stays unmatched unless configured.
-    for (const std::string bundle : {"/cursor.app/", "/chatgpt.app/", "/workbuddy ai.app/", "/workbuddy.app/", "/codebuddy.app/", "/claude.app/", "/codex.app/", "/windsurf.app/", "/trae.app/"})
+    // ChatGPT.app is the desktop host for Codex. A codex executable still matches
+    // known_name first; AnnotateActor keeps the bundle as owning_agent.
+    // Kiro.app and Grok.app (including the older Grok Bot.app name) are desktop
+    // agents. This list is not every future app; --agent-bundle adds one without
+    // treating ordinary .app processes as agents.
+    for (const std::string bundle : {"/cursor.app/", "/chatgpt.app/", "/workbuddy ai.app/", "/workbuddy.app/", "/codebuddy.app/", "/claude.app/", "/codex.app/", "/windsurf.app/", "/trae.app/", "/kiro.app/", "/grok.app/", "/grok bot.app/"})
         if (path.find(bundle) != std::string::npos) return "application_bundle:" + bundle;
     const bool runtime = base == "node" || base == "bun" || base == "python" || base == "python3" || base.rfind("python3.", 0) == 0;
     if (runtime && path.find("/cursor-agent/versions/") != std::string::npos) return "cursor_agent_distribution";

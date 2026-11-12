@@ -1,5 +1,9 @@
 # Agent 敏感数据读取与发送：逐功能验收报告
 
+## 2026-11-12 Kiro 与 Grok 进入内置桌面 Agent
+
+主人机器上当时正在运行的 Kiro.app 和 Grok.app 没有出口结论，因为实时发现只认一份短名单。现在可执行名 `kiro`、`grok`，以及路径里的 `/kiro.app/`、`/grok.app/`、`/grok bot.app/`，和 Cursor、WorkBuddy 用同一套规则。没有打开已登记文件、也没有离机发送时，结论仍是未发现。Codex 在 ChatGPT.app 里时，所属 Agent 仍是 ChatGPT.app，句子主语仍是 Codex。固定名单没有改成“所有 .app”：Finder 或 Safari 不会因此变成 Agent；没列入的应用继续用 `--agent-bundle`。
+
 ## 2026-11-12 已运行 Agent 的流量关联（step 5）
 
 触发：启动后的金丝雀只能证明“本程序拉起的子进程，经本地代理，正文匹配且 HTTP 200”这条已上传路径。已经在跑的桌面 Agent 被写成看不到（`already_running_not_redirected`）。主人认为这没有完成：能看到的 Agent 不能停在看不到。

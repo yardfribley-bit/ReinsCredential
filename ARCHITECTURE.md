@@ -62,7 +62,7 @@ classDiagram
 
 所有可见进程的敏感文件描述符由最多 4 个并发扫描任务检查。未知进程持有目标文件时才展开 socket 对端，减少无关连接收集；已知候选可直接观测对端。健康指标记录扫描进程数、候选数、身份校验失败数、描述符不完整数和实际扫描耗时。这里的“可见”包括权限/身份校验限制，不等于内核中所有进程。
 
-新应用可通过 `--agent-bundle 'Example.app'` 添加标签，无需改代码。即使没有标签，敏感文件活动也会记录。Grok Bot 在本次默认规则中保持未知进程，正用于验证清单不依赖品牌穷举；这不意味着从进程元数据已经证明了其 Agent 语义或正在执行 AI 任务。
+新应用可通过 `--agent-bundle 'Example.app'` 添加标签，无需改代码。即使没有标签，敏感文件活动也会记录。内置桌面应用现在包括 Kiro.app、Grok.app 和较早的 Grok Bot.app，和 Cursor、WorkBuddy 一样会得到所属 Agent。固定名单不是“所有未来的桌面 Agent”：普通 `.app` 不会因为是应用就被当成 Agent，未列入且未配置的进程保持 `unclassified_process`。实时出口只对内置或配置命中的 Agent 下出口结论。Codex 可执行文件若在 ChatGPT.app 里，名称匹配仍是 `known_name:codex`，但 `owning_agent` 仍取 bundle 根，也就是 ChatGPT.app；给人读的句子仍以 Codex 为主语。
 
 默认清单记录可执行路径、进程身份和父链，会增加日志量和隐私范围；原始整机日志不纳入公开测试报告。真实测试使用独立 ps 路径基线、隔离合成文件、子进程自报 PID、脚本校验和、回环服务端收件和采集器记录交叉核对；模型回答不能代替执行凭据。
 
@@ -172,6 +172,6 @@ EvidenceStore 异步追加，关键提交会等待队列空间或报错，但不
 
 敏感文件描述符仍然只说明文件打开过。`sensitive_access_closed` 才是对该访问的出口结论，并带上 `destination`、`transfer_outcome` 和 `upload_verdict`。没有看到打开、但请求体匹配已登记版本时，只写 `egress_transfer`，并写明打开未被证明。
 
-`--watch-live` 会在已有进程里寻找 Cursor、Codex、ChatGPT、Claude 和 WorkBuddy 的名称或 bundle。它不修改这些程序的环境、MCP 配置或系统代理，也不把已有连接改道。能看全该进程的描述符时，用同一条 TCP 连接的序号跨度做关联。公开的 `tcp_sockinfo` 没有累计发送字节；`net.inet.tcp.pcblist64` 里的 `snd_max - iss` 去掉 SYN 之后，是这条连接交给 TCP 的数据字节数。文件打开之后，发往非回环地址的这段增量不少于文件大小、且不超过文件大小加 65536，结论是已上传，依据 `flow_txbytes`（不是解密后的正文，也不是对端回执）。同样条件下连接没有建立，是已尝试未成功，依据 `flow_attempt`。进程能看全、但没有这样的离机发送（包括只发到回环地址），是未发现，依据 `live_agent_observed`。描述符读不全，或文件打开期间只有 UDP/QUIC、没有可计数的 TCP，才是看不到。自己连到本地代理的明文 HTTP，以及在提供了 CA 时完成拦截的 HTTPS，仍然按正文做 `exact_bytes` 匹配。由 `--launch` 启动的那棵树如果绕过代理，仍然是看不到，不能写成未发现。
+`--watch-live` 会在已有进程里寻找 Cursor、Codex、ChatGPT、Claude、WorkBuddy、Kiro 和 Grok 的名称或 bundle。它不修改这些程序的环境、MCP 配置或系统代理，也不把已有连接改道。能看全该进程的描述符时，用同一条 TCP 连接的序号跨度做关联。公开的 `tcp_sockinfo` 没有累计发送字节；`net.inet.tcp.pcblist64` 里的 `snd_max - iss` 去掉 SYN 之后，是这条连接交给 TCP 的数据字节数。文件打开之后，发往非回环地址的这段增量不少于文件大小、且不超过文件大小加 65536，结论是已上传，依据 `flow_txbytes`（不是解密后的正文，也不是对端回执）。同样条件下连接没有建立，是已尝试未成功，依据 `flow_attempt`。进程能看全、但没有这样的离机发送（包括只发到回环地址），是未发现，依据 `live_agent_observed`。描述符读不全，或文件打开期间只有 UDP/QUIC、没有可计数的 TCP，才是看不到。自己连到本地代理的明文 HTTP，以及在提供了 CA 时完成拦截的 HTTPS，仍然按正文做 `exact_bytes` 匹配。由 `--launch` 启动的那棵树如果绕过代理，仍然是看不到，不能写成未发现。
 
 `--tls-ca-cert` 和 `--tls-ca-key` 打开可选的 CONNECT 内容检查。代理在临时目录里签发短命叶子证书，用系统 SecureTransport 做握手，不把 CA 放进登录钥匙串，也不改默认钥匙串搜索列表。上游证书只用调用方提供的这个 CA 做锚。没有这两个参数时，CONNECT 仍然是看不到。

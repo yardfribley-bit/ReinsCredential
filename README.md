@@ -63,7 +63,7 @@ FSEvents 不提供修改者 PID，也不监测纯读取。文件变更的 actor_
 
 新增实验性 `agent-gateway` 提供显式接入的文件内容交付与发送审计。它以 Unix socket audit token 验证连接方身份，记录来源版本 hash、内容匹配、目的地、传输结果及关联事件。原文、JSON、Base64 和有界 gzip 已测试；跨请求分片和未进入该套接字的发送仍会漏报。它不是透明 HTTPS 监控，也不会自动接入已安装 Agent。
 
-`agent-egress` 在 `127.0.0.1` 上提供本地 HTTP 代理。`--launch` 只给它自己启动的那棵进程树设置代理环境变量。`--watch-live` 观察已经在运行的 Cursor、Codex、ChatGPT、Claude 和 WorkBuddy，但不改它们的环境、MCP 配置或系统代理；那些进程如果没有自己连到代理，结论是看不到。可选的 `--tls-ca-cert` 与 `--tls-ca-key` 让 CONNECT 里的 HTTPS 正文参加同一套指纹匹配。CA 只作为文件使用，不写入登录钥匙串。证书固定、QUIC 和直连仍然是看不到。成功的检查过的传输记为已上传，失败记为已尝试未成功，看过且没有指纹记为未发现。日志不写原始字节。用法和实测见最新验收报告。
+`agent-egress` 在 `127.0.0.1` 上提供本地 HTTP 代理。`--launch` 只给它自己启动的那棵进程树设置代理环境变量。`--watch-live` 观察已经在运行的 Cursor、Codex、ChatGPT、Claude、WorkBuddy、Kiro 和 Grok，但不改它们的环境、MCP 配置或系统代理。能看全的进程按文件打开和 TCP 发送字节数下结论；没有访问也没有离机发送是未发现。看不到只用于确实读不到的通道。可选的 `--tls-ca-cert` 与 `--tls-ca-key` 让 CONNECT 里的 HTTPS 正文参加同一套指纹匹配。CA 只作为文件使用，不写入登录钥匙串。证书固定、QUIC 和直连仍然是看不到。成功的检查过的传输记为已上传，失败记为已尝试未成功，看过且没有指纹记为未发现。日志不写原始字节。用法和实测见最新验收报告。
 
 ```sh
 ./agent-egress --log ./evidence.jsonl --sensitive-file ./synthetic.env \
