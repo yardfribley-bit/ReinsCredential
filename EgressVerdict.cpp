@@ -224,4 +224,9 @@ std::string LiveVerdictSummary(const LiveClose& close, const std::string& proces
     }
     return label;
 }
+bool ProxyBodyCoversLiveActor(const ProcessIdentity& proxy_actor, bool proxy_from_launched_tree,
+    const ProcessIdentity& live_actor, bool live_in_launched_tree) noexcept {
+    if (proxy_actor == live_actor) return true;
+    return proxy_from_launched_tree && live_in_launched_tree;
+}
 } // namespace agentsec

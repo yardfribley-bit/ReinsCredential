@@ -426,6 +426,30 @@ void AttributionTests() {
     assert(helper_chain.owning_agent->name == "Grok");
     assert(helper_chain.owning_agent->root.pid == 11);
     assert(helper_chain.owning_agent->match_reason.find("outermost_app_bundle") == 0);
+    ActorProcess hold_upload;
+    hold_upload.process.node = Named(30, 30, 31, "/private/tmp/hold-upload", "hold-upload");
+    hold_upload.ancestors.push_back(ancestor(31, 32, 31, "/bin/bash", "bash"));
+    hold_upload.ancestors.push_back(ancestor(32, 33, 32,
+        "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python",
+        "Python"));
+    hold_upload.ancestors.push_back(ancestor(33, 34, 33, "/bin/zsh", "zsh"));
+    hold_upload.ancestors.push_back(ancestor(34, 35, 34,
+        "/Applications/Grok Bot.app/Contents/Frameworks/Grok Bot Helper.app/Contents/MacOS/Grok Bot Helper",
+        "Grok Bot Helper"));
+    hold_upload.ancestors.push_back(ancestor(35, 1, 35, "/Applications/Grok Bot.app/Contents/MacOS/Grok Bot", "Grok Bot"));
+    ApplyBehaviorOwner(hold_upload);
+    assert(hold_upload.owning_agent && hold_upload.owning_agent->bundle == "Grok Bot.app");
+    assert(hold_upload.owning_agent->name == "Grok");
+    assert(hold_upload.owning_agent->root.pid == 35);
+    assert(hold_upload.owning_agent->bundle != "Xcode.app");
+    ActorProcess unknown_from_grok;
+    unknown_from_grok.process.node = Named(40, 40, 41, "/tmp/UnknownAgent.app/Contents/MacOS/UnknownAgent", "UnknownAgent");
+    unknown_from_grok.ancestors.push_back(ancestor(41, 42, 41, "/bin/zsh", "zsh"));
+    unknown_from_grok.ancestors.push_back(ancestor(42, 1, 42, "/Applications/Grok Bot.app/Contents/MacOS/Grok Bot", "Grok Bot"));
+    ApplyBehaviorOwner(unknown_from_grok);
+    assert(unknown_from_grok.owning_agent && unknown_from_grok.owning_agent->bundle == "UnknownAgent.app");
+    assert(unknown_from_grok.owning_agent->name == "UnknownAgent");
+    assert(unknown_from_grok.owning_agent->root.pid == 40);
     ActorProcess cursor_app;
     cursor_app.process.node = Named(16, 16, 1, "/Applications/Cursor.app/Contents/MacOS/Cursor", "Cursor");
     ApplyBehaviorOwner(cursor_app);
@@ -558,6 +582,13 @@ void VerdictTests() {
     assert(json.find("\"upload_verdict\":\"not_visible\"") != std::string::npos);
     EvidenceRecord blank;
     assert(ToJson(blank, "verdict", 2).find("\"upload_verdict\":\"\"") != std::string::npos);
+    const ProcessIdentity canary_actor{7, 1, 0};
+    const ProcessIdentity later_actor{8, 2, 0};
+    assert(ProxyBodyCoversLiveActor(canary_actor, true, canary_actor, true));
+    assert(!ProxyBodyCoversLiveActor(canary_actor, true, later_actor, false));
+    assert(ProxyBodyCoversLiveActor(canary_actor, true, later_actor, true));
+    assert(ProxyBodyCoversLiveActor(later_actor, false, later_actor, false));
+    assert(!ProxyBodyCoversLiveActor(later_actor, false, canary_actor, false));
     std::cout << "PASS: upload verdicts stay uploaded, attempted, not-found, or not-visible\n";
 }
 } // namespace

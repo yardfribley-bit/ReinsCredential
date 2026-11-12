@@ -515,11 +515,60 @@ def live_case(directory, mode, binary, secret):
     return kind
 
 
+def live_after_canary(directory, unknown, secret):
+    """A launched exact_bytes match must not swallow a later agent's own close."""
+    host = routable_ip()
+    if not host:
+        return "skipped"
+    log = directory / "live-after-canary.jsonl"
+    canary_sink = Server(accept_timeout=20)
+    offhost = Server(accept_timeout=20, bind_host="0.0.0.0")
+    env = os.environ.copy()
+    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "all_proxy", "no_proxy", "NO_PROXY"):
+        env.pop(key, None)
+    proc = subprocess.Popen(
+        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "14",
+         "--sample-ms", "40", "--launch", "--", sys.executable, str(CASE), "plaintext", canary_sink.url("/upload"), str(secret)],
+        cwd=str(ROOT), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    time.sleep(1.5)
+    ready = directory / "live-after-canary.ready"
+    agent = subprocess.Popen([str(unknown), "direct", str(secret), host, str(offhost.port), str(ready)])
+    time.sleep(1.0)
+    ready.write_text("go\n")
+    _out, err = finish(proc)
+    try:
+        agent.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        agent.kill()
+    canary_sink.join()
+    offhost.join()
+    records = load_records(log)
+    closes = [record for record in records if record["type"] == "sensitive_access_closed" and secret.name in (record.get("target_resource") or "")]
+    canary = [record for record in closes if record.get("upload_verdict") == "uploaded" and "exact_bytes" in (record.get("detail") or "")]
+    later = [record for record in closes if record.get("evidence_basis") == "flow_txbytes" and record.get("upload_verdict") == "uploaded"]
+    if not canary or not later:
+        sys.stderr.write(redact(err))
+        raise SystemExit(
+            "live-after-canary missing canary exact_bytes or later flow close: "
+            + redact(json.dumps(closes)))
+    owner = ((later[-1].get("actor_process") or {}).get("owning_agent") or {})
+    if owner.get("bundle") != "UnknownAgent.app" or owner.get("name") != "UnknownAgent":
+        raise SystemExit(f"later agent owner {owner}")
+    if host not in (later[-1].get("destination") or ""):
+        raise SystemExit(f"later destination {later[-1].get('destination')}")
+    if MARKER not in offhost.box.get("data", b""):
+        raise SystemExit("later receiver did not get the synthetic bytes")
+    if MARKER.split(b"\n")[0] not in canary_sink.box.get("data", b""):
+        raise SystemExit("canary receiver did not get the synthetic bytes")
+    return "uploaded"
+
+
 def main():
     if not PROXY.exists():
         raise SystemExit("agent-egress is not built")
     upload_tp = attempted_tp = tn = fp = fn = 0
     content_unseen = 0
+    after_canary = "skipped"
     with tempfile.TemporaryDirectory(prefix="reins-egress-") as temporary:
         directory = Path(temporary)
         os.chmod(directory, 0o700)
@@ -576,6 +625,13 @@ def main():
                 tn += 1
             else:
                 fn += 1
+        after_canary = live_after_canary(directory, unknown, secret)
+        if after_canary == "skipped":
+            print("SKIP live-after-canary no routable address")
+        elif after_canary == "uploaded":
+            upload_tp += 1
+        else:
+            fn += 1
     # False positives and false negatives are assertion failures above. A passed
     # run has none. not_visible is a true negative for the verdict and a content miss.
     print(
@@ -590,6 +646,8 @@ def main():
         raise SystemExit(f"missing cpu samples idle={len(idle_cpu)} active={len(active_cpu)}")
     counted = dict(LAUNCHED_VERDICTS)
     counted.update({mode: verdict for mode, verdict in LIVE_VERDICTS.items() if mode not in skipped})
+    if after_canary == "uploaded":
+        counted["live-after-canary"] = "uploaded"
     expect_upload, expect_attempted, expect_tn, expect_unseen = matrix_counts(counted)
     if (upload_tp, attempted_tp, tn, content_unseen, fp, fn) != (expect_upload, expect_attempted, expect_tn, expect_unseen, 0, 0):
         raise SystemExit(

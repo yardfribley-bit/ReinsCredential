@@ -476,6 +476,8 @@ struct StoredObservation {
     std::string matched_path;
     std::string match_kind;
     std::string event_id;
+    std::optional<ProcessIdentity> actor_identity;
+    bool launched_tree = false;
 };
 struct Access {
     std::string event_id;
@@ -743,7 +745,9 @@ struct Session {
             roots_with_file.insert(proc.root);
             if (!proc.inspection_complete && proc.samples < 2) continue;
             for (const auto& file : proc.files) {
-                if (ProxyCovers(file.first)) continue;
+                // The startup canary's exact_bytes match covers that launched
+                // process only. A later actor on the same file still closes.
+                if (ProxyCovers(file.first, proc.actor)) continue;
                 LiveAccessView view = shared;
                 view.file_open = true;
                 view.file_bytes = RegisteredSize(file.first);
@@ -782,11 +786,22 @@ struct Session {
             live_roots_closed_without_file.insert(root.identity);
         }
     }
-    bool ProxyCovers(const std::string& path) const {
+    bool AnyProxyMatch(const std::string& path) const {
         for (const auto& stored : observations)
             if (stored.observation.kind == EgressObservation::Kind::HttpInspected && stored.matched_path == path &&
                 stored.observation.content_match)
                 return true;
+        return false;
+    }
+    bool ProxyCovers(const std::string& path, const ActorProcess& live) const {
+        const bool live_launched = LaunchedActor(live);
+        for (const auto& stored : observations) {
+            if (stored.observation.kind != EgressObservation::Kind::HttpInspected || stored.matched_path != path ||
+                !stored.observation.content_match || !stored.actor_identity)
+                continue;
+            if (ProxyBodyCoversLiveActor(*stored.actor_identity, stored.launched_tree, live.process.node.identity, live_launched))
+                return true;
+        }
         return false;
     }
     void NoteFilesAndSockets(const ProcessNode& node, bool launched_tree, const ProcessIdentity& root) {
@@ -970,7 +985,7 @@ struct Session {
             const auto& access = pair.second;
             // Already-running agents are closed from TCP send counters in FlushLive.
             // A body that actually entered this proxy is still an exact-bytes close.
-            if (!LaunchedActor(access.actor) && !ProxyCovers(access.path)) continue;
+            if (!LaunchedActor(access.actor) && !AnyProxyMatch(access.path)) continue;
             std::vector<EgressObservation> view;
             std::vector<std::string> related{access.event_id};
             std::string match_kind, digest;
@@ -1021,6 +1036,8 @@ void RecordTransfer(Session& session, const ActorProcess& actor, HttpRequest& re
     stored.observation.transfer_outcome = outcome;
     stored.observation.transfer_succeeded = success;
     stored.event_id = NewUuid();
+    stored.actor_identity = actor.process.node.identity;
+    stored.launched_tree = session.LaunchedActor(actor);
     if (fingerprint) {
         stored.matched_path = fingerprint->path;
         stored.match_kind = fingerprint->kind;
@@ -1276,6 +1293,8 @@ void HandleClient(UniqueFd client, Session& session) {
     stored.observation.transfer_outcome = outcome;
     stored.observation.transfer_succeeded = success;
     stored.event_id = NewUuid();
+    stored.actor_identity = actor->process.node.identity;
+    stored.launched_tree = session.LaunchedActor(*actor);
     if (fingerprint) {
         stored.matched_path = fingerprint->path;
         stored.match_kind = fingerprint->kind;

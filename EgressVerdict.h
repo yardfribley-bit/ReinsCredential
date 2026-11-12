@@ -1,4 +1,5 @@
 #pragma once
+#include "Types.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -92,4 +93,9 @@ constexpr uint64_t kFlowTxSlack = 65536;
 // file is 已上传, with match basis flow_txbytes.
 LiveClose CloseLiveAccess(const LiveAccessView& view);
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path);
+
+// A proxy body match closes the process that sent it, and the launched tree
+// that sent it. A later process that opens the same file is not covered.
+bool ProxyBodyCoversLiveActor(const ProcessIdentity& proxy_actor, bool proxy_from_launched_tree,
+    const ProcessIdentity& live_actor, bool live_in_launched_tree) noexcept;
 } // namespace agentsec

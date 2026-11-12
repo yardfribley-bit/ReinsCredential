@@ -148,6 +148,17 @@ std::string DisplayBundleName(const std::string& bundle) {
     if (folded == "grok" || folded == "grok bot") return "Grok";
     return stem;
 }
+bool IsToolchainBundle(const std::string& bundle, const std::string& executable) {
+    const auto folded = Lower(bundle);
+    const auto path = Lower(executable);
+    // Xcode, including versioned Xcode_N.app, and the Python.app inside it are
+    // developer tools. They are not the desktop agent when one sits further up.
+    if (folded == "python.app" || folded == "xcode.app") return true;
+    if ((folded.rfind("xcode_", 0) == 0 || folded.rfind("xcode-", 0) == 0) && folded.size() > 10 &&
+        folded.compare(folded.size() - 4, 4, ".app") == 0)
+        return true;
+    return path.find("/contents/developer/") != std::string::npos;
+}
 void ApplyBehaviorOwner(ActorProcess& actor) {
     if (IsCollectorProcess(actor.process.node)) {
         actor.classification = "collector_self";
@@ -155,35 +166,63 @@ void ApplyBehaviorOwner(ActorProcess& actor) {
         actor.owning_agent.reset();
         return;
     }
-    // Nearest parent first. The app that contains this process wins. A toolchain
-    // ancestor such as Xcode's make is a different bundle and does not replace it.
+    // Nearest parent first. A process already inside its own .app keeps that
+    // bundle, even when a shell above it belongs to another agent. Xcode and
+    // Python.app are toolchain hops: skip them when a desktop agent is further up.
     std::vector<const ProcessNode*> upward{&actor.process.node};
     for (const auto& parent : actor.ancestors) upward.push_back(&parent.node);
-    const ProcessNode* nearest_app = nullptr;
+    auto bundle_of = [](const ProcessNode* node) -> std::optional<std::string> {
+        if (IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) return std::nullopt;
+        return OutermostAppBundle(node->executable);
+    };
+    auto highest_in = [&](const std::string& wanted, bool toolchain_ok) -> const ProcessNode* {
+        const ProcessNode* found_node = nullptr;
+        for (const auto* node : upward) {
+            auto found = bundle_of(node);
+            if (!found || *found != wanted) continue;
+            if (!toolchain_ok && IsToolchainBundle(*found, node->executable)) continue;
+            found_node = node;
+        }
+        return found_node;
+    };
+    const ProcessNode* chosen = nullptr;
     std::string bundle;
-    for (const auto* node : upward) {
-        if (IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) continue;
-        if (auto found = OutermostAppBundle(node->executable)) {
-            nearest_app = node;
-            bundle = *found;
-            break;
+    bool from_app = false;
+    if (auto self = bundle_of(&actor.process.node)) {
+        if (!IsToolchainBundle(*self, actor.process.node.executable)) {
+            bundle = *self;
+            from_app = true;
+            chosen = highest_in(bundle, false);
+            if (!chosen) chosen = &actor.process.node;
         }
     }
-    const ProcessNode* chosen = nullptr;
-    bool from_app = false;
-    if (nearest_app) {
-        from_app = true;
-        chosen = nearest_app;
+    if (!from_app) {
+        const ProcessNode* toolchain = nullptr;
+        std::string toolchain_bundle;
         for (const auto* node : upward) {
-            if (IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) continue;
-            auto found = OutermostAppBundle(node->executable);
-            if (found && *found == bundle) chosen = node;
-        }
-    } else {
-        for (auto it = upward.rbegin(); it != upward.rend(); ++it) {
-            if (IsCollectorProcess(**it) || IsAppleSystemDaemon(**it)) continue;
-            chosen = *it;
+            auto found = bundle_of(node);
+            if (!found) continue;
+            if (IsToolchainBundle(*found, node->executable)) {
+                if (!toolchain) { toolchain = node; toolchain_bundle = *found; }
+                continue;
+            }
+            bundle = *found;
+            from_app = true;
+            chosen = highest_in(bundle, false);
+            if (!chosen) chosen = node;
             break;
+        }
+        if (!from_app && toolchain) {
+            from_app = true;
+            bundle = toolchain_bundle;
+            chosen = highest_in(bundle, true);
+            if (!chosen) chosen = toolchain;
+        } else if (!from_app) {
+            for (auto it = upward.rbegin(); it != upward.rend(); ++it) {
+                if (IsCollectorProcess(**it) || IsAppleSystemDaemon(**it)) continue;
+                chosen = *it;
+                break;
+            }
         }
     }
     if (!chosen) return;
