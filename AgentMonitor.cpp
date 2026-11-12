@@ -155,21 +155,36 @@ void ApplyBehaviorOwner(ActorProcess& actor) {
         actor.owning_agent.reset();
         return;
     }
-    std::vector<const ProcessNode*> chain;
-    for (auto it = actor.ancestors.rbegin(); it != actor.ancestors.rend(); ++it) chain.push_back(&it->node);
-    chain.push_back(&actor.process.node);
-    const ProcessNode* chosen = nullptr;
+    // Nearest parent first. The app that contains this process wins. A toolchain
+    // ancestor such as Xcode's make is a different bundle and does not replace it.
+    std::vector<const ProcessNode*> upward{&actor.process.node};
+    for (const auto& parent : actor.ancestors) upward.push_back(&parent.node);
+    const ProcessNode* nearest_app = nullptr;
     std::string bundle;
-    bool from_app = false;
-    for (const auto* node : chain) {
+    for (const auto* node : upward) {
         if (IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) continue;
         if (auto found = OutermostAppBundle(node->executable)) {
-            chosen = node;
+            nearest_app = node;
             bundle = *found;
-            from_app = true;
             break;
         }
-        if (!chosen) chosen = node;
+    }
+    const ProcessNode* chosen = nullptr;
+    bool from_app = false;
+    if (nearest_app) {
+        from_app = true;
+        chosen = nearest_app;
+        for (const auto* node : upward) {
+            if (IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) continue;
+            auto found = OutermostAppBundle(node->executable);
+            if (found && *found == bundle) chosen = node;
+        }
+    } else {
+        for (auto it = upward.rbegin(); it != upward.rend(); ++it) {
+            if (IsCollectorProcess(**it) || IsAppleSystemDaemon(**it)) continue;
+            chosen = *it;
+            break;
+        }
     }
     if (!chosen) return;
     OwningAgent owner;

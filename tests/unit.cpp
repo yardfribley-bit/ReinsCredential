@@ -402,6 +402,14 @@ void AttributionTests() {
     assert(unknown_app.owning_agent->bundle == "UnknownAgent.app");
     assert(unknown_app.owning_agent->root.pid == 110);
     assert(unknown_app.owning_agent->match_reason == "outermost_app_bundle");
+    ActorProcess under_toolchain;
+    under_toolchain.process.node = Named(111, 6, 21, "/tmp/reins/UnknownAgent.app/Contents/MacOS/x", "x");
+    ProcessEntry toolchain;
+    toolchain.node = Named(21, 4, 1, "/Applications/Xcode_26.6.app/Contents/Developer/usr/bin/make", "make");
+    under_toolchain.ancestors.push_back(toolchain);
+    ApplyBehaviorOwner(under_toolchain);
+    assert(under_toolchain.owning_agent && under_toolchain.owning_agent->bundle == "UnknownAgent.app");
+    assert(under_toolchain.owning_agent->root.pid == 111);
     ActorProcess helper_chain;
     helper_chain.process.node = Named(15, 15, 14, "/bin/bash", "bash");
     auto ancestor = [](pid_t pid, pid_t ppid, uint64_t birth, const std::string& executable, const std::string& name) {

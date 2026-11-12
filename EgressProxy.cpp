@@ -882,18 +882,17 @@ struct Session {
                     auto activity = source.Inspect(node, roots, false);
                     if (activity.sensitive_files.empty()) continue;
                     auto actor = Describe(source, node);
-                    auto owner = node.identity;
                     std::string label = node.name.empty() ? node.executable : node.name;
-                    if (actor.owning_agent) {
-                        owner = actor.owning_agent->root;
-                        label = actor.owning_agent->bundle.empty() ? actor.owning_agent->name : actor.owning_agent->bundle;
-                    }
+                    if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
                     bool known = false;
-                    for (const auto& root : watched) if (root.identity == owner) known = true;
+                    // Sample the process that holds the file, plus its descendants.
+                    // The owning bundle is stored on the actor. Sampling that ancestor
+                    // would walk an unrelated toolchain tree such as Xcode's make.
+                    for (const auto& root : watched) if (root.identity == node.identity) known = true;
                     if (known) continue;
                     if (watched.size() >= 64) { tree_truncated = true; break; }
-                    watched.push_back(Root{owner, owner.pid, false});
-                    std::cerr << "egress live " << owner.pid << " " << label << "\n";
+                    watched.push_back(Root{node.identity, node.identity.pid, false});
+                    std::cerr << "egress live " << node.identity.pid << " " << label << "\n";
                 }
             } catch (const std::exception& error) {
                 std::cerr << "egress live scan failed: " << error.what() << "\n";
