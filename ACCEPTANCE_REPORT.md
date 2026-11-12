@@ -1,5 +1,26 @@
 # Agent 敏感数据读取与发送：逐功能验收报告
 
+## 2026-11-12 已运行 Agent 的流量关联（step 5）
+
+触发：启动后的金丝雀只能证明“本程序拉起的子进程，经本地代理，正文匹配且 HTTP 200”这条已上传路径。已经在跑的桌面 Agent 被写成看不到（`already_running_not_redirected`）。主人认为这没有完成：能看到的 Agent 不能停在看不到。
+
+这一步不安装 CA，不写登录钥匙串，不设置系统代理，不改 Codex、Cursor、Claude、ChatGPT 或 WorkBuddy 的配置。退出 `agent-egress` 后没有残留的 PATH、shell 或代理钩子，因为观察只在这个进程里轮询 libproc。
+
+已经在运行的 Agent 按名称或 bundle 发现，包含采集开始前就存在的进程，不限于 `--launch` 的子进程。对每个这样的进程：
+
+- 文件描述符里出现已登记文件，记为打开。打开仍不等于读入字节。
+- 同一进程上的 TCP 套接字读取对端、状态和 `tcpsi_txbytes`。第一次采样到的旧连接以当时的计数为基线，只把之后增加的字节算进这次观察；观察开始后新出现的连接从 0 起算。
+- 发往非回环地址、连接已建立，且增量不少于文件大小、不超过文件大小加 65536 字节：结论 **已上传**，依据 `flow_txbytes`。这是发送字节数能装下该文件，不是明文比对，也不是对端回执。
+- 观察开始后向非回环地址发起连接但没有建立：结论 **已尝试未成功**，依据 `flow_attempt`。
+- 进程和 TCP 计数都看全，没有上述离机发送。只发到 `127.0.0.1` 也算没有离开本机：结论 **未发现**，依据 `live_agent_observed`。
+- 描述符读不全，或文件打开期间唯一的出口是 UDP/QUIC：结论 **看不到**。不能把这句话写成未发现。
+- 进程自己连进本地代理时，仍用正文匹配。依据是 `exact_bytes`（或 JSON、Base64、gzip）。金丝雀自检保留这条路径。
+- `--launch` 拉起的进程树如果绕过代理，仍然是看不到。流量关联不套用到这棵树，避免把“本该看见明文却没看见”写成未发现。
+
+仪表盘仍读 `sensitive_access_closed`。同一进程、同一文件若先后写出多条结论，卡片保留更强的那条：已上传，然后已尝试未成功，然后看不到，然后未发现。
+
+本仓库的开发环境是 Linux，没有 libproc。这里只编译并跑了结论函数 `tests/live_flow_verdict.cpp`（`g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror`，输出 `PASS: live-agent flow verdicts`）。没有跑 `agent-egress`，没有跑 Swift 仪表盘，也没有在 Mac 上对已经运行的 Codex 或 Cursor 取样。`tests/egress_verdict.py` 增加了 `live-direct`（回环发送 → 未发现）、`live-offhost`（发往本机非回环地址 → 已上传，依据 `flow_txbytes`）、`live-attempt`（连向 203.0.113.10:443 停留在 SYN → 已尝试未成功）和原来的 `live-udp`（看不到）。这些要在 macOS 上执行。`make acceptance` 没有放宽。**总体验收：未通过。**
+
 ## 2026-11-12 真实 Agent 与假密钥验收准备（step 4）
 
 这一步增加验收程序，不安装 LaunchAgent，不修改 Codex、Cursor、WorkBuddy 的 MCP 或应用配置，不把 CA 放进钥匙串，也不读取真实的 `~/.ssh` 或 `~/.aws`。假密钥只写在临时目录：假 `.env`、假 AWS 凭据、以及带私钥头尾但正文写明不是私钥的 `fake_id_ed25519`。接收端是程序自己在 `127.0.0.1` 上起的 HTTP 服务。

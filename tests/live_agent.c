@@ -102,6 +102,25 @@ int main(int argc, char** argv) {
             recv(fd, scratch, sizeof(scratch), 0);
             close(fd);
         }
+    } else if (strcmp(mode, "attempt") == 0 && argc == 5) {
+        usleep(300000);
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) rc = 5;
+        else {
+            int flags = fcntl(fd, F_GETFL, 0);
+            if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            struct sockaddr_in address;
+            memset(&address, 0, sizeof(address));
+            address.sin_family = AF_INET;
+            address.sin_port = htons((unsigned short)atoi(argv[4]));
+            if (inet_pton(AF_INET, argv[3], &address.sin_addr) != 1) rc = 5;
+            else {
+                /* EINPROGRESS keeps a SYN_SENT socket that libproc can see. */
+                connect(fd, (struct sockaddr*)&address, sizeof(address));
+                sleep(3);
+            }
+            close(fd);
+        }
     } else if (strcmp(mode, "udp") == 0 && argc == 5) {
         usleep(300000);
         int fd = socket(AF_INET, SOCK_DGRAM, 0);

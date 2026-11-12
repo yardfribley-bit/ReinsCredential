@@ -2,6 +2,7 @@
 #include <libproc.h>
 #include <sys/sysctl.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -152,9 +153,38 @@ public:
                 std::array<char, INET6_ADDRSTRLEN> address{};
                 const bool ipv4 = in->insi_vflag & INI_IPV4;
                 const void* raw = ipv4 ? static_cast<const void*>(&in->insi_faddr.ina_46.i46a_addr4) : static_cast<const void*>(&in->insi_faddr.ina_6);
-                if (inet_ntop(ipv4 ? AF_INET : AF_INET6, raw, address.data(), static_cast<socklen_t>(address.size())))
-                    result.socket_peers.insert(std::string(ipv4 ? "" : "[") + address.data() + (ipv4 ? ":" : "]:") +
-                        std::to_string(ntohs(static_cast<uint16_t>(in->insi_fport))) + "/protocol=" + std::to_string(s.soi_protocol));
+                if (inet_ntop(ipv4 ? AF_INET : AF_INET6, raw, address.data(), static_cast<socklen_t>(address.size()))) {
+                    const auto port = ntohs(static_cast<uint16_t>(in->insi_fport));
+                    const auto peer = std::string(ipv4 ? "" : "[") + address.data() + (ipv4 ? ":" : "]:") + std::to_string(port);
+                    result.socket_peers.insert(peer + "/protocol=" + std::to_string(s.soi_protocol));
+                    SocketFlow flow;
+                    flow.destination = peer;
+                    std::array<char, INET6_ADDRSTRLEN> local_address{};
+                    const void* local_raw = ipv4 ? static_cast<const void*>(&in->insi_laddr.ina_46.i46a_addr4)
+                                                 : static_cast<const void*>(&in->insi_laddr.ina_6);
+                    std::string local = "?";
+                    if (inet_ntop(ipv4 ? AF_INET : AF_INET6, local_raw, local_address.data(), static_cast<socklen_t>(local_address.size())))
+                        local = local_address.data();
+                    flow.flow_id = std::to_string(s.soi_protocol) + "|" + local + ":" +
+                        std::to_string(ntohs(static_cast<uint16_t>(in->insi_lport))) + "|" + peer;
+                    const auto foreign = ipv4 ? ntohl(in->insi_faddr.ina_46.i46a_addr4.s_addr) : 0;
+                    const bool v4_loop = ipv4 && (foreign >> 24) == 127;
+                    const bool v6_loop = !ipv4 && peer.rfind("[::1]:", 0) == 0;
+                    const bool v4_mapped_loop = !ipv4 && peer.rfind("[::ffff:127.", 0) == 0;
+                    flow.loopback = v4_loop || v6_loop || v4_mapped_loop;
+                    if (s.soi_kind == SOCKINFO_TCP) {
+                        const auto& tcp = s.soi_proto.pri_tcp;
+                        flow.udp = false;
+                        flow.bytes_known = true;
+                        flow.tx_bytes = tcp.tcpsi_txbytes;
+                        flow.tcp_state = tcp.tcpsi_state;
+                    } else {
+                        flow.udp = s.soi_protocol == IPPROTO_UDP;
+                        flow.bytes_known = false;
+                        flow.tcp_state = -1;
+                    }
+                    result.flows.push_back(std::move(flow));
+                }
         }
         return result;
     }

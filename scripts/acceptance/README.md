@@ -44,20 +44,20 @@ Codex 需要 `codex` 已在 `PATH` 里，并且环境里已有 `OPENAI_API_KEY` 
 
 `workbuddy_manual` 在终端里才会等待。程序先起采集器和 `agent-egress --watch-live`，然后打印一条只访问临时目录、并且直连 `127.0.0.1` 的 `python3` 命令。
 
-在已经打开的 WorkBuddy 里只运行那一条命令。不要改它的 MCP、代理或证书设置。因为这个进程在采集开始前已经在跑，用户态不能把它的连接改道，期望结论是 **看不到**，并带有“已经在运行”的原因。若导出写成未发现，这一例失败。
+在已经打开的 WorkBuddy 里只运行那一条命令。不要改它的 MCP、代理或证书设置。采集器不把这个进程改道。它看文件描述符和 TCP 发送字节数。发往 `127.0.0.1` 的字节没有离开本机，期望结论是 **未发现**。若描述符读不全，或文件打开期间只有 UDP/QUIC、没有可计数的 TCP，结论才是 **看不到**。不要把看不到写成未发现，也不要因为“已经在运行”就直接写成看不到。
 
 ### 用例期望
 
 | 用例 | 谁来做 | 期望结论 | 期望所属 Agent |
 | --- | --- | --- | --- |
 | `codex_launched_upload` | 由代理启动的 Codex CLI | 已上传 | Codex |
-| `codex_already_running_not_visible` | 先启动、不走代理的 Codex CLI | 看不到 | Codex |
+| `codex_already_running_not_visible` | 先启动、不走代理的 Codex CLI，直连本机 | 未发现（回环，没有离开本机） | Codex |
 | `cursor_cli_upload` | 可脚本化的 Cursor CLI；否则按上面的手工方式 | 已上传 | Cursor |
-| `workbuddy_manual` | 你在已运行的 WorkBuddy 里执行打印出的命令 | 看不到 | WorkBuddy |
+| `workbuddy_manual` | 你在已运行的 WorkBuddy 里执行打印出的命令 | 未发现（回环，没有离开本机） | WorkBuddy |
 | `negative_read_no_send` | 替身只读假 AWS 文件，不发送 | 未发现 | 不要求产品名 |
 | `stand_in_launched_upload` | 替身，经代理发送 | 已上传 | 不要求产品名 |
 | `stand_in_direct_not_visible` | 替身，绕过代理直连 | 看不到 | 不要求产品名 |
 
-真实 Codex 在调用模型时还会有一条代理看不见字节的 API 通道。只读用例如果走 Codex，结论会是看不到，不能改记成未发现。所以“读了但不发送 → 未发现”这一例用没有其它套接字的替身，并且不算真实 Agent 通过。
+真实 Codex 在调用模型时还可能有 UDP/QUIC。文件打开期间如果只有这种数不出字节的通道、没有可计数的 TCP，结论是看不到，不能改记成未发现。已经数出 TCP 发送字节、而且没有离开本机的上传时，结论是未发现。所以“读了但不发送 → 未发现”这一例用没有其它套接字的替身，并且不算真实 Agent 通过。
 
 `make acceptance` 的失败标准没有放宽。替身通过也不等于总体验收通过。

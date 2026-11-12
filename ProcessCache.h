@@ -15,9 +15,21 @@ struct ProcessSample {
     size_t unavailable = 0;
     bool enumeration_complete = true;
 };
+// One socket observed on a process. tx_bytes is the kernel TCP send counter
+// when bytes_known is true. It is not a copy of the payload.
+struct SocketFlow {
+    std::string flow_id;
+    std::string destination;
+    bool loopback = false;
+    bool udp = false;
+    bool bytes_known = false;
+    uint64_t tx_bytes = 0;
+    int tcp_state = -1;
+};
 struct ActivitySample {
     bool identity_validated = false, descriptors_complete = true;
     std::set<std::string> sensitive_files, socket_peers;
+    std::vector<SocketFlow> flows;
 };
 class IProcessSource {
 public:

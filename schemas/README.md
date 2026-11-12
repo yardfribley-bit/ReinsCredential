@@ -31,7 +31,7 @@
 | `actor_process.owning_agent` | 稳定的所属 Agent 候选（名称、bundle、根进程身份）。采集器自身没有所属 Agent；未标注的安全工具也不是 Agent。 |
 | `chain_status: observed_chain_to_launchd` | 链条已经核对到 pid 1，但读不到 launchd 自己的启动身份。`chain_complete` 此时为 true。 |
 | `sensitive_content_delivered` / `sensitive_payload_observed` / `transfer_result` | Swift 分别显示 `DELIVER` / `SUBMIT` / `TRANSFER`；仍需联合查看 `evidence_basis`、`transfer_outcome` 和相关记录。 |
-| `upload_verdict` | `uploaded` / `attempted` / `not_found` / `not_visible`，或空字符串。Swift 显示为 `uploadVerdict`。`not_visible`（看不到）不是“已经检查过并且没有内容”。 |
+| `upload_verdict` | `uploaded` / `attempted` / `not_found` / `not_visible`，或空字符串。Swift 显示为 `uploadVerdict`。`not_visible`（看不到）不是“已经检查过并且没有内容”。已运行进程的 `flow_txbytes` 是 TCP 发送字节数关联，不是明文比对。 |
 | 未知 `type` | 保留原类型，Swift 默认显示 `OBSERVE`。不要仅凭类型字符串推断 `READ`、`WRITE` 或 `EXEC`。 |
 | `target_resource_bytes_hex` | 原始路径字节的十六进制表示。`target_resource` 遇到无效 UTF-8 会用替换字符显示；仅比较显示路径可能丢失差异。 |
 

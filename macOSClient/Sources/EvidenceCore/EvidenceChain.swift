@@ -201,7 +201,7 @@ public enum EvidenceRedaction {
 
 public enum EvidenceChainExport {
     public static let schema = "reinscredential.evidence-chain.v1"
-    public static let glossaryText = "结论用词：已上传、已尝试未成功、未发现、看不到。看不到不能写成未发现。没有出口结论表示记录里没有这四句。打开的描述符、同时出现的连接，都不是上传。原始密钥字节不包含在导出里。"
+    public static let glossaryText = "结论用词：已上传、已尝试未成功、未发现、看不到。看不到不能写成未发现。已看到的 Agent 如果没有访问或上传，结论是未发现。flow_txbytes 是同一进程上的 TCP 发送字节数，不是解密后的正文。没有出口结论表示记录里没有这四句。打开的描述符、同时出现的连接，都不是上传。原始密钥字节不包含在导出里。"
 
     public static func markdown(_ chains: [EvidenceChain], window: ClosedRange<Date>? = nil) -> String {
         EvidenceRedaction.display(renderMarkdown(select(chains, window: window), window: normalized(window)))
@@ -409,10 +409,33 @@ public enum EvidenceChainBuilder {
         var used = Set<UUID>()
         var plans: [Plan] = []
 
-        for record in records where record.sourceType == "sensitive_access_closed" && !used.contains(record.id) {
-            let expanded = expand(record, index: index)
-            plans.append(Plan(anchor: record, members: expanded.members, missing: expanded.missing, kind: .fileAccess))
+        // Several closes can describe the same process and file as the watch
+        // continues. The card shows the strongest one: 已上传, then 已尝试未成功,
+        // then 看不到, then 未发现. Weaker closes stay on that card.
+        var closingGroups: [String: [EvidenceRecord]] = [:]
+        var closingOrder: [String] = []
+        for record in records where record.sourceType == "sensitive_access_closed" {
+            let key = (identityKey(record) ?? "id:\(record.id.uuidString)") + "\n" + record.targetResource
+            if closingGroups[key] == nil { closingOrder.append(key) }
+            closingGroups[key, default: []].append(record)
+        }
+        for key in closingOrder {
+            let group = closingGroups[key] ?? []
+            guard let winner = group.max(by: { lhs, rhs in
+                let left = closingRank(lhs)
+                let right = closingRank(rhs)
+                if left != right { return left < right }
+                if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }) else { continue }
+            if used.contains(winner.id) { continue }
+            var expanded = expand(winner, index: index)
+            for other in group where other.id != winner.id && !expanded.members.contains(where: { $0.id == other.id }) {
+                expanded.members.append(other)
+            }
+            plans.append(Plan(anchor: winner, members: expanded.members, missing: expanded.missing, kind: .fileAccess))
             used.formUnion(expanded.members.map(\.id))
+            used.formUnion(group.map(\.id))
         }
 
         // A collector descriptor for the same PID, start time and path belongs
@@ -644,7 +667,8 @@ public enum EvidenceChainBuilder {
         case "egress_proxy_http_body_match", "egress_proxy_watched_http_no_match", "egress_channel_not_visible",
              "exact_bytes", "json_escaped_bytes", "base64_whole_value", "no_registered_whole_version_match",
              "socket_peer_without_payload", "tls_intercept_handshake_failed", "tls_intercept_body_unreadable",
-             "opaque_tunnel_not_inspected", "live_agent_tree_not_attached", "tcp_4tuple_not_matched":
+             "opaque_tunnel_not_inspected", "live_agent_tree_not_attached", "tcp_4tuple_not_matched",
+             "flow_txbytes", "flow_attempt", "live_agent_observed", "observation_impossible":
             return true
         default:
             return basis.hasPrefix("gzip:")
@@ -728,6 +752,18 @@ public enum EvidenceChainBuilder {
             }
             if basis == "socket_peer_without_payload" && !outcome.contains("udp_or_quic") {
                 add("只看到了套接字对端，没有看到发送的字节。")
+            }
+            if basis == "flow_txbytes" || outcome.contains("flow_txbytes") {
+                add("同一进程打开已登记文件之后，发往非回环地址的 TCP 发送字节数与文件大小相符。没有解密 TLS，没有安装 CA，也没有系统代理。")
+            }
+            if basis == "flow_attempt" || outcome.contains("flow_attempt") {
+                add("看到了文件打开，以及一次没有把不少于文件大小的字节送出本机的外连。")
+            }
+            if basis == "live_agent_observed" || outcome.contains("live_agent_observed") {
+                add("这个 Agent 的进程和 TCP 发送字节数都已查看。没有看到离开本机的上传。")
+            }
+            if basis == "observation_impossible" || outcome.contains("descriptors_or_flows_incomplete") || outcome == "agent_not_visible" {
+                add("这个进程的描述符或流量没有看全，不能写成未发现。")
             }
             if outcome == "egress_not_watched" {
                 add("这棵进程树的明文出口当时不在本地代理的查看范围内。")
@@ -903,6 +939,10 @@ public enum EvidenceChainBuilder {
         let bytes = members.map(\.count).filter { $0 > 0 }.max()
         switch verdict {
         case .notFound:
+            let flowNote = members.contains { $0.transferOutcome.contains("live_agent_observed") || $0.evidenceBasis == "live_agent_observed" }
+            if flowNote {
+                return EvidenceChainLink(kind: .payload, presence: .present, value: "没有看到离开本机的上传", note: "进程和 TCP 发送字节数已查看。这不是看不到。打开的描述符本身不是上传。")
+            }
             return EvidenceChainLink(kind: .payload, presence: .present, value: "没有匹配到已登记内容", note: "这是看过的出口里没有内容，不是看不到。")
         case .notVisible:
             return EvidenceChainLink(kind: .payload, presence: .missing, value: "缺失", note: "这个通道的字节看不到，不能写成没有匹配，也不能写成未发现。")
@@ -927,12 +967,24 @@ public enum EvidenceChainBuilder {
         let outcomeNote = outcome.isEmpty ? "" : "传输结果：\(outcome)。"
         switch verdict {
         case .uploaded:
+            if outcome.contains("flow_txbytes") {
+                return EvidenceChainLink(kind: .verdict, presence: .present, value: verdict.chineseLabel,
+                                         note: "同一进程在打开已登记文件之后，向外的 TCP 发送字节数不少于文件大小。这是流量关联，不是解密后的正文，也不是对端回执。\(outcomeNote)")
+            }
             return EvidenceChainLink(kind: .verdict, presence: .present, value: verdict.chineseLabel,
                                      note: "请求体与已登记内容匹配，并且代理看到了成功的 HTTP 结果。这不是对端的独立回执。\(outcomeNote)")
         case .attempted:
+            if outcome.contains("flow_attempt") {
+                return EvidenceChainLink(kind: .verdict, presence: .present, value: verdict.chineseLabel,
+                                         note: "看到了文件打开，以及一次没有完成的外连。没有把不少于文件大小的字节送出本机。\(outcomeNote)")
+            }
             return EvidenceChainLink(kind: .verdict, presence: .present, value: verdict.chineseLabel,
                                      note: "请求体与已登记内容匹配，但这次传输没有成功。\(outcomeNote)")
         case .notFound:
+            if outcome.contains("live_agent_observed") {
+                return EvidenceChainLink(kind: .verdict, presence: .present, value: verdict.chineseLabel,
+                                         note: "这个 Agent 已被观察到。没有看到离开本机的上传。这不是看不到。\(outcomeNote)")
+            }
             return EvidenceChainLink(kind: .verdict, presence: .present, value: verdict.chineseLabel,
                                      note: "已查看的出口里没有已登记内容。这句话不覆盖没有被检查的通道。\(outcomeNote)")
         case .notVisible:
@@ -945,6 +997,16 @@ public enum EvidenceChainBuilder {
         case .unrecognized:
             return EvidenceChainLink(kind: .verdict, presence: .unproven, value: verdict.chineseLabel,
                                      note: "记录里的结论代码是 \(code)。不会把它写成未发现或看不到。")
+        }
+    }
+
+    private static func closingRank(_ record: EvidenceRecord) -> Int {
+        switch record.uploadVerdict {
+        case "uploaded": return 4
+        case "attempted": return 3
+        case "not_visible": return 2
+        case "not_found": return 1
+        default: return 0
         }
     }
 

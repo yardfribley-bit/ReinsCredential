@@ -57,15 +57,16 @@ def sample_process(pid, seconds):
 
 
 class Server:
-    def __init__(self, status=200, raw=False, tls_cert=None, tls_key=None, accept_timeout=15):
+    def __init__(self, status=200, raw=False, tls_cert=None, tls_key=None, accept_timeout=15, bind_host="127.0.0.1"):
         self.status = status
         self.raw = raw
         self.tls_cert = tls_cert
         self.tls_key = tls_key
+        self.bind_host = bind_host
         self.box = {}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("127.0.0.1", 0))
+        self.sock.bind((bind_host, 0))
         self.sock.listen(1)
         self.sock.settimeout(accept_timeout)
         self.port = self.sock.getsockname()[1]
@@ -140,6 +141,21 @@ class Server:
         self.thread.join(timeout=5)
 
 
+def routable_ip():
+    """Source address the stack would use for an off-host packet. Loopback does not count."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("192.0.2.1", 9))
+        address = sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sock.close()
+    if address.startswith("127."):
+        return None
+    return address
+
+
 def load_records(path):
     records = []
     text = path.read_text()
@@ -192,9 +208,22 @@ def assert_case(mode, expected, records, receipt):
     if len(closed) != 1:
         raise SystemExit(f"{mode} expected one access close, got {len(closed)}: {redact(json.dumps(records))}")
     record = closed[0]
+    return finish_close(mode, expected, record, records, receipt)
+
+
+def assert_live_case(mode, expected, records, receipt, file_name):
+    named = [record for record in records if record["type"] == "sensitive_access_closed" and file_name in (record.get("target_resource") or "")]
+    if len(named) < 1:
+        raise SystemExit(f"{mode} expected a close for {file_name}, got {redact(json.dumps(records))}")
+    rank = {"uploaded": 4, "attempted": 3, "not_visible": 2, "not_found": 1}
+    named.sort(key=lambda record: rank.get(record.get("upload_verdict"), 0))
+    return finish_close(mode, expected, named[-1], records, receipt)
+
+
+def finish_close(mode, expected, record, records, receipt):
     if record["upload_verdict"] != expected:
         raise SystemExit(f"{mode} verdict {record['upload_verdict']} != {expected}\n{redact(json.dumps(record))}")
-    if not record["destination"] or not record["transfer_outcome"]:
+    if not record["transfer_outcome"] or (not record["destination"] and "live_agent_observed_no_" not in record["transfer_outcome"]):
         raise SystemExit(f"{mode} missing destination or transfer_outcome: {redact(json.dumps(record))}")
     if not record["summary"].startswith(LABELS[expected]):
         raise SystemExit(f"{mode} summary does not start with {LABELS[expected]}: {record['summary']}")
@@ -238,13 +267,30 @@ def assert_case(mode, expected, records, receipt):
         raise SystemExit(f"{mode} was not inspected as TLS: {record['detail']}")
     if mode == "https-pinned" and "upstream_http_2xx" in record["transfer_outcome"]:
         raise SystemExit("pinned TLS was treated as a successful inspected upload")
-    if mode in ("live-direct", "live-proxy", "live-udp") and "already_running_not_redirected" not in record["detail"]:
-        raise SystemExit(f"{mode} detail does not explain the live tree: {record['detail']}")
+    if mode == "live-proxy" and "live_agent_connected_to_proxy" not in record["detail"]:
+        raise SystemExit(f"{mode} detail does not say the live agent connected itself: {record['detail']}")
     if mode == "live-udp" and "udp_or_quic" not in record["transfer_outcome"]:
         raise SystemExit(f"udp outcome {record['transfer_outcome']}")
-    if mode == "live-direct" and "socket_body_not_visible" not in record["transfer_outcome"]:
-        raise SystemExit(f"live direct outcome {record['transfer_outcome']}")
-    if expected == "uploaded" and "upstream_http_2xx" not in record["transfer_outcome"]:
+    if mode == "live-direct":
+        if "loopback_not_off_host" not in record["transfer_outcome"]:
+            raise SystemExit(f"live direct outcome {record['transfer_outcome']}")
+        if record["evidence_basis"] != "live_agent_observed":
+            raise SystemExit(f"live direct basis {record['evidence_basis']}")
+        if MARKER not in receipt.get("data", b""):
+            raise SystemExit("live direct receiver did not get the synthetic bytes; the observed case was not real")
+    if mode == "live-offhost":
+        if record["evidence_basis"] != "flow_txbytes":
+            raise SystemExit(f"offhost basis {record['evidence_basis']}")
+        if "left_host" not in record["transfer_outcome"] or "match=flow_txbytes" not in record["detail"]:
+            raise SystemExit(f"offhost outcome {record['transfer_outcome']} detail {record['detail']}")
+        if MARKER not in receipt.get("data", b""):
+            raise SystemExit("offhost receiver did not get the synthetic bytes")
+    if mode == "live-attempt":
+        if record["evidence_basis"] != "flow_attempt":
+            raise SystemExit(f"attempt basis {record['evidence_basis']}")
+        if "203.0.113.10" not in record["destination"]:
+            raise SystemExit(f"attempt destination {record['destination']}")
+    if expected == "uploaded" and mode != "live-offhost" and "upstream_http_2xx" not in record["transfer_outcome"]:
         raise SystemExit(f"uploaded outcome {record['transfer_outcome']}")
     if mode in ("plaintext", "json", "base64", "gzip", "bypass", "fail500", "noopen", "https", "https-json", "https-fail", "live-proxy", "live-direct"):
         if not receipt or MARKER.split(b"\n")[0] not in receipt["data"] and mode != "base64" and mode != "gzip":
@@ -369,27 +415,41 @@ def one_case(directory, mode, measure=False, ca=None):
 
 def live_case(directory, mode, binary, secret):
     log = directory / f"{mode}.jsonl"
-    server = Server(accept_timeout=8) if mode != "live-udp" else None
+    server = None
+    dummy = None
+    host = "127.0.0.1"
+    port = 0
     if mode == "live-udp":
         dummy = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         dummy.bind(("127.0.0.1", 0))
         port = dummy.getsockname()[1]
+    elif mode == "live-attempt":
+        host = "203.0.113.10"
+        port = 443
+    elif mode == "live-offhost":
+        host = routable_ip()
+        if not host:
+            return "skipped"
+        server = Server(accept_timeout=10, bind_host="0.0.0.0")
+        port = server.port
     else:
+        server = Server(accept_timeout=10)
         port = server.port
     port_file = directory / f"{mode}.port"
+    duration = "8" if mode == "live-proxy" else "6"
     if mode == "live-proxy":
         agent = subprocess.Popen([str(binary), "proxy", str(secret), str(port_file), server.url("/upload")])
         time.sleep(0.3)
         proc = subprocess.Popen(
-            [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "8",
+            [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", duration,
              "--sample-ms", "40", "--port-file", str(port_file)],
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
-        action = "direct" if mode == "live-direct" else "udp"
-        agent = subprocess.Popen([str(binary), action, str(secret), "127.0.0.1", str(port)])
+        action = {"live-direct": "direct", "live-offhost": "direct", "live-udp": "udp", "live-attempt": "attempt"}[mode]
+        agent = subprocess.Popen([str(binary), action, str(secret), host, str(port)])
         time.sleep(0.2)
         proc = subprocess.Popen(
-            [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "4",
+            [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", duration,
              "--sample-ms", "40"],
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     _out, err = finish(proc)
@@ -397,21 +457,21 @@ def live_case(directory, mode, binary, secret):
         agent.wait(timeout=5)
     except subprocess.TimeoutExpired:
         agent.kill()
+    if dummy:
+        dummy.close()
     receipt = {"port": port, "data": b"", "error": None}
     if server:
         server.join()
         receipt["data"] = server.box.get("data", b"")
         receipt["error"] = server.box.get("error")
     records = load_records(log)
+    expected = {"live-proxy": "uploaded", "live-direct": "not_found", "live-udp": "not_visible",
+                "live-offhost": "uploaded", "live-attempt": "attempted"}[mode]
     try:
-        kind = assert_case(mode, {"live-proxy": "uploaded", "live-direct": "not_visible", "live-udp": "not_visible"}[mode],
-                           records, receipt)
+        kind = assert_live_case(mode, expected, records, receipt, secret.name)
     except SystemExit:
         sys.stderr.write(redact(err))
         raise
-    closed = next(record for record in records if record["type"] == "sensitive_access_closed")
-    if secret.name not in closed["target_resource"]:
-        raise SystemExit(f"{mode} target {closed['target_resource']}")
     return kind
 
 
@@ -456,13 +516,20 @@ def main():
                 fn += 1
         binary = directory / "codex"
         subprocess.check_call(["/usr/bin/clang", "-O2", "-o", str(binary), str(ROOT / "tests/live_agent.c")])
-        for mode in ("live-proxy", "live-direct", "live-udp"):
+        for mode in ("live-proxy", "live-direct", "live-udp", "live-offhost", "live-attempt"):
             kind = live_case(directory, mode, binary, secret)
+            if kind == "skipped":
+                print(f"SKIP {mode} no routable address")
+                continue
             if kind == "uploaded":
                 upload_tp += 1
+            elif kind == "attempted":
+                attempted_tp += 1
             elif kind == "not_visible":
                 tn += 1
                 content_unseen += 1
+            elif kind == "not_found":
+                tn += 1
             else:
                 fn += 1
     # False positives and false negatives are assertion failures above. A passed
