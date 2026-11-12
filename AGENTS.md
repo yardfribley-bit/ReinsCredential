@@ -33,6 +33,8 @@ mean complete agent discovery or exfiltration detection has been achieved.
 | Evidence writer | `EvidenceStore.h/.cpp`: schema, JSON escaping, admission and persistence |
 | Explicit content channel | `ContentGateway.cpp`, `ContentMatcher.cpp`: opt-in delivery/transfer evidence |
 | Launched-tree egress | `EgressProxy.cpp`, `EgressVerdict.cpp`, `TlsIntercept.cpp`: local HTTP proxy, optional HTTPS inspection, live-agent watching, fingerprints, honest upload verdicts |
+| Evidence-chain export | `macOSClient/Sources/ChainExport/main.swift`: JSONL to the dashboard's evidence-chain JSON |
+| Real-agent acceptance | `scripts/acceptance/real_agents.sh`: fake secrets, local sink, chain checks. Does not install or edit agent configs |
 | Native client | `macOSClient/Package.swift`: EvidenceCore / RuntimeCore / ReinsDashboardApp / ReinsRuntime |
 | Client model | `macOSClient/Sources/EvidenceCore/Models/Evidence.swift`: backend-to-UI decoding |
 | Client input | `EvidenceLogReader.swift`: bounded, read-only JSONL snapshot importer |
@@ -85,6 +87,9 @@ macOSClient/scripts/build-app.sh --arch arm64 --arch x86_64
 macOSClient/scripts/package-local.sh
 # Real collector + isolated runtime integration; does not install a LaunchAgent
 python3 macOSClient/scripts/runtime-check.py
+
+# Fake-secret acceptance harness. CI mode runs stand-ins; owner mode needs approval.
+scripts/acceptance/real_agents.sh --mode prepare
 ```
 
 `make acceptance` deliberately returns failure while full behavior acceptance

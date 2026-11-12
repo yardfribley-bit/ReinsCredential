@@ -1,5 +1,40 @@
 # Agent 敏感数据读取与发送：逐功能验收报告
 
+## 2026-11-12 真实 Agent 与假密钥验收准备（step 4）
+
+这一步增加验收程序，不安装 LaunchAgent，不修改 Codex、Cursor、WorkBuddy 的 MCP 或应用配置，不把 CA 放进钥匙串，也不读取真实的 `~/.ssh` 或 `~/.aws`。假密钥只写在临时目录：假 `.env`、假 AWS 凭据、以及带私钥头尾但正文写明不是私钥的 `fake_id_ed25519`。接收端是程序自己在 `127.0.0.1` 上起的 HTTP 服务。
+
+采集器使用 `--no-default-sensitive`，只监视这个临时目录。`agent-egress` 负责出口结论。证据链 JSON 由 `chain-export` 生成，和仪表盘用同一个 `EvidenceChainExport`。检查三件事：所属 Agent、四句结论里的那一句、导出和日志里没有假密钥原文。
+
+出口代理在记下打开文件的进程时，会沿 libproc 实际返回的父进程往上走，这样子工具的结论卡片能写上所属 Agent。父进程读不到就保持缺失，不按时间挑选。同一 PID、启动时间和路径上的描述符观测并进关闭卡片；别的进程不并。
+
+替身 `stand_in_agent.py` 不是桌面 Agent。它的通过不能写成真实 Agent 通过。真实 Codex 调用模型时还有一条看不见字节的 API 通道，所以“读了但不发送 → 未发现”用没有其它套接字的替身来测。若把这种 Codex 会话记成未发现，就是把看不到写成了未发现。
+
+| 用例 | 期望 | 本次实际 | 计入真实 Agent |
+| --- | --- | --- | --- |
+| `codex_launched_upload` | Codex，已上传，打开被看到，目的地是本机 sink | 未执行。需要主人同意，或 CI 上同时有 Codex 可执行文件和 API key secret | 否 |
+| `codex_already_running_not_visible` | Codex，看不到，并写明已经在运行、没有改道 | 未执行。同上 | 否 |
+| `cursor_cli_upload` | Cursor，已上传。没有可脚本化 CLI 时不代跑 | 未执行。CI 上没有 Cursor CLI 和 `CURSOR_API_KEY` 时保持未执行 | 否 |
+| `workbuddy_manual` | 已运行的 WorkBuddy，看不到，不能写成未发现 | 未执行。手工步骤在 `scripts/acceptance/README.md` | 否 |
+| `negative_read_no_send` | 替身只读假 AWS 文件，未发现，并且看到打开 | 见 CI 替身结果。本环境是 Linux，没有跑采集器 | 否 |
+| `stand_in_launched_upload` | 替身经代理发送，已上传 | 见 CI 替身结果 | 否 |
+| `stand_in_direct_not_visible` | 替身绕过代理直连，看不到，不能写成未发现 | 见 CI 替身结果。这不是“已经在运行的 Codex” | 否 |
+
+本仓库这次提交时所在的环境不是主人的 Intel Mac，真实 Agent 没有执行。`scripts/acceptance/self_check.py` 只检查假密钥的形状、结论检查器，以及 prepare 模式不会把验收写成通过。
+
+GitHub Actions `macos-latest` 运行 `scripts/acceptance/real_agents.sh --mode ci`。有 Codex 可执行文件且 secret `OPENAI_API_KEY` 或 `CODEX_API_KEY` 非空时才启动 Codex；否则跳过真实用例，只跑替身。结果在 workflow 日志和 artifact `real-agent-acceptance`。这一节在 CI 跑完后补上 run id 和替身的实际结论。
+
+主人在自己的 Intel Mac 上先读 `scripts/acceptance/README.md`，再运行：
+
+```sh
+scripts/acceptance/real_agents.sh --mode prepare
+scripts/acceptance/real_agents.sh --mode owner --i-approve-real-agents
+```
+
+第二条才会启动本机已经安装的 Codex 或 Cursor。WorkBuddy 只在终端里按打印出的命令手工做。不要从 Agent 自己的终端里跑这个脚本。
+
+`make acceptance` 仍然失败。**总体验收：未通过。**
+
 ## 2026-11-11 证据链卡片与导出（step 3）
 
 这一步只改 Mac 应用里已经采集到的事件怎么呈现和导出。它不增加传感器，也不把一条没看到的通道补成看过。

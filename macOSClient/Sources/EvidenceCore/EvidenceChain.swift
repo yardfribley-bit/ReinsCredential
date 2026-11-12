@@ -174,6 +174,11 @@ public enum EvidenceRedaction {
         "SYNTHETIC_EGRESS_SECRET_v2_0123456789abcdef",
         "SYNTHETIC_CREDENTIAL_NOT_A_SECRET"
     ]
+    /// Obvious fake-secret markers used by the acceptance harness. Real key material
+    /// is not listed here; the harness also refuses to read those files.
+    private static let fakeMarkers = try? NSRegularExpression(
+        pattern: "(?i)reins-fake-[a-z0-9_-]+|AKIAFAKE[A-Z0-9]*|FAKE-NOT-A-REAL[-A-Z0-9]*"
+    )
 
     /// Hides assignment-style secret values and the repo's published synthetic secrets.
     /// Hashes and paths are kept.
@@ -184,8 +189,13 @@ public enum EvidenceRedaction {
         for literal in literals {
             text = text.replacingOccurrences(of: literal, with: "[已省略]")
         }
-        let range = NSRange(text.startIndex..., in: text)
-        return assignment.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1[已省略]")
+        var range = NSRange(text.startIndex..., in: text)
+        text = assignment.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1[已省略]")
+        if let fakeMarkers {
+            range = NSRange(text.startIndex..., in: text)
+            text = fakeMarkers.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "[已省略]")
+        }
+        return text
     }
 }
 
@@ -386,9 +396,10 @@ public struct ExportedChainLink: Codable, Equatable, Sendable {
 }
 
 /// One sensitive-file access, or one transfer that never showed an open.
-/// Joins explicit `related_event_ids` and, for unclosed descriptor observations
-/// only, the same PID plus start time plus path. It does not infer an actor
-/// from time, and it does not relabel 看不到 as 未发现.
+/// Joins explicit `related_event_ids`. A descriptor with the same PID, start
+/// time and path is attached to that closing card. Other unclosed descriptors
+/// group by the same identity and path. It does not infer an actor from time,
+/// and it does not relabel 看不到 as 未发现.
 public enum EvidenceChainBuilder {
     public static func chains(from records: [EvidenceRecord]) -> [EvidenceChain] {
         var index: [String: EvidenceRecord] = [:]
@@ -404,7 +415,23 @@ public enum EvidenceChainBuilder {
             used.formUnion(expanded.members.map(\.id))
         }
 
-        let descriptors = records.filter { isDescriptor($0) && !used.contains($0.id) }
+        // A collector descriptor for the same PID, start time and path belongs
+        // on the closing card. A different process is left alone.
+        var descriptors: [EvidenceRecord] = []
+        for record in records where isDescriptor(record) && !used.contains(record.id) {
+            let matches = plans.indices.filter { index in
+                let plan = plans[index]
+                let sameActor = sameIdentity(record, plan.anchor) || plan.members.contains(where: { sameIdentity(record, $0) })
+                guard plan.kind == .fileAccess, sameActor else { return false }
+                return filePath(plan.anchor, plan.members) == record.targetResource && !record.targetResource.isEmpty
+            }
+            if matches.count == 1 {
+                plans[matches[0]].members.append(record)
+                used.insert(record.id)
+            } else {
+                descriptors.append(record)
+            }
+        }
         let grouped = Dictionary(grouping: descriptors) { descriptorKey($0) }
         for group in grouped.values {
             let ordered = group.sorted(by: earlier)
@@ -575,6 +602,11 @@ public enum EvidenceChainBuilder {
     private static func descriptorKey(_ record: EvidenceRecord) -> String {
         let identity = identityKey(record) ?? "solo:\(record.id.uuidString.lowercased())"
         return identity + "\n" + record.targetResource
+    }
+
+    private static func sameIdentity(_ lhs: EvidenceRecord, _ rhs: EvidenceRecord) -> Bool {
+        guard let left = identityKey(lhs), let right = identityKey(rhs) else { return false }
+        return left == right
     }
 
     private static func identityKey(_ record: EvidenceRecord) -> String? {

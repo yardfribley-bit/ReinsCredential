@@ -69,6 +69,38 @@ final class EvidenceChainTests: XCTestCase {
         XCTAssertFalse(chain.payloadSHA256.contains("synthetic-value"))
     }
 
+    func testSameIdentityDescriptorJoinsTheClosingCard() throws {
+        let reader = node(pid: 5202, ppid: 5201, name: "python3", path: "/usr/bin/python3", start: 1_700_000_500)
+        let close = event(id: 11, type: "sensitive_access_closed", path: "/synthetic/demo/fake.env",
+                          tree: [reader], basis: "egress_proxy_http_body_match",
+                          destination: "http://127.0.0.1:9/ingest",
+                          outcome: "upstream_http_2xx",
+                          verdict: "uploaded", hash: hash("cd"),
+                          detail: "match=exact_bytes;raw_bytes_not_stored")
+        let monitor = event(id: 12, type: "sensitive_fd_observed", path: "/synthetic/demo/fake.env",
+                            tree: [reader], agent: "Codex", bundle: "Codex.app", basis: "fd_observed",
+                            detail: "descriptor_observed;bytes_read_unproven;not_an_upload")
+        let other = event(id: 13, type: "sensitive_fd_observed", path: "/synthetic/demo/fake.env",
+                          tree: [node(pid: 5299, ppid: 1, name: "other", path: "/usr/bin/other", start: 1_700_000_900)],
+                          basis: "fd_observed")
+        let chains = EvidenceChainBuilder.chains(from: [close, monitor, other])
+        let joined = try XCTUnwrap(chains.first { $0.memberIDs.contains(close.id) })
+        XCTAssertTrue(joined.memberIDs.contains(monitor.id))
+        XCTAssertFalse(joined.memberIDs.contains(other.id))
+        XCTAssertEqual(joined.owningAgentName, "Codex")
+        XCTAssertEqual(joined.verdictLabel, "已上传")
+        XCTAssertEqual(chains.filter { $0.filePath == "/synthetic/demo/fake.env" }.count, 2)
+    }
+
+    func testExportOmitsFakeAcceptanceMarkers() {
+        let marker = "reins-fake-env-NOT-A-REAL-SECRET-7f3a9c2e18b04d"
+        let hidden = EvidenceRedaction.display("note \(marker) AKIAFAKEACCEPTANCEONLY0001 FAKE-NOT-A-REAL-KEY")
+        XCTAssertFalse(hidden.contains(marker))
+        XCTAssertFalse(hidden.contains("AKIAFAKE"))
+        XCTAssertFalse(hidden.contains("FAKE-NOT-A-REAL"))
+        XCTAssertTrue(hidden.contains("[已省略]"))
+    }
+
     func testBackendRelatedIDsJoinWithoutInventingAMissingOpen() throws {
         let openID = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAA1")!
         let closeID = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAA2")!

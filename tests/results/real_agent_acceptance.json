@@ -1,0 +1,195 @@
+{
+  "cases": [
+    {
+      "actual": {
+        "channel_mentions_already_running": false,
+        "destination_is_loopback": false,
+        "executed": false,
+        "open_observed": false,
+        "owning_agent": "",
+        "reason": "prepared, not executed; owner approval required",
+        "sink_sha256_matched": null,
+        "status": "not_executed",
+        "verdict": "",
+        "verdict_label": ""
+      },
+      "counts_as_real_agent": true,
+      "executor": "codex",
+      "expected": {
+        "already_running_reason": false,
+        "open_observed": true,
+        "owning_agent": "Codex",
+        "verdict": "uploaded",
+        "verdict_label": "已上传"
+      },
+      "id": "codex_launched_upload",
+      "passed": false
+    },
+    {
+      "actual": {
+        "channel_mentions_already_running": false,
+        "destination_is_loopback": false,
+        "executed": false,
+        "open_observed": false,
+        "owning_agent": "",
+        "reason": "prepared, not executed; owner approval required",
+        "sink_sha256_matched": null,
+        "status": "not_executed",
+        "verdict": "",
+        "verdict_label": ""
+      },
+      "counts_as_real_agent": true,
+      "executor": "codex",
+      "expected": {
+        "already_running_reason": true,
+        "open_observed": true,
+        "owning_agent": "Codex",
+        "verdict": "not_visible",
+        "verdict_label": "看不到"
+      },
+      "id": "codex_already_running_not_visible",
+      "passed": false
+    },
+    {
+      "actual": {
+        "channel_mentions_already_running": false,
+        "destination_is_loopback": false,
+        "executed": false,
+        "open_observed": false,
+        "owning_agent": "",
+        "reason": "prepared, not executed; owner approval required",
+        "sink_sha256_matched": null,
+        "status": "not_executed",
+        "verdict": "",
+        "verdict_label": ""
+      },
+      "counts_as_real_agent": true,
+      "executor": "cursor",
+      "expected": {
+        "already_running_reason": false,
+        "open_observed": true,
+        "owning_agent": "Cursor",
+        "verdict": "uploaded",
+        "verdict_label": "已上传"
+      },
+      "id": "cursor_cli_upload",
+      "passed": false
+    },
+    {
+      "actual": {
+        "channel_mentions_already_running": false,
+        "destination_is_loopback": false,
+        "executed": false,
+        "open_observed": false,
+        "owning_agent": "",
+        "reason": "manual; WorkBuddy is not started by this harness, and its settings are not modified.",
+        "sink_sha256_matched": null,
+        "status": "not_executed",
+        "verdict": "",
+        "verdict_label": ""
+      },
+      "counts_as_real_agent": true,
+      "executor": "workbuddy",
+      "expected": {
+        "already_running_reason": true,
+        "open_observed": true,
+        "owning_agent": "WorkBuddy",
+        "verdict": "not_visible",
+        "verdict_label": "看不到"
+      },
+      "id": "workbuddy_manual",
+      "passed": false
+    },
+    {
+      "actual": {
+        "channel_mentions_already_running": false,
+        "destination_is_loopback": false,
+        "executed": false,
+        "open_observed": false,
+        "owning_agent": "",
+        "reason": "stand-in; not executed in prepare mode",
+        "sink_sha256_matched": null,
+        "status": "not_executed",
+        "verdict": "",
+        "verdict_label": ""
+      },
+      "counts_as_real_agent": false,
+      "executor": "stand-in",
+      "expected": {
+        "already_running_reason": false,
+        "open_observed": true,
+        "owning_agent": "",
+        "verdict": "not_found",
+        "verdict_label": "未发现"
+      },
+      "id": "negative_read_no_send",
+      "passed": false
+    },
+    {
+      "actual": {
+        "channel_mentions_already_running": false,
+        "destination_is_loopback": false,
+        "executed": false,
+        "open_observed": false,
+        "owning_agent": "",
+        "reason": "stand-in; not executed in prepare mode",
+        "sink_sha256_matched": null,
+        "status": "not_executed",
+        "verdict": "",
+        "verdict_label": ""
+      },
+      "counts_as_real_agent": false,
+      "executor": "stand-in",
+      "expected": {
+        "already_running_reason": false,
+        "open_observed": true,
+        "owning_agent": "",
+        "verdict": "uploaded",
+        "verdict_label": "已上传"
+      },
+      "id": "stand_in_launched_upload",
+      "passed": false
+    },
+    {
+      "actual": {
+        "channel_mentions_already_running": false,
+        "destination_is_loopback": false,
+        "executed": false,
+        "open_observed": false,
+        "owning_agent": "",
+        "reason": "stand-in; not executed in prepare mode",
+        "sink_sha256_matched": null,
+        "status": "not_executed",
+        "verdict": "",
+        "verdict_label": ""
+      },
+      "counts_as_real_agent": false,
+      "executor": "stand-in",
+      "expected": {
+        "already_running_reason": false,
+        "open_observed": true,
+        "owning_agent": "",
+        "verdict": "not_visible",
+        "verdict_label": "看不到"
+      },
+      "id": "stand_in_direct_not_visible",
+      "passed": false
+    }
+  ],
+  "date": "2026-11-12",
+  "machine": "x86_64",
+  "mode": "prepare",
+  "notes": [
+    "Fake secrets are created only in a temporary directory and deleted afterwards.",
+    "The sink is http://127.0.0.1 and is started by this process.",
+    "agent-monitor is started with --no-default-sensitive so ~/.ssh and ~/.aws are not watched.",
+    "No CA is installed and no MCP or client config is written.",
+    "A stand-in result does not count as real-agent acceptance.",
+    "WorkBuddy is not started by this harness, and its settings are not modified.\nOn the owner Mac, after reading scripts/acceptance/README.md:\n  scripts/acceptance/real_agents.sh --mode owner --i-approve-real-agents --only workbuddy_manual\nThe command prints a temp directory and a 127.0.0.1 sink. In the already-running\nWorkBuddy session, run only the printed python3 command. It reads one fake file\nin that temp directory and POSTs it straight to the sink, not through the proxy.\nExpected chain: owning agent WorkBuddy, verdict 看不到, with the already-running\nreason. 未发现 would be a failure. Do not point WorkBuddy at ~/.ssh or ~/.aws."
+  ],
+  "overall_acceptance": "not_passed",
+  "platform": "Linux-6.12.113+-x86_64-with-glibc2.39",
+  "real_agent_acceptance": false,
+  "schema": "reinscredential.real-agent-acceptance.v1",
+  "stand_in_is_not_real_agent_acceptance": true
+}

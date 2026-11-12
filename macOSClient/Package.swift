@@ -8,12 +8,14 @@ let package = Package(
         .library(name: "EvidenceCore", targets: ["EvidenceCore"]),
         .library(name: "RuntimeCore", targets: ["RuntimeCore"]),
         .executable(name: "ReinsDashboard", targets: ["ReinsDashboardApp"]),
-        .executable(name: "ReinsRuntime", targets: ["ReinsRuntime"])
+        .executable(name: "ReinsRuntime", targets: ["ReinsRuntime"]),
+        .executable(name: "chain-export", targets: ["ChainExport"])
     ],
     targets: [
         .target(name: "EvidenceCore"),
         .target(name: "RuntimeCore"),
         .executableTarget(name: "ReinsRuntime", dependencies: ["RuntimeCore"]),
+        .executableTarget(name: "ChainExport", dependencies: ["EvidenceCore"]),
         .executableTarget(name: "ReinsDashboardApp", dependencies: ["EvidenceCore", "RuntimeCore"]),
         .testTarget(name: "EvidenceCoreTests", dependencies: ["EvidenceCore"]),
         .testTarget(name: "RuntimeCoreTests", dependencies: ["RuntimeCore"]),

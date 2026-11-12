@@ -411,14 +411,62 @@ std::vector<pid_t> ChildPids(pid_t parent) {
     buffer.resize(std::min(buffer.size(), static_cast<size_t>(got) / sizeof(pid_t)));
     return buffer;
 }
-ActorProcess Describe(const ProcessNode& node) {
+// The process holding the descriptor is often a tool inside an agent tree.
+// Walk the parents that libproc actually returns so owning_agent names that
+// agent. A missing parent stays missing; nothing is chosen by time.
+ActorProcess Describe(IProcessSource& source, const ProcessNode& node) {
     ActorProcess actor;
     actor.process.node = node;
     actor.process.state = ProcessState::Observed;
     actor.process.first_seen_us = UnixMicros();
     actor.process.last_seen_us = actor.process.first_seen_us;
     actor.chain_complete = false;
-    actor.chain_status = "single_process_socket_owner";
+    actor.chain_status = "missing_parent";
+    const auto birth = [](const ProcessIdentity& id) {
+        return std::make_pair(id.start_seconds, id.start_microseconds);
+    };
+    auto finish_root = [&](const ProcessNode& current) {
+        if (current.identity.pid == 1 || current.ppid == 0) {
+            actor.chain_complete = true;
+            actor.chain_status = "observed_chain_to_root";
+            return true;
+        }
+        if (current.ppid == 1 && source.ConfirmParentPid(current, 1)) {
+            actor.chain_complete = true;
+            actor.chain_status = "observed_chain_to_launchd";
+            if (current.identity == node.identity) actor.process.launchd_parent_validated = true;
+            return true;
+        }
+        return false;
+    };
+    if (!finish_root(node)) {
+        ProcessNode current = node;
+        std::set<ProcessIdentity> visited{node.identity};
+        for (int depth = 0; depth < 32; ++depth) {
+            if (current.ppid <= 0) break;
+            auto parent = source.Lookup(current.ppid);
+            if (!parent) {
+                actor.chain_status = "missing_parent";
+                break;
+            }
+            if (parent->identity == current.identity || !visited.insert(parent->identity).second) {
+                actor.chain_status = "cycle_rejected";
+                break;
+            }
+            if (birth(parent->identity) > birth(current.identity) || !source.ValidateParent(current, *parent)) {
+                actor.chain_status = "missing_parent";
+                break;
+            }
+            ProcessEntry entry;
+            entry.node = *parent;
+            entry.state = ProcessState::Observed;
+            entry.first_seen_us = actor.process.first_seen_us;
+            entry.last_seen_us = actor.process.last_seen_us;
+            actor.ancestors.push_back(std::move(entry));
+            current = *parent;
+            if (finish_root(current)) break;
+        }
+    }
     AnnotateActor(actor, {});
     return actor;
 }
@@ -481,7 +529,16 @@ struct Session {
     explicit Session(EvidenceStore& evidence, IProcessSource& processes) : store(evidence), source(processes) {}
     void Emit(EvidenceRecord record) { store.SubmitCritical(std::move(record)); }
     void NoteAccess(const ActorProcess& actor, const std::string& path) {
-        if (path.empty() || accesses.count(path)) return;
+        if (path.empty()) return;
+        auto found = accesses.find(path);
+        if (found != accesses.end()) {
+            // The first sample can race the parent walk. Keep a later sample
+            // only when it adds the owning agent the first one missed.
+            const bool stored_named = found->second.actor.owning_agent.has_value();
+            if (!stored_named && (actor.owning_agent.has_value() || actor.ancestors.size() > found->second.actor.ancestors.size()))
+                found->second.actor = actor;
+            return;
+        }
         EvidenceRecord record;
         record.type = "sensitive_fd_observed";
         record.actor_process = actor;
@@ -497,7 +554,7 @@ struct Session {
         Emit(std::move(record));
     }
     void NoteFilesAndSockets(const ProcessNode& node) {
-        auto actor = Describe(node);
+        auto actor = Describe(source, node);
         auto activity = source.Inspect(node, roots, true);
         for (const auto& path : activity.sensitive_files) NoteAccess(actor, path);
         for (const auto& peer : activity.socket_peers) {
@@ -602,7 +659,7 @@ struct Session {
                 auto again = source.Lookup(found->identity.pid);
                 if (!again || again->identity != found->identity) continue;
                 if (!SocketMatches(found->identity.pid, client_port, proxy_port, loop.s_addr, network_order)) continue;
-                return Describe(*again);
+                return Describe(source, *again);
             }
             if (attempt != 9) std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }

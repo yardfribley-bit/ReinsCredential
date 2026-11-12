@@ -26,3 +26,16 @@ jobs:
           name: evidence-chain-snapshots
           path: chain-snapshots
           if-no-files-found: error
+      - name: Fake-secret acceptance harness
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: scripts/acceptance/real_agents.sh --mode ci
+      - name: Upload real-agent acceptance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-agent-acceptance
+          path: tests/results/real_agent_acceptance.json
+          if-no-files-found: error
