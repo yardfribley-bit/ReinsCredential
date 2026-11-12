@@ -26,6 +26,10 @@ public:
     virtual ProcessSample Sample() = 0;
     virtual bool Validate(const ProcessNode& node) = 0;
     virtual bool ValidateParent(const ProcessNode& child, const ProcessNode& parent) = 0;
+    // Default refuses. Darwin re-reads the child's ppid. A true result does not
+    // invent the parent's start time when that parent could not be read.
+    virtual bool ConfirmParentPid(const ProcessNode& node, pid_t ppid) { (void)node; (void)ppid; return false; }
+    virtual std::optional<ProcessNode> Lookup(pid_t pid) { (void)pid; return std::nullopt; }
     virtual ActivitySample Inspect(const ProcessNode& node, const std::vector<std::string>& roots, bool include_idle_peers) = 0;
 };
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource();
@@ -53,6 +57,8 @@ public:
     void Refresh(); // serialized; also used with a deterministic test source
     std::shared_ptr<const ProcessSnapshot> View() const noexcept;
     ActivitySample Inspect(const ProcessNode& node, const std::vector<std::string>& roots, bool include_idle_peers = false);
+    bool ConfirmParentPid(const ProcessNode& node, pid_t ppid);
+    std::optional<ProcessNode> Lookup(pid_t pid);
     void Check() const;
 private:
     std::shared_ptr<IProcessSource> source_;

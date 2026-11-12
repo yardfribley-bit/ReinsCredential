@@ -85,6 +85,12 @@ NotObserved 不声称进程一定已退出。历史父链只在父、子身份�
 
 默认历史保留 300 秒，目标上限 32768 条，优先淘汰非当前条目；若可见活进程本身超过该数，保留活进程，健康记录暴露规模。不可变快照通过 C++17 atomic shared_ptr 发布；该原子 shared_ptr 本身不保证无锁，但它不在 FSEvents 回调链路上。刷新失败保留上一快照并通知主线程退出。
 
+`chain_complete` 在三条边界上为 true：观察到 pid 1、观察到 ppid 0，或子进程的 ppid 被再次核对为 1 但 launchd 的可执行路径读不到（`chain_status` 为 `observed_chain_to_launchd`）。最后一种是普通用户态结果，因为 launchd 经常没有可读路径；它不编造 launchd 的启动身份。中间父进程仍然缺失时保持 `missing_parent`，不补链。
+
+所属 Agent 写在 `owning_agent`：最靠近根、且命中应用 bundle 的进程优先，否则用最靠近根的已知 Agent 进程。事件里的 `summary` 用更靠近实际工具的产品名来写人话，例如 Codex 跑在 ChatGPT.app 里时，句子以 Codex 为主语，bundle 与根 pid 仍指向 ChatGPT.app。采集器自身（`agent-monitor`、`ReinsRuntime`、`ReinsDashboard`、`ReinsCredential.app`）标记为 `collector_self`，不作为嫌疑 Agent。其他安全工具保持 `unclassified_process`。
+
+已知 Agent 树使用 kqueue 的 fork/exec 通知，并在短窗口内重复采样子进程文件描述符，用来抓住远短于 500ms 全局扫描的打开。敏感路径集合上的访问时间变化单独记录：没有进程时 `evidence_basis` 为 `access_time_change`；恰好一个 Agent 后代的存活区间与之重叠、且没有看到文件描述符时为 `inferred`。看到描述符则为 `fd_observed`。三种都不是上传证据。FSEvents 仍然没有 actor。
+
 只保留解释器分类所需的 argv[0]、入口参数和可选 Python -m 模块；不保留提示词或环境数据，临时 sysctl 缓冲区在所有退出路径擦除。普通日志不输出 argv。依然不能保证任意程序自定义 argv 内容不含敏感字符串，缓存仅驻留本机内存。
 
 ## 回调与并发
@@ -153,3 +159,19 @@ HTTP 输入限制：8KiB 头、1MiB body、5 秒读取截止；拒绝重复长�
 文件内容交付、内容匹配和网络结果是不同事件。内容匹配来源是预注册版本；同内容可来自其他副本，因此不证明唯一原生读取来源。关联使用同一已观察 Agent 祖先身份和内容，默认保留 1 小时（可配置 1–86400 秒），最多 256 条交付记录；超时、重启、淘汰或跨网关实例不会补造链接。发送结果可能在进程退出后写入，保留此前经验证的身份；timestamp 是各记录阶段的观测时间。
 
 EvidenceStore 异步追加，关键提交会等待队列空间或报错，但不是与上游网络发送的原子事务；故障期间可能存在部分发送或证据未持久化。上游 2xx 只是协议响应，接收端收件必须独立核对。此版本不自动拦截任意 HTTPS，也不做 TLS 中间人。完整逐功能验收与已知失败见 [ACCEPTANCE_REPORT.md](ACCEPTANCE_REPORT.md)。
+
+## 启动进程树的本地出口代理
+
+`EgressProxy.cpp`（`agent-egress`）监听 `127.0.0.1` 上的 HTTP 代理。它用 `--launch` 启动一棵进程树，并只在这棵树的环境里放上 `http_proxy` / `https_proxy`。它不改写 Cursor、Codex、Claude 或 WorkBuddy 的 MCP 配置，也不安装系统扩展或受信任的根证书。
+
+已登记的敏感文件最多 32 个，每个 16 字节到 1 MiB。匹配沿用 `ContentMatcher` 的原文、JSON 转义、Base64 和单层有界 gzip。日志只保留路径、指纹种类、SHA-256 和传输结果，不保留原文。
+
+连入代理的 TCP 连接用本机回环四元组对上这棵树里的进程，再核对 PID 和启动时间。这比 Unix socket 的 audit token 弱：描述符如果被转交，四元组可能指到另一个进程；对不上时记为看不到，不把请求体算成上传。
+
+明文 HTTP 会转发到请求里的 `http://` 目的地，不跟随重定向。目的地返回 2xx 且请求体匹配时，结论是已上传；匹配但连接失败或不是 2xx 时，是已尝试未成功。2xx 只是代理看到的 HTTP 结果。CONNECT 原样转发，不检查字节，结论是看不到。树里出现没有经过代理的套接字时，同样是看不到，不能写成未发现。只有这棵树的相关出口都是已检查的明文 HTTP、而且没有匹配时，才是未发现。
+
+敏感文件描述符仍然只说明文件打开过。`sensitive_access_closed` 才是对该访问的出口结论，并带上 `destination`、`transfer_outcome` 和 `upload_verdict`。没有看到打开、但请求体匹配已登记版本时，只写 `egress_transfer`，并写明打开未被证明。
+
+`--watch-live` 会在已有进程里寻找 Cursor、Codex、ChatGPT、Claude 和 WorkBuddy 的名称或 bundle。它不修改这些程序的环境、MCP 配置或系统代理。用户态没有办法把一个已经在运行的进程的连接改道过来，除非那个进程自己连到本地代理。自己连过来的明文 HTTP，以及在提供了 CA 时完成拦截的 HTTPS，可以做内容匹配。其余情况，包括只看到套接字、UDP/QUIC、证书固定或握手失败，结论是看不到，并写明没有改设置。不把这种情况写成未发现。
+
+`--tls-ca-cert` 和 `--tls-ca-key` 打开可选的 CONNECT 内容检查。代理在临时目录里签发短命叶子证书，用系统 SecureTransport 做握手，不把 CA 放进登录钥匙串，也不改默认钥匙串搜索列表。上游证书只用调用方提供的这个 CA 做锚。没有这两个参数时，CONNECT 仍然是看不到。

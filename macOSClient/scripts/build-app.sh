@@ -22,7 +22,7 @@ app_dir="$staging/ReinsCredential.app"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Helpers" "$app_dir/Contents/Library/LaunchAgents"
 cp "$bin_dir/ReinsDashboard" "$app_dir/Contents/MacOS/ReinsDashboard"
 cp "$bin_dir/ReinsRuntime" "$app_dir/Contents/MacOS/ReinsRuntime"
-sources=(main.cpp ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp)
+sources=(main.cpp ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp)
 for ((i=0; i<${#sources[@]}; i++)); do sources[i]="$repo_dir/${sources[i]}"; done
 /usr/bin/clang++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread -mmacosx-version-min=13.0 \
   ${cxx_arch[@]+"${cxx_arch[@]}"} "${sources[@]}" -framework CoreServices -lz -o "$app_dir/Contents/Helpers/agent-monitor"

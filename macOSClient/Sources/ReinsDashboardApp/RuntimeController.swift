@@ -75,6 +75,8 @@ final class RuntimeController: ObservableObject {
     @Published private(set) var rejectedCount = 0
     @Published private(set) var selfTestStatus = ""
     @Published private(set) var selfTestPassed: Bool?
+    /// Absolute path of the synthetic file from the latest passing self-test.
+    @Published private(set) var selfTestResource = ""
     private let paths: RuntimePaths
     private let service: BackgroundServiceManaging
     private let reader = LiveEvidenceReader()
@@ -169,7 +171,7 @@ final class RuntimeController: ObservableObject {
         if !FileManager.default.fileExists(atPath: paths.configurationURL.path) {
             try RuntimeConfiguration.defaults().save(to: paths.configurationURL)
         }
-        return try RuntimeConfiguration.load(from: paths.configurationURL)
+        return try RuntimeConfiguration.loadEffective(from: paths.configurationURL)
     }
 
     func reloadConfiguration() {
@@ -281,6 +283,7 @@ final class RuntimeController: ObservableObject {
         guard !selfTesting, state == .running || state == .degraded else { return }
         selfTesting = true
         selfTestPassed = nil
+        selfTestResource = ""
         selfTestStatus = "正在创建合成测试文件与本机连接…"
         Task {
             defer { selfTesting = false }
@@ -313,7 +316,8 @@ final class RuntimeController: ObservableObject {
                 }
                 if probe.isRunning { probe.terminate() }
                 selfTestPassed = found
-                selfTestStatus = found ? "自检通过：独立采集器关联了测试进程、文件和本机连接。未向外网发送。" :
+                if found { selfTestResource = target.path }
+                selfTestStatus = found ? "自检通过：合成文件会出现在证据链里。这是描述符和本机连接同时出现，不是上传。未读取真实凭据，未向外网发送。" :
                     "自检未通过：采集器未在时限内发现完整关联，请检查后台权限与覆盖状态。"
             } catch { selfTestPassed = false; selfTestStatus = "自检失败：\(error.localizedDescription)" }
             if let file { try? FileManager.default.removeItem(at: file) }

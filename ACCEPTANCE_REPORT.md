@@ -1,5 +1,170 @@
 # Agent 敏感数据读取与发送：逐功能验收报告
 
+## 2026-11-12 真实 Agent 与假密钥验收准备（step 4）
+
+这一步增加验收程序，不安装 LaunchAgent，不修改 Codex、Cursor、WorkBuddy 的 MCP 或应用配置，不把 CA 放进钥匙串，也不读取真实的 `~/.ssh` 或 `~/.aws`。假密钥只写在临时目录：假 `.env`、假 AWS 凭据、以及带私钥头尾但正文写明不是私钥的 `fake_id_ed25519`。接收端是程序自己在 `127.0.0.1` 上起的 HTTP 服务。
+
+采集器使用 `--no-default-sensitive`，只监视这个临时目录。`agent-egress` 负责出口结论。证据链 JSON 由 `chain-export` 生成，和仪表盘用同一个 `EvidenceChainExport`。检查三件事：所属 Agent、四句结论里的那一句、导出和日志里没有假密钥原文。
+
+出口代理在记下打开文件的进程时，会沿 libproc 实际返回的父进程往上走，这样子工具的结论卡片能写上所属 Agent。父进程读不到就保持缺失，不按时间挑选。同一 PID、启动时间和路径上的描述符观测并进关闭卡片；别的进程不并。
+
+替身 `stand_in_agent.py` 不是桌面 Agent。它的通过不能写成真实 Agent 通过。真实 Codex 调用模型时还有一条看不见字节的 API 通道，所以“读了但不发送 → 未发现”用没有其它套接字的替身来测。若把这种 Codex 会话记成未发现，就是把看不到写成了未发现。
+
+| 用例 | 期望 | 本次实际 | 计入真实 Agent |
+| --- | --- | --- | --- |
+| `codex_launched_upload` | Codex，已上传，打开被看到，目的地是本机 sink | 未执行。runner 上没有 `codex`，API key secret 也是空的 | 否 |
+| `codex_already_running_not_visible` | Codex，看不到，并写明已经在运行、没有改道 | 未执行。同上 | 否 |
+| `cursor_cli_upload` | Cursor，已上传。没有可脚本化 CLI 时不代跑 | 未执行。runner 上没有 Cursor CLI | 否 |
+| `workbuddy_manual` | 已运行的 WorkBuddy，看不到，不能写成未发现 | 未执行。手工步骤在 `scripts/acceptance/README.md` | 否 |
+| `negative_read_no_send` | 替身只读假 AWS 文件，未发现，并且看到打开 | 未发现。打开被看到，没有产品 Agent 名。替身通过 | 否 |
+| `stand_in_launched_upload` | 替身经代理发送，已上传 | 已上传。打开被看到，目的地是 127.0.0.1，本机 sink 的 SHA-256 与假文件一致。没有产品 Agent 名 | 否 |
+| `stand_in_direct_not_visible` | 替身绕过代理直连，看不到，不能写成未发现 | 看不到。打开被看到，sink 确实收到了字节，结论没有被写成未发现或已上传。这不是“已经在运行的 Codex” | 否 |
+
+实测来自 GitHub Actions `macos-latest`，平台 `macOS-26.7.2`，架构 arm64，不是主人的 Intel Mac。命令：`scripts/acceptance/real_agents.sh --mode ci`。pull request run [43142769702](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43142769702)，同一提交 `121824f` 的 push run [43142751008](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43142751008)，两个都成功。机器可读结果是 artifact `real-agent-acceptance`，已记入 [real_agent_acceptance.json](tests/results/real_agent_acceptance.json)。`self_check_ok` 先通过。Codex、Cursor 都没有安装，三个 API key secret 都是空的，所以真实用例没有启动。三例替身与期望一致，并且都标了 `counts_as_real_agent=false`。
+
+本仓库的开发环境是 Linux，没有在这里跑采集器，也没有在主人的 Intel Mac 上执行。真实 Agent 仍然没有跑过。
+
+立即 `/bin/cat` 的短时打开召回在 CI 上不稳定，这是已知缺口。`tests/short_read.py` 仍要求至少 0.4，这个门槛没有放宽，测试文件也没有改。各 20 次里已经看到：2026-11-11 的 run [43070070831](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43070070831) 是 13/20；提交 `3f866f5` 的 push run [43143521056](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43143521056) 是 15/20，并通过了该测试；同一提交的 pull request run [43143525505](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43143525505) 是 7/20（0.35），`make integration` 因此失败。命中的记录仍然写成 ChatGPT 经 cat 打开，没有写成上传。想原样重跑这次失败的 pull request 作业时，GitHub 返回 403，当前凭证没有 `actions: write`，所以没有重跑成功。
+
+主人在自己的 Intel Mac 上先读 `scripts/acceptance/README.md`，再运行：
+
+```sh
+scripts/acceptance/real_agents.sh --mode prepare
+scripts/acceptance/real_agents.sh --mode owner --i-approve-real-agents
+```
+
+第二条才会启动本机已经安装的 Codex 或 Cursor。WorkBuddy 只在终端里按打印出的命令手工做。不要从 Agent 自己的终端里跑这个脚本。
+
+`make acceptance` 仍然失败。**总体验收：未通过。**
+
+## 2026-11-11 证据链卡片与导出（step 3）
+
+这一步只改 Mac 应用里已经采集到的事件怎么呈现和导出。它不增加传感器，也不把一条没看到的通道补成看过。
+
+一个人打开 ReinsDashboard，默认按所属 Agent 看证据链卡片，不用先读原始事件表。一次敏感文件访问是一张卡片。卡片按这个顺序排：所属 Agent、进程（以及链条是否完整）、文件和 `evidence_basis`、目的地、内容匹配、出口结论。内容匹配只显示匹配种类和 SHA-256，不显示原始字节。缺了哪一环就标成缺失、不完整或未证明，不补造。
+
+接合规则：
+
+- `sensitive_access_closed` 用它写下的 `related_event_ids` 把打开、传输和通道记录收进同一张卡片。结论用关闭记录上的 `upload_verdict`，不重新推断。
+- 还没有关闭记录的描述符观测，只有在 PID、启动秒、启动微秒和路径都相同的时候才并成一次访问。不靠时间靠近猜测行为进程。
+- 正文匹配但没有看到打开，保持为传输记录。路径可以是已登记文件，打开那一环标成未证明。
+- 同一次采样里的套接字对端、打开的描述符，都不是上传。没有 `upload_verdict` 时，结论是「没有出口结论」，不是未发现，也不是看不到。
+- 文件系统变化没有行为进程。Agent 和进程两环保持缺失。
+
+四句出口结论保持原词：已上传、已尝试未成功、未发现、看不到。`not_visible` 永远显示为看不到。已经在运行且没有改道（`already_running_not_redirected`）、客户端不信任临时 CA 的 HTTPS、UDP/QUIC，都留在看不到下面，并写明原因。临时 CA 没有装进登录钥匙串。未发现只用于记录写明已经查看过、而且没有已登记内容的出口。
+
+可以导出选中的一条链，或当前筛选结果里的一个时间窗口，Markdown 和 JSON 用同一套词，并且省略原始密钥字节。合成演示包含这四句结论，以及看不到的上述三种原因、一条不完整进程链，和一条没有打开的传输。检测自检如果在实时记录里找到合成文件的共现，会选中对应的证据链；那仍然只是描述符和本机连接同时出现，不是上传，也不读真实凭据。
+
+采集器现在仍然看不到、这一步也没有变成看得见的：
+
+- 不经过本地代理的直连，以及没有自己连到代理的已运行 Agent。用户态不能改 Cursor、Codex、Claude、WorkBuddy 的 MCP 或应用设置，也不能把已有连接改道。
+- 证书固定、客户端不信任临时 CA、QUIC/UDP。可选 HTTPS 检查只覆盖完成了代理侧握手的 CONNECT。
+- 打开的文件描述符不证明读入了字节。FSEvents 仍然没有行为进程。
+- 代理看到的 HTTP 2xx 不是对端的独立回执。
+
+测试加在 `macOSClient/Tests/EvidenceCoreTests/EvidenceChainTests.swift` 和 `DashboardStoreTests`。它们检查相关事件并成一条链、不完整的进程链保持不完整，以及看不到不会被写成未发现。
+
+合成演示的界面快照由 `EvidenceChainSnapshotTests` 用 SwiftUI `ImageRenderer` 生成，不启动采集服务。macOS workflow 把这些文件上传为 artifact `evidence-chain-snapshots`。实测 run [43090043359](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43090043359)，提交 `0e60290`。其中有按 Agent 分组的总览、已上传、已尝试未成功、未发现、看不到各一张卡片，以及 `evidence-chains.md`。导出文本里没有 `SYNTHETIC_EGRESS_SECRET_v2_0123456789abcdef`。这些图片只证明演示数据能画出来，不证明本机采集看见了上传。
+
+这一步没有放宽 `make acceptance`。**总体验收：未通过。**
+
+## 2026-11-11 本地出口代理与上传结论（step 2）
+
+这一节只回答“一次敏感文件访问，出口结论是哪一种”。结论只有四句，而且必须带上目的地和 `transfer_outcome`：
+
+- **已上传**：请求体匹配已登记内容，并且代理把请求转发后看到了 HTTP 2xx。2xx 是代理自己看到的响应，不是对端的独立回执。
+- **已尝试未成功**：请求体匹配了，但连接失败或响应不是 2xx。
+- **未发现**：这棵进程树当时的明文 HTTP 都被看过，里面没有已登记内容，也没有另一条没看到字节的通道。
+- **看不到**：字节不在可见范围内。不能把这句话写成未发现。
+
+`agent-egress` 在 `127.0.0.1` 上听一个 HTTP 代理，用 `--launch` 启动进程树，只把 `http_proxy` / `https_proxy` 放进这棵树的环境。不修改 Cursor、Codex、Claude、WorkBuddy 的 MCP 配置，不安装系统扩展，不做 TLS 中间人。已登记文件最多 32 个、每个不超过 1 MiB。日志不写原始字节。进程身份是回环四元组对上 PID 加启动时间；对不上就记看不到，不把正文算成上传。
+
+绕过旧的 Unix 套接字网关、但走这个代理的普通 HTTP，现在能被看见。直接连到接收端、以及 CONNECT 隧道里的字节，仍然看不见，结论是看不到。
+
+下面的计数来自 `tests/egress_verdict.py`。敏感内容是合成字符串 `SYNTHETIC_EGRESS_SECRET_v2_0123456789abcdef`，不是真实凭据。访问级真阳性是“结论与事实一致的已上传或已尝试未成功”。真阴性是“正确地写成未发现或看不到”。把看不到写成未发现，或在没有匹配时写成已上传，都算假阳性，测试会失败。假阴性是匹配并成功/失败的传输没有得到对应结论。
+
+| 用例 | 事实 | 结论 | 归类 |
+| --- | --- | --- | --- |
+| 原文 / JSON / Base64 / gzip，HTTP 200 | 请求体含合成内容，接收端收到 | 已上传 | TP ×4 |
+| 绕过 Unix 网关的普通 HTTP 200 | 不经过 `agent-gateway`，经本地代理 POST 到接收端 | 已上传 | TP |
+| HTTP 500 | 内容匹配，响应不是 2xx | 已尝试未成功 | TP |
+| 连接被拒绝 | 内容匹配，没有连上 | 已尝试未成功 | TP |
+| 无关正文 | 文件打开着，明文 HTTP 里没有登记内容 | 未发现 | TN |
+| 直接 TCP，不经代理 | 接收端收到合成字节，代理没有看到正文 | 看不到 | TN，内容仍漏 |
+| CONNECT 隧道 | 隧道里有合成字节，代理不检查隧道 | 看不到 | TN，内容仍漏 |
+| 正文匹配但没有打开文件 | 只有 `egress_transfer`，没有访问关闭记录 | 传输上已上传，不编造打开 | 不计入访问级矩阵 |
+
+访问级矩阵：**TP 7（已上传 5，已尝试未成功 2）、TN 3、FP 0、FN 0**。内容仍然看不到的是直接 TCP 和 CONNECT，**2/2 被标成看不到，没有被伪装成未发现**。打开文件本身仍然不是上传。
+
+CPU 和 RSS 在同一次 macOS 运行里用 `ps -o %cpu=,rss=` 采样。`%cpu` 是衰减平均值，不是积分后的单核占用。空闲是代理单独运行约 3 秒；活跃是无关正文那次，包含转发和大约 2 秒的采样。中位数 0.0% 只说明这组短采样的衰减平均值没有升到 0.1，不是积分后的零占用。
+
+实测来自 GitHub Actions `macos-latest`，镜像 `macos-26-arm64`，run [43076987696](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43076987696)，提交 `ed0cae9`。命令：`make check`（通过，含上传结论单元测试）、`make integration`（通过，含 `tests/egress_verdict.py`）、`macOSClient/scripts/check.sh`（65 个 Swift 测试，0 失败）。
+
+| 测量 | 结果 |
+| --- | --- |
+| 空闲约 3 秒 | CPU 中位数 0.0%，RSS 中位数 5696 KB（11 次 `ps`） |
+| 活跃约 6 秒采样窗口 | CPU 中位数 0.0%，RSS 中位数 6896 KB（20 次 `ps`） |
+
+这是进程很少的 CI 机器，不能外推到一台有数百个进程的 Mac。没有在 x86_64 上复跑。跨请求分片、旧网关那 45 例里的其它漏报，以及 `make acceptance` 的完整通过标准，都没有被这一步改掉。**总体验收：未通过。**
+
+### 2026-11-11 已运行的 Agent 树与可选 HTTPS 检查
+
+`--watch-live` 按现有名称和 bundle 规则观察已经在运行的 Cursor、Codex、ChatGPT、Claude 和 WorkBuddy。它不改这些程序的环境、MCP 配置或系统代理。用户态不能把一个已经在运行的进程的连接改道到本地代理，所以这类树只要没有自己连到代理，结论就是看不到，并写明 `already_running_not_redirected`。自己连到代理的明文 HTTP 可以匹配。
+
+`--tls-ca-cert` 与 `--tls-ca-key` 让 CONNECT 里的 HTTPS 使用同一套指纹。CA 只存在调用方给出的文件和临时目录里的短命叶子，不进入登录钥匙串。证书固定、QUIC/UDP 和直连仍然是看不到，不写成未发现。
+
+上一节 `ed0cae9` 的数字仍然是拦截关闭、且只覆盖自己启动的进程树时的结果。这一节是加上已运行进程观察和可选 HTTPS 检查之后的实测。
+
+实测来自 GitHub Actions `macos-latest`，镜像 `macos-26-arm64`，run [43084817319](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43084817319)，提交 `65d0907`。命令：`make check`（通过）、`make integration`（通过，含原来的短读和 `tests/egress_verdict.py`）、`macOSClient/scripts/check.sh`（65 个 Swift 测试，0 失败）。敏感内容仍是 `SYNTHETIC_EGRESS_SECRET_v2_0123456789abcdef`。
+
+| 用例 | 结论 | 归类 |
+| --- | --- | --- |
+| 原文 / JSON / Base64 / gzip / 绕过旧网关的明文 HTTP | 已上传 | TP ×5 |
+| HTTPS 原文、HTTPS JSON（CONNECT，信任临时 CA） | 已上传 | TP ×2 |
+| 已经在运行的 `codex` 自己连到代理 | 已上传 | TP |
+| HTTP 500、连接失败、HTTPS 500 | 已尝试未成功 | TP ×3 |
+| 无关明文 | 未发现 | TN |
+| 直连 TCP、无拦截的 CONNECT、证书不信任的 HTTPS、已运行进程的直连、UDP | 看不到 | TN ×5 |
+| 正文匹配但没有打开文件 | 只记传输，不编造打开 | 单独 1 例 |
+
+访问级矩阵：**TP 11（已上传 8，已尝试未成功 3）、TN 6、FP 0、FN 0**。内容仍然看不到的 5 例都被标成看不到，没有被写成未发现。
+
+| 测量 | 结果 |
+| --- | --- |
+| 空闲约 3 秒，开启 `--watch-live` | CPU 中位数 2.4%，RSS 中位数 6560 KB（12 次 `ps`） |
+| HTTPS 拦截那次，20 次 `ps` | CPU 中位数 0.15%，RSS 中位数 8128 KB |
+
+`%cpu` 仍是衰减平均值。2.4% 是在扫已有进程，不是那台几百个进程的 Mac。没有在 x86_64 上复跑。证书固定、QUIC、不经过代理的直连，以及没有自己连过来的已运行 Agent，仍然看不到。`make acceptance` 仍失败。**总体验收：未通过。**
+
+## 0. 2026-11-11 归因与短时打开（step 1）
+
+这一节只回答“哪个 Agent 碰过哪个敏感文件”。**不声称检测到上传。** 下文第 3 节的 45 例内容矩阵仍然有效，完整验收仍然失败。
+
+触发：本机约 13 分钟日志里，每条 `actor_process` 都是 `chain_complete=false` / `missing_parent`，因为用户态读不到 launchd 的路径，链条在 ppid 1 处断开；子工具只标成 `observed_ancestor`，所属应用没有稳定名字；500ms 全机 FD 扫描抓不住几十到几百微秒的打开；默认敏感路径只有 `~/.ssh`、`~/.aws` 和启动目录的 `.env`。
+
+结果：
+
+- 父进程 ppid 被再次核对为 1 时，`chain_complete=true`，`chain_status=observed_chain_to_launchd`。不编造 launchd 的启动身份。中间父进程仍然缺失时保持 `missing_parent`。
+- `owning_agent` 带上应用名、bundle 和根进程身份。给人读的 `summary` 形如：`Codex read ~/.ssh/id_ed25519 via zsh -> python. The file was open in that process. This is not an upload finding.` 这里的 read 表示文件在该进程里打开过，或句子写明的更弱信号，不是上传。
+- 已知 Agent 树用 kqueue 的 fork/exec 立刻采样子进程。证据基础是 `fd_observed`、`access_time_change` 或 `inferred`。
+- 采集器自身是 `collector_self`，不会被写成嫌疑 Agent。AgentReins 一类未列入规则的安全工具保持 `unclassified_process`。
+- 默认敏感路径增加 `~/.config/gh`、`~/.netrc`、`~/.npmrc`、`~/.git-credentials`、`~/.docker/config.json`、`~/.kube/config`、`~/.config/gcloud`、`~/.azure`。已保存且恰好仍是旧的 `~/.ssh` + `~/.aws` 配置会升级一次；其它自定义配置不动。`--no-default-sensitive` 仍然先清空。
+
+实测来自 GitHub Actions `macos-latest`（作业注解为 arm64 runner），run [43070070831](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43070070831)，提交 `eb48c43`。命令：`make check`（通过）、`make integration`（通过，含 `tests/short_read.py`）、`macOSClient/scripts/check.sh`（64 个 Swift 测试，0 失败）。短时打开用临时目录里的 `synthetic-credential`，内容是 `SYNTHETIC_CREDENTIAL_NOT_A_SECRET`。各 20 次。`ps` 的 `%cpu` 是衰减平均值，不是积分后的单核占用。
+
+| 测量 | 结果 |
+| --- | --- |
+| 30ms 打开 | TP 20 / FN 0（20/20） |
+| `/bin/cat` 立即退出 | TP 13 / FN 7（13/20，65%）。这不是稳定值：后来的 CI 上同一测试出现过 7/20 和 15/20，见 2026-11-12 一节。0.4 门槛没有改 |
+| 合计 | TP 33 / FN 7（33/40，82.5%）。33 次命中都来自快速采样（`fast_fd_hits=33`，`subtree_fd_hits=33`，`subtree_fork_notes=40`，`subtree_bursts=40`） |
+| 空闲约 3 秒 | CPU 中位数 2.2%，RSS 中位数 11216 KB（11 次 `ps`） |
+| cat 队列期间约 4 秒 | CPU 中位数 2.35%，RSS 中位数 11632 KB（14 次 `ps`） |
+| 当次全机扫描 | `activity_scan_duration_ms=11`，`fd_scans_partial=0` |
+
+这是进程很少的 CI 机器，不是主人那台约 670 个可见进程、扫描一度到 12.5 秒的 Intel Mac。不能把 2% CPU 外推到那台机器。本轮没有在 x86_64 上复跑这组短时打开。
+
+仍会漏掉：比 fork 通知更短、且在采样前就退出的打开；访问时间在 APFS 上经常不变，所以 `access_time_change` / `inferred` 不能当召回保证；权限不可见的进程；FSEvents 变更仍然没有 actor。上传、模型目的地和公网收件不在本步范围内。
+
 日期：2026-11-11（Asia/Shanghai）。**总体验收：未通过。** 已完成本次实现、测试和结果归档，尚不能声称实现了“任意本机 Agent 的独立、完整读取与外传检测”。
 
 本次有实际代码改进：新增 C++ 内容审计网关、内核认证的本地连接方身份、内容匹配、文件版本哈希、发送目的地与结果、关联事件 ID。真实当前 Codex 会话通过该通道读取合成数据并发送到独立本机服务器，接收端验证了字节一致。模型目的地的独立检测、外部互联网收件、全部真实客户端调用及绕过通道的检测仍未通过。

@@ -9,8 +9,31 @@ public struct RuntimeConfiguration: Codable, Equatable, Sendable {
         self.intervalMilliseconds = intervalMilliseconds
     }
 
+    public static let defaultRelativePaths = [
+        ".ssh", ".aws", ".config/gh", ".netrc", ".npmrc", ".git-credentials",
+        ".docker/config.json", ".kube/config", ".config/gcloud", ".azure"
+    ]
+
     public static func defaults(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> Self {
-        Self(sensitivePaths: [".ssh", ".aws"].map { homeDirectory.appendingPathComponent($0).path })
+        Self(sensitivePaths: defaultRelativePaths.map { homeDirectory.appendingPathComponent($0).path })
+    }
+
+    /// Saved installs that still have exactly the original ~/.ssh and ~/.aws list
+    /// pick up the expanded defaults. Any added or removed path is left alone.
+    public func upgradingUnchangedLegacyDefaults(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> Self {
+        let legacy = [".ssh", ".aws"].map { homeDirectory.appendingPathComponent($0).standardizedFileURL.path }
+        let current = Set(sensitivePaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        guard current == Set(legacy) else { return self }
+        var updated = Self.defaults(homeDirectory: homeDirectory)
+        updated.intervalMilliseconds = intervalMilliseconds
+        return updated
+    }
+
+    public static func loadEffective(from url: URL, homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) throws -> Self {
+        let loaded = try load(from: url)
+        let upgraded = loaded.upgradingUnchangedLegacyDefaults(homeDirectory: homeDirectory)
+        if upgraded != loaded { try upgraded.save(to: url) }
+        return upgraded
     }
 
     public func validated() throws -> Self {

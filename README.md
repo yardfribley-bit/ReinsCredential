@@ -1,4 +1,25 @@
-# macOS Agent Runtime Security Collector
+# ReinsCredential
+
+ReinsCredential shows which desktop AI agent touched a sensitive file on your Mac, and through which tools.
+
+A normal result reads like this:
+
+> Codex read ~/.ssh/id_ed25519 via zsh -> python. The file was open in that process. This is not an upload finding.
+
+That sentence means the file was open inside that process, or, when the sentence says so, that only the file's access time overlapped one short-lived tool. It does not by itself mean the file was uploaded.
+
+An upload sentence is separate, and it is written only by the local egress proxy. The closing words are **已上传** (the registered content was in the request and the destination returned success), **已尝试未成功** (the content matched and the transfer failed), **未发现** (the proxy watched that tree's plaintext HTTP and the content was not in it), and **看不到** (that channel's bytes were not visible). 看不到 is not a clean bill. A socket peer or a TLS tunnel is not an upload.
+
+The collector is a user-space Mac app. It does not install a system extension and it does not decrypt TLS. The app's own processes are never the suspected agent. Other security tools stay unlabeled programs, not agents.
+
+```sh
+make
+./agent-monitor --log ./evidence.jsonl
+```
+
+Default sensitive locations are `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.npmrc`, `~/.git-credentials`, `~/.docker/config.json`, `~/.kube/config`, `~/.config/gcloud`, `~/.azure`, and `.env` in the launch directory. `--sensitive` adds a path. `--no-default-sensitive` clears the defaults first, which is how a saved configuration replaces them. An existing saved list that is still exactly `~/.ssh` and `~/.aws` is upgraded once; any other saved list is left as you set it.
+
+## Collector details
 
 C++17 用户态 Agent 候选监测与结构化证据收集器，使用 libproc 和 FSEvents。
 
@@ -40,4 +61,11 @@ CLI 默认敏感路径为 ~/.ssh、~/.aws、启动目录的 .env。日志模式�
 
 FSEvents 不提供修改者 PID，也不监测纯读取。文件变更的 actor_process 必须为空；敏感文件描述符与网络对端共现只提示风险，不能证明数据上传。缓存使用 PID+启动时间防止常见复用误关联，但轮询不能保证观测所有 Agent 或彻底消除竞态。本项目尚未完成长期生产负载与部署验收。
 
-新增实验性 `agent-gateway` 提供显式接入的文件内容交付与发送审计。它以 Unix socket audit token 验证连接方身份，记录来源版本 hash、内容匹配、目的地、传输结果及关联事件。原文、JSON、Base64 和有界 gzip 已测试；跨请求分片和绕过仍漏报。它不是透明 HTTPS 监控，也不会自动接入已安装 Agent。用法、边界、真实会话与故障测试均见最新验收报告。
+新增实验性 `agent-gateway` 提供显式接入的文件内容交付与发送审计。它以 Unix socket audit token 验证连接方身份，记录来源版本 hash、内容匹配、目的地、传输结果及关联事件。原文、JSON、Base64 和有界 gzip 已测试；跨请求分片和未进入该套接字的发送仍会漏报。它不是透明 HTTPS 监控，也不会自动接入已安装 Agent。
+
+`agent-egress` 在 `127.0.0.1` 上提供本地 HTTP 代理。`--launch` 只给它自己启动的那棵进程树设置代理环境变量。`--watch-live` 观察已经在运行的 Cursor、Codex、ChatGPT、Claude 和 WorkBuddy，但不改它们的环境、MCP 配置或系统代理；那些进程如果没有自己连到代理，结论是看不到。可选的 `--tls-ca-cert` 与 `--tls-ca-key` 让 CONNECT 里的 HTTPS 正文参加同一套指纹匹配。CA 只作为文件使用，不写入登录钥匙串。证书固定、QUIC 和直连仍然是看不到。成功的检查过的传输记为已上传，失败记为已尝试未成功，看过且没有指纹记为未发现。日志不写原始字节。用法和实测见最新验收报告。
+
+```sh
+./agent-egress --log ./evidence.jsonl --sensitive-file ./synthetic.env \
+  --launch -- python3 your-synthetic-case.py
+```

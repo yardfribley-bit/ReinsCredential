@@ -1,5 +1,19 @@
 # v2 重构验证结果
 
+## 2026-11-11 所属 Agent、完整父链与短时打开
+
+本轮在原有模块结果之上增加所属 Agent、`observed_chain_to_launchd` 和短时打开采样。上传检测没有实现，也不在本轮声称之内。确定性单元测试覆盖合成树：ChatGPT.app → codex → zsh → 未进入慢扫描快照的 python，句子为 `Codex read /synthetic/secret via zsh -> python. The file was open in that process. This is not an upload finding.` 采集器自身不是 Agent，AgentReins 保持未分类。
+
+2026-11-11，GitHub Actions `macos-latest` arm64，run [43070070831](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43070070831)，提交 `eb48c43`：
+
+- `make check` 通过。新增断言覆盖 launchd 边界、所属 Agent、人话句子、采集器自身排除、AgentReins 保持未分类。
+- `make integration` 通过。合成 ChatGPT.app 对假凭证 `synthetic-credential`：持有 30ms 为 20/20；`/bin/cat` 立即退出为 13/20（FN 7）。合计 33/40。空闲 CPU 中位数 2.2%、RSS 11216 KB；cat 期间 CPU 中位数 2.35%、RSS 11632 KB。`ps` 百分比是衰减平均值。这不是主人 Intel 实机的负载。
+- `macOSClient/scripts/check.sh`：64 个测试，0 失败。
+
+上传没有检测。详情在 [ACCEPTANCE_REPORT.md](ACCEPTANCE_REPORT.md) 第 0 节。下面的历史 PASS 不是这组短时打开的召回率。
+
+## 历史模块结果
+
 本文件保留基础模块重构轮次的结果。后续内容审计、最终行为矩阵和逐功能验收以 [ACCEPTANCE_REPORT.md](ACCEPTANCE_REPORT.md) 为准；其中完整验收失败，不应与本文件的基础模块 PASS 混为一谈。
 
 2026-11-11，在本机 macOS 使用 Clang 验证。

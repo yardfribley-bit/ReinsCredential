@@ -43,6 +43,20 @@ final class RuntimeCoreTests: XCTestCase {
         XCTAssertEqual(info.st_nlink, 1)
     }
 
+    func testLegacyDefaultPathsUpgradeAndCustomPathsStay() throws {
+        let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
+        let legacy = RuntimeConfiguration(sensitivePaths: [".ssh", ".aws"].map { home.appendingPathComponent($0).path }, intervalMilliseconds: 400)
+        let upgraded = legacy.upgradingUnchangedLegacyDefaults(homeDirectory: home)
+        XCTAssertEqual(upgraded.intervalMilliseconds, 400)
+        XCTAssertTrue(upgraded.sensitivePaths.contains(home.appendingPathComponent(".kube/config").path))
+        XCTAssertTrue(upgraded.sensitivePaths.contains(home.appendingPathComponent(".config/gh").path))
+        let custom = RuntimeConfiguration(sensitivePaths: [home.appendingPathComponent(".ssh").path, "/private/tmp/project"], intervalMilliseconds: 400)
+        XCTAssertEqual(custom.upgradingUnchangedLegacyDefaults(homeDirectory: home), custom)
+        try legacy.save(to: paths.configurationURL)
+        let effective = try RuntimeConfiguration.loadEffective(from: paths.configurationURL, homeDirectory: home)
+        XCTAssertEqual(effective.sensitivePaths, RuntimeConfiguration.defaults(homeDirectory: home).sensitivePaths)
+    }
+
     func testConfigurationRejectsUnboundedOrAmbiguousInput() {
         for config in [RuntimeConfiguration(sensitivePaths: []),
                        RuntimeConfiguration(sensitivePaths: ["relative.env"]),

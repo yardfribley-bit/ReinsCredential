@@ -10,7 +10,7 @@
     "target_resource_bytes_hex", "risk_level", "attribution", "detail",
     "source_event_id", "source_flags", "count", "metrics", "destination",
     "content_sha256", "correlation_id", "evidence_basis", "transfer_outcome",
-    "related_event_ids"
+    "upload_verdict", "summary", "related_event_ids"
   ],
   "properties": {
     "schema_version": {
@@ -98,11 +98,20 @@
     },
     "evidence_basis": {
       "type": "string",
-      "description": "Open vocabulary describing how the observation was obtained. Empty when unused; do not infer content transfer from FD/socket coincidence."
+      "description": "Open vocabulary describing how the observation was obtained. Sensitive-file values include fd_observed (a descriptor was seen; bytes read are not proven), access_time_change (atime advanced and no process was identified) and inferred (exactly one agent descendant's lifetime overlapped an atime change; not a confirmed open). Empty when unused. None of these values prove an upload."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Plain-language sentence for the event, safe to show to a non-expert. Empty when unused. A sentence that names an agent and a file, and says the file was open, describes an open or a weaker access-time signal. A sentence that starts with 已上传 is written only when upload_verdict is uploaded. 未发现 means inspected egress did not contain the registered content. 看不到 means that channel's bytes were not visible and is not a clean bill."
     },
     "transfer_outcome": {
       "type": "string",
-      "description": "Open vocabulary for the observed forwarding outcome. Empty when not applicable; distinguish attempt, failure and independently verified receipt."
+      "description": "Open vocabulary for the observed forwarding outcome. Empty when not applicable; distinguish attempt, failure and independently verified receipt. HTTP 2xx is the proxy's observation of the response, not an independent remote receipt."
+    },
+    "upload_verdict": {
+      "type": "string",
+      "enum": ["", "uploaded", "attempted", "not_found", "not_visible"],
+      "description": "Closing word for a sensitive-file access or an egress observation. uploaded requires a registered-content match and an observed successful transfer. attempted is a match whose transfer did not succeed. not_found means the watched plaintext HTTP egress did not contain the content. not_visible means the bytes on that channel were not observed. Empty when this record is not a verdict."
     },
     "related_event_ids": {
       "type": "array",
@@ -173,7 +182,7 @@
       "type": "object",
       "required": [
         "process", "ppid_tree", "chain_complete", "chain_status",
-        "classification", "classification_reason"
+        "classification", "classification_reason", "owning_agent"
       ],
       "properties": {
         "process": { "$ref": "#/$defs/processEntry" },
@@ -184,17 +193,34 @@
         },
         "chain_complete": {
           "type": "boolean",
-          "description": "Cache-reported completeness of its reconstructed ancestry, not attestation of all historical exec/fork activity."
+          "description": "True when the observed identity chain reaches pid 1, a ppid of 0, or a re-checked ppid of 1 whose launchd identity could not be read (chain_status observed_chain_to_launchd). This is not attestation of every historical fork or exec."
         },
         "chain_status": {
           "type": "string",
-          "description": "Open vocabulary explaining chain completeness or the stopping condition."
+          "description": "Why the chain stopped or completed. observed_chain_to_root and observed_chain_to_launchd are the normal complete results. missing_parent means a parent was not observed and was not a validated launchd boundary."
         },
         "classification": {
           "type": "string",
           "description": "Heuristic process/agent classification; an agent candidate is not authenticated by this label."
         },
-        "classification_reason": { "type": "string" }
+        "classification_reason": { "type": "string" },
+        "owning_agent": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["name", "bundle", "root_identity", "match_reason"],
+              "properties": {
+                "name": { "type": "string", "description": "Display name of the owning agent candidate, such as Codex or ChatGPT." },
+                "bundle": { "type": "string", "description": "Application bundle basename when the owner is an .app; otherwise empty." },
+                "root_identity": { "$ref": "#/$defs/processIdentity" },
+                "match_reason": { "type": "string", "description": "Which name or bundle rule selected this owner. Not authentication." }
+              },
+              "additionalProperties": true
+            }
+          ],
+          "description": "Stable owning-agent candidate for this process tree. Null when the process is not inside a recognized agent tree, including the collector itself and unlabeled security tools."
+        }
       },
       "additionalProperties": true
     }

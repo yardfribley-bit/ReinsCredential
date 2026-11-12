@@ -147,6 +147,11 @@ final class EvidenceModelTests: XCTestCase {
         XCTAssertEqual(event.processTree.map(\.path), ["/synthetic/agent", "/synthetic/launcher"])
         XCTAssertEqual(event.attribution, "observed_fd_only")
         XCTAssertEqual(event.chainComplete, false)
+        XCTAssertEqual(event.evidenceBasis, "fd_observed")
+        XCTAssertEqual(event.owningAgentName, "Codex")
+        XCTAssertEqual(event.owningAgentBundle, "ChatGPT.app")
+        XCTAssertEqual(event.summary, "Codex read /synthetic/secret via launcher. The file was open in that process. This is not an upload finding.")
+        XCTAssertEqual(event.uploadVerdict, "")
 
         let change = try XCTUnwrap(imported.records.first {
             $0.id == UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
@@ -156,6 +161,21 @@ final class EvidenceModelTests: XCTestCase {
         XCTAssertEqual(change.actionType, "CHANGE")
         XCTAssertEqual(change.targetResource, "/synthetic/.env")
         XCTAssertTrue(change.processTree.isEmpty)
+    }
+
+    func testBackendUploadVerdictIsPreservedWithoutPromotingAnUnseenChannel() throws {
+        var fixture = backendFixture()
+        fixture["type"] = "sensitive_access_closed"
+        fixture["upload_verdict"] = "not_visible"
+        fixture["destination"] = "127.0.0.1:9"
+        fixture["transfer_outcome"] = "socket_body_not_visible"
+        fixture["summary"] = "看不到。synthetic channel"
+        let record = try decode(fixture)
+        XCTAssertEqual(record.actionType, "VERDICT")
+        XCTAssertEqual(record.uploadVerdict, "not_visible")
+        XCTAssertEqual(record.destination, "127.0.0.1:9")
+        XCTAssertEqual(record.transferOutcome, "socket_body_not_visible")
+        XCTAssertTrue(record.summary.hasPrefix("看不到"))
     }
 
     private func decode(_ fixture: [String: Any]) throws -> EvidenceRecord {

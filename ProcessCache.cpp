@@ -14,7 +14,17 @@ std::optional<ActorProcess> ProcessSnapshot::Resolve(const ProcessIdentity& id) 
         if (entry.node.identity.pid == 1 || entry.node.ppid == 0) {
             actor.chain_complete = true; actor.chain_status = "observed_chain_to_root"; break;
         }
-        if (!entry.observed_parent) break;
+        if (!entry.observed_parent) {
+            // The frozen parent image can predate a successful launchd check.
+            // Consult the live entry, and never synthesize a launchd identity.
+            const auto live = history.find(entry.node.identity);
+            const bool launchd = entry.launchd_parent_validated ||
+                (live != history.end() && live->second.launchd_parent_validated && live->second.node.ppid == 1);
+            if (launchd && entry.node.ppid == 1) {
+                actor.chain_complete = true; actor.chain_status = "observed_chain_to_launchd";
+            }
+            break;
+        }
         if (!visited.insert(*entry.observed_parent).second) { actor.chain_status = "cycle_rejected"; break; }
         auto parent = history.find(*entry.observed_parent);
         if (parent == history.end()) { actor.chain_status = "history_expired_or_evicted"; break; }
@@ -57,6 +67,8 @@ void ProcessCache::Check() const {
     std::lock_guard<std::mutex> lock(error_mutex_);
     if (error_) std::rethrow_exception(error_);
 }
+bool ProcessCache::ConfirmParentPid(const ProcessNode& node, pid_t ppid) { return source_->ConfirmParentPid(node, ppid); }
+std::optional<ProcessNode> ProcessCache::Lookup(pid_t pid) { return source_->Lookup(pid); }
 ActivitySample ProcessCache::Inspect(const ProcessNode& node, const std::vector<std::string>& roots, bool include_idle_peers) {
     // Validate before AND after the descriptor scan. No PID-only cache query.
     if (!source_->Validate(node)) return {};
@@ -103,6 +115,14 @@ void ProcessCache::Refresh() {
         const auto birth = [](const ProcessIdentity& id) { return std::make_pair(id.start_seconds, id.start_microseconds); };
         if (parent.identity == entry.node.identity || birth(parent.identity) > birth(entry.node.identity)) continue;
         if (source_->ValidateParent(entry.node, parent)) entry.observed_parent = parent.identity;
+    }
+    for (auto& pair : next->history) {
+        auto& entry = pair.second;
+        // Keep a validated launchd boundary after the process leaves the snapshot so
+        // retirement and descendant chains do not forget a check that already succeeded.
+        if (entry.state != ProcessState::Observed) continue;
+        if (entry.node.identity.pid == 1 || entry.node.ppid != 1) entry.launchd_parent_validated = false;
+        else if (!entry.launchd_parent_validated) entry.launchd_parent_validated = source_->ConfirmParentPid(entry.node, 1);
     }
     // All edges for this sample are established before any image is frozen, so
     // PID sort order cannot accidentally truncate a chain. Existing frozen

@@ -68,8 +68,15 @@ std::string EncodeFields(const EvidenceRecord& record) {
         actor = "{\"process\":" + Entry(a.process) + ",\"ppid_tree\":[";
         bool comma = false;
         for (const auto& parent : a.ancestors) { if (comma) actor += ','; actor += Entry(parent); comma = true; }
+        std::string owning = "null";
+        if (a.owning_agent) {
+            const auto& owner = *a.owning_agent;
+            owning = "{\"name\":" + Quote(owner.name) + ",\"bundle\":" + Quote(owner.bundle) + ",\"root_identity\":" + Key(owner.root) +
+                ",\"match_reason\":" + Quote(owner.match_reason) + "}";
+        }
         actor += "],\"chain_complete\":" + std::string(a.chain_complete ? "true" : "false") + ",\"chain_status\":" + Quote(a.chain_status) +
-            ",\"classification\":" + Quote(a.classification) + ",\"classification_reason\":" + Quote(a.classification_reason) + "}";
+            ",\"classification\":" + Quote(a.classification) + ",\"classification_reason\":" + Quote(a.classification_reason) +
+            ",\"owning_agent\":" + owning + "}";
     }
     const auto risk = record.risk_level == RiskLevel::High ? "High" : record.risk_level == RiskLevel::Medium ? "Medium" : "Low";
     std::string metrics = "{"; bool comma = false;
@@ -86,7 +93,8 @@ std::string EncodeFields(const EvidenceRecord& record) {
         ",\"count\":" + std::to_string(record.count) + ",\"metrics\":" + metrics +
         ",\"destination\":" + Quote(record.destination) + ",\"content_sha256\":" + Quote(record.content_sha256) +
         ",\"correlation_id\":" + Quote(record.correlation_id) + ",\"evidence_basis\":" + Quote(record.evidence_basis) +
-        ",\"transfer_outcome\":" + Quote(record.transfer_outcome) + ",\"related_event_ids\":" + related + "}";
+        ",\"transfer_outcome\":" + Quote(record.transfer_outcome) + ",\"upload_verdict\":" + Quote(record.upload_verdict) +
+        ",\"summary\":" + Quote(record.summary) + ",\"related_event_ids\":" + related + "}";
 }
 std::string Envelope(const std::string& session, uint64_t sequence) {
     return "{\"schema_version\":2,\"session_id\":" + Quote(session) + ",\"sequence\":" + std::to_string(sequence);

@@ -1,0 +1,41 @@
+name: macOS checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Backend unit and audit checks
+        run: make check
+      - name: Backend integration and short-read recall
+        run: make integration
+      - name: Swift client checks
+        run: macOSClient/scripts/check.sh
+      - name: Render evidence-chain snapshots
+        run: |
+          mkdir -p chain-snapshots
+          REINS_CHAIN_SNAPSHOT_DIR="$PWD/chain-snapshots" swift test --package-path macOSClient --filter EvidenceChainSnapshotTests
+      - name: Upload evidence-chain snapshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-chain-snapshots
+          path: chain-snapshots
+          if-no-files-found: error
+      - name: Fake-secret acceptance harness
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: scripts/acceptance/real_agents.sh --mode ci
+      - name: Upload real-agent acceptance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-agent-acceptance
+          path: tests/results/real_agent_acceptance.json
+          if-no-files-found: error

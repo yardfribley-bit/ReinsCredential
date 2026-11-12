@@ -157,6 +157,27 @@ final class DashboardStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedRecordID, store.records.first?.id)
     }
 
+    func testSamplesGroupByAgentAndKeepHiddenVerdicts() {
+        let store = DashboardStore()
+        store.showSamples()
+        let labels = Set(store.chains.map(\.verdict))
+        XCTAssertTrue(labels.contains(.uploaded))
+        XCTAssertTrue(labels.contains(.attempted))
+        XCTAssertTrue(labels.contains(.notFound))
+        XCTAssertTrue(labels.contains(.notVisible))
+        for chain in store.chains where chain.verdictCode == "not_visible" {
+            XCTAssertEqual(chain.verdictLabel, "看不到")
+            XCTAssertNotEqual(chain.verdict, .notFound)
+        }
+        XCTAssertTrue(store.chainSections.contains { $0.title == "Codex" })
+        XCTAssertEqual(store.chainSections.last?.title, "未归属")
+        store.agentFilter = .named("Cursor")
+        store.reconcileSelection()
+        XCTAssertFalse(store.visibleChains.isEmpty)
+        XCTAssertTrue(store.visibleChains.allSatisfy { $0.owningAgentName == "Cursor" && $0.verdict == .notFound })
+        XCTAssertTrue(store.visibleRecords.allSatisfy { $0.owningAgentName == "Cursor" })
+    }
+
     func testMalformedOnlyImportPreservesPreviousDataset() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -56,6 +56,22 @@ void ReadArguments(ProcessNode& node) {
     node.arguments = std::move(arguments); node.arguments_available = true;
 }
 class DarwinProcessSource final : public IProcessSource {
+    std::optional<ProcessNode> ReadNode(pid_t pid) const {
+        auto before = BsdInfo(pid);
+        if (!before) return std::nullopt;
+        ProcessNode node;
+        node.identity = Identity(*before); node.ppid = static_cast<pid_t>(before->pbi_ppid);
+        node.name.assign(before->pbi_name, strnlen(before->pbi_name, sizeof(before->pbi_name)));
+        node.executable = Executable(pid);
+        if (node.executable.empty()) return std::nullopt;
+        const auto base = std::filesystem::path(node.executable).filename().string();
+        if (base == "node" || base == "bun" || base == "python" || base == "python3" || base.rfind("python3.", 0) == 0)
+            ReadArguments(node);
+        auto after = BsdInfo(pid);
+        if (!after || !Same(node, *after) || static_cast<pid_t>(after->pbi_ppid) != node.ppid || Executable(pid) != node.executable)
+            return std::nullopt;
+        return node;
+    }
 public:
     ProcessSample Sample() override {
         int estimate = proc_listallpids(nullptr, 0);
@@ -72,21 +88,18 @@ public:
         sample.enumeration_complete = static_cast<size_t>(count) < pids.size();
         for (size_t i = 0; i < std::min(pids.size(), static_cast<size_t>(count)); ++i) {
             if (pids[i] <= 0) continue;
-            auto before = BsdInfo(pids[i]);
-            if (!before) { ++sample.unavailable; continue; }
-            ProcessNode node;
-            node.identity = Identity(*before); node.ppid = static_cast<pid_t>(before->pbi_ppid);
-            node.name.assign(before->pbi_name, strnlen(before->pbi_name, sizeof(before->pbi_name)));
-            node.executable = Executable(pids[i]);
-            const auto base = std::filesystem::path(node.executable).filename().string();
-            if (base == "node" || base == "bun" || base == "python" || base == "python3" || base.rfind("python3.", 0) == 0)
-                ReadArguments(node);
-            auto after = BsdInfo(pids[i]);
-            if (!after || !Same(node, *after) || after->pbi_ppid != before->pbi_ppid ||
-                node.executable.empty() || Executable(pids[i]) != node.executable) { ++sample.unavailable; continue; }
-            sample.processes.push_back(std::move(node));
+            if (auto node = ReadNode(pids[i])) sample.processes.push_back(std::move(*node));
+            else ++sample.unavailable;
         }
         return sample;
+    }
+    std::optional<ProcessNode> Lookup(pid_t pid) override { return ReadNode(pid); }
+    bool ConfirmParentPid(const ProcessNode& node, pid_t ppid) override {
+        auto before = BsdInfo(node.identity.pid);
+        if (!before || !Same(node, *before) || static_cast<pid_t>(before->pbi_ppid) != ppid) return false;
+        if (!node.executable.empty() && Executable(node.identity.pid) != node.executable) return false;
+        auto after = BsdInfo(node.identity.pid);
+        return after && Same(node, *after) && static_cast<pid_t>(after->pbi_ppid) == ppid;
     }
     bool Validate(const ProcessNode& node) override {
         auto before = BsdInfo(node.identity.pid);

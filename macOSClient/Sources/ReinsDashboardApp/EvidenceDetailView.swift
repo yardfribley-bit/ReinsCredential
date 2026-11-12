@@ -11,10 +11,15 @@ struct EvidenceDetailView: View {
                     Label("证据详情", systemImage: "doc.text.magnifyingglass")
                         .font(.headline)
                     Spacer()
+                    if !record.uploadVerdict.isEmpty {
+                        VerdictBadge(verdict: UploadVerdictWord.parse(record.uploadVerdict))
+                    }
                     RiskBadge(level: record.riskLevel)
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(record.findingTitle).font(.title3.weight(.semibold))
+                    Text(EvidenceRedaction.display(record.summary.isEmpty ? record.findingTitle : record.summary))
+                        .font(.title3.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
                     if let action = record.recommendedAction {
                         Text(action).font(.subheadline).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -29,12 +34,20 @@ struct EvidenceDetailView: View {
                     }
                     DetailValue(title: "目标资源", value: record.targetResource.isEmpty ? "未记录" : record.targetResource, monospaced: true)
                     if !record.destination.isEmpty {
-                        DetailValue(title: "发送目的地", value: record.destination, monospaced: true)
+                        DetailValue(title: "发送目的地", value: EvidenceRedaction.display(record.destination), monospaced: true)
+                    }
+                    if !record.contentSHA256.isEmpty {
+                        DetailValue(title: "内容摘要 SHA-256", value: record.contentSHA256, monospaced: true)
                     }
                 }
 
                 detailSection("关联依据") {
                     DetailValue(title: "归因状态", value: record.attribution.isEmpty ? "未记录" : record.attribution)
+                    if !record.owningAgentName.isEmpty {
+                        DetailValue(title: "AI agent", value: record.owningAgentBundle.isEmpty
+                            ? record.owningAgentName
+                            : "\(record.owningAgentName) (\(record.owningAgentBundle))")
+                    }
                     if !record.classification.isEmpty {
                         DetailValue(title: "进程分类", value: record.classification)
                     }
@@ -45,7 +58,7 @@ struct EvidenceDetailView: View {
                         DetailValue(title: "传输结果", value: record.transferOutcome)
                     }
                     if !record.detail.isEmpty {
-                        DetailValue(title: "说明", value: record.detail)
+                        DetailValue(title: "说明", value: EvidenceRedaction.display(record.detail))
                     }
                     Text("仅展示后端记录的结论。文件变化或打开的描述符本身不能证明读取或上传。")
                         .font(.caption)
@@ -84,10 +97,21 @@ struct EvidenceDetailView: View {
     }
 
     private var chainStatus: String {
-        switch record.chainComplete {
-        case .some(true): return "后端标记：进程链完整。"
-        case .some(false): return "后端标记：进程链不完整，部分祖先不可用。"
-        case .none: return "后端未提供进程链完整性标记。"
+        switch record.chainStatus {
+        case "observed_chain_to_root":
+            return "Process chain reaches the root process."
+        case "observed_chain_to_launchd":
+            return "Process chain reaches launchd (pid 1). launchd's own start time was not readable."
+        case "missing_parent":
+            return "Process chain is incomplete: a parent was not observed."
+        case let status where !status.isEmpty:
+            return "Process chain: \(status)."
+        default:
+            switch record.chainComplete {
+            case .some(true): return "Process chain is marked complete."
+            case .some(false): return "Process chain is incomplete."
+            case .none: return "No process-chain status was recorded."
+            }
         }
     }
 

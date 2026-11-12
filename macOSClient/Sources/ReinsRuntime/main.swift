@@ -145,7 +145,7 @@ private func runSupervisor(_ options: Options) throws {
         try publish(.starting)
         while !stop.isRequested {
             do {
-                configuration = try RuntimeConfiguration.load(from: paths.configurationURL)
+                configuration = try RuntimeConfiguration.loadEffective(from: paths.configurationURL)
             } catch {
                 try publish(.failed, "Configuration error: \(error.localizedDescription)")
                 let until = Date().addingTimeInterval(2)

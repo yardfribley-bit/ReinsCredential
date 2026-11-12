@@ -13,6 +13,8 @@ extension EvidenceRecord {
         case "sensitive_network_cooccurrence": return "敏感文件与网络连接同时可见"
         case "activity_observed":
             return targetResource.isEmpty ? "进程活动快照" : "进程持有敏感文件描述符"
+        case "sensitive_access_observed":
+            return evidenceBasis == "inferred" ? "敏感文件访问时间与一个进程重合" : "敏感文件访问时间发生变化"
         case "sensor_gap": return "采集覆盖出现间隙"
         case "fatal_error", "gateway_fatal": return "采集服务错误"
         case "coverage": return "采集健康状态"
@@ -22,6 +24,11 @@ extension EvidenceRecord {
         case "sensitive_content_delivery_attempt": return "准备交付敏感内容"
         case "sensitive_content_delivered": return "内容已写入本地连接"
         case "transfer_result": return "网关转发结果"
+        case "egress_transfer": return "本地出口代理看到的传输"
+        case "sensitive_access_closed": return "敏感文件访问的出口结论"
+        case "egress_channel_unseen": return "出口通道内容不可见"
+        case "egress_proxy_ready": return "本地出口代理已启动"
+        case "egress_proxy_stopped": return "本地出口代理已停止"
         case "gateway_request_failed": return "网关请求失败"
         case "gateway_ready": return "内容网关已启动"
         default: return actionType
@@ -31,9 +38,13 @@ extension EvidenceRecord {
     var recommendedAction: String? {
         switch sourceType {
         case "activity_observed" where !targetResource.isEmpty:
-            return "确认这个进程是否需要接触该文件。若不需要，请在对应 Agent 中缩小工作目录或文件权限。打开的描述符尚不能证明内容被读取。"
+            return "The file was open in this process. That shows who touched it. It does not show an upload."
+        case "sensitive_access_observed" where evidenceBasis == "inferred":
+            return "This link is only a timing overlap. The file was not seen open, and this is not an upload."
+        case "sensitive_access_observed":
+            return "The file's access time changed. No process was identified, and this is not an upload."
         case "sensitive_network_cooccurrence":
-            return "核查进程、敏感路径和连接目的地是否符合预期。这是同次采样中的共现，尚不能证明该文件被发送到此目的地。"
+            return "A sensitive file and a network connection were both open. This is not an upload."
         case "filesystem_change":
             return "检查文件变化是否符合预期。文件系统事件不提供行为进程，无法据此指定某个 Agent。"
         case "sensor_gap":
@@ -42,8 +53,18 @@ extension EvidenceRecord {
             return "查看下方错误说明和监控状态，处理权限、空间或配置问题后重新启动监控。"
         case "sensitive_payload_observed":
             return "提交内容已匹配受监控数据。核查目的地与关联的传输结果；提交记录本身不代表远端已接收。"
-        case "transfer_result":
+        case "transfer_result", "egress_transfer":
             return "根据传输结果和证据来源核查发送是否完成；远端接收需要独立回执支持。"
+        case "sensitive_access_closed" where uploadVerdict == "uploaded":
+            return "请求体与已登记内容匹配，并且目的地返回了成功状态。这不是对端的独立回执。"
+        case "sensitive_access_closed" where uploadVerdict == "attempted":
+            return "请求体与已登记内容匹配，但这次传输没有成功。"
+        case "sensitive_access_closed" where uploadVerdict == "not_found":
+            return "已查看明文 HTTP 出口，没有看到已登记内容。"
+        case "sensitive_access_closed" where uploadVerdict == "not_visible":
+            return "这个通道的内容看不到。不能把它写成未发现。"
+        case "egress_channel_unseen":
+            return "只看到了通道或对端，没有看到字节。这不是未发现。"
         default: return nil
         }
     }

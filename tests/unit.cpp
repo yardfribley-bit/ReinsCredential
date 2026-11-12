@@ -1,7 +1,10 @@
 #include "AgentMonitor.h"
+#include "SensitiveDefaults.h"
 #include "SpscRing.h"
 #include "ContentMatcher.h"
+#include "EgressVerdict.h"
 #include <zlib.h>
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cerrno>
@@ -23,7 +26,9 @@ ProcessNode Node(pid_t pid, uint64_t birth, pid_t parent = 0) {
 class FakeSource final : public IProcessSource {
 public:
     std::vector<ProcessNode> nodes;
-    bool fail_sample = false, recycle_during_inspect = false;
+    bool fail_sample = false, recycle_during_inspect = false, confirm_launchd = false;
+    // Empty means every inspected process reports the synthetic file and peer.
+    std::optional<std::set<pid_t>> sensitive_pids;
     ProcessSample Sample() override {
         if (fail_sample) throw std::runtime_error("injected snapshot failure");
         return {nodes, 0, true};
@@ -36,10 +41,17 @@ public:
     bool ValidateParent(const ProcessNode& child, const ProcessNode& parent) override {
         return child.ppid == parent.identity.pid && Validate(child) && Validate(parent);
     }
+    bool ConfirmParentPid(const ProcessNode& node, pid_t ppid) override {
+        return confirm_launchd && ppid == 1 && node.ppid == 1;
+    }
     ActivitySample Inspect(const ProcessNode& node, const std::vector<std::string>&, bool) override {
         if (recycle_during_inspect) for (auto& current : nodes)
             if (current.identity == node.identity) ++current.identity.start_seconds;
-        ActivitySample result; result.sensitive_files.insert("/synthetic/secret"); result.socket_peers.insert("127.0.0.1:1234/protocol=6"); return result;
+        ActivitySample result;
+        if (sensitive_pids && !sensitive_pids->count(node.identity.pid)) return result;
+        result.sensitive_files.insert("/synthetic/secret");
+        if (!sensitive_pids) result.socket_peers.insert("127.0.0.1:1234/protocol=6");
+        return result;
     }
 };
 void CacheTests() {
@@ -224,6 +236,10 @@ void ClassificationTests() {
     node.executable = "/usr/local/bin/node";
     node.arguments = {"node", "/Applications/WorkBuddy AI.app/Contents/Resources/app.asar.unpacked/cli/dist/codebuddy-lite-wb.mjs"};
     assert(MatchAgent(node, rules).rfind("application_cli_entrypoint:", 0) == 0);
+    node.executable = "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT";
+    assert(MatchAgent(node, rules) == "application_bundle:/chatgpt.app/");
+    node.executable = "/Applications/AgentReins.app/Contents/MacOS/AgentReins";
+    assert(MatchAgent(node, rules).empty());
     node.executable = "/Applications/Grok Bot.app/Contents/MacOS/Grok Bot";
     assert(MatchAgent(node, rules).empty());
     rules.bundles = {"Grok Bot.app"};
@@ -283,7 +299,177 @@ void ContentTests() {
     assert(json.find("id\\\"quoted") != std::string::npos);
     std::cout << "PASS: SHA256/base64 vectors, raw/JSON/base64/gzip content matches, benign/partial negatives, corrupt gzip and expansion limits, structured linkage\n";
 }
+ProcessNode Named(pid_t pid, uint64_t birth, pid_t parent, const std::string& executable, const std::string& name) {
+    auto node = Node(pid, birth, parent); node.executable = executable; node.name = name; return node;
+}
+void AttributionTests() {
+    const auto suffixes = DefaultSensitiveSuffixes();
+    assert(std::find(suffixes.begin(), suffixes.end(), ".ssh") != suffixes.end());
+    assert(std::find(suffixes.begin(), suffixes.end(), ".aws") != suffixes.end());
+    assert(std::find(suffixes.begin(), suffixes.end(), ".config/gh") != suffixes.end());
+    assert(std::find(suffixes.begin(), suffixes.end(), ".netrc") != suffixes.end());
+    assert(std::find(suffixes.begin(), suffixes.end(), ".npmrc") != suffixes.end());
+    assert(std::find(suffixes.begin(), suffixes.end(), ".git-credentials") != suffixes.end());
+    assert(std::find(suffixes.begin(), suffixes.end(), ".docker/config.json") != suffixes.end());
+    assert(std::find(suffixes.begin(), suffixes.end(), ".kube/config") != suffixes.end());
+    assert(std::find(suffixes.begin(), suffixes.end(), ".config/gcloud") != suffixes.end());
+    assert(std::find(suffixes.begin(), suffixes.end(), ".azure") != suffixes.end());
+
+    auto source = std::make_shared<FakeSource>();
+    source->nodes = {Named(70, 5, 1, "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", "ChatGPT"),
+        Named(71, 6, 70, "/usr/local/bin/codex", "codex"), Named(72, 7, 71, "/bin/zsh", "zsh")};
+    ProcessCache cache(source, {}); cache.Refresh();
+    auto incomplete = cache.View()->Resolve(source->nodes[0].identity);
+    assert(incomplete && !incomplete->chain_complete && incomplete->chain_status == "missing_parent");
+
+    auto launchd = std::make_shared<FakeSource>();
+    launchd->confirm_launchd = true;
+    launchd->sensitive_pids = std::set<pid_t>{};
+    launchd->nodes = {Named(80, 5, 1, "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT", "ChatGPT"),
+        Named(81, 6, 80, "/usr/local/bin/codex", "codex"), Named(82, 7, 81, "/bin/zsh", "zsh")};
+    ProcessCache ready(launchd, {}); ready.Refresh();
+    auto app = ready.View()->Resolve(launchd->nodes[0].identity);
+    assert(app && app->chain_complete && app->chain_status == "observed_chain_to_launchd" && app->ancestors.empty());
+    auto shell = ready.View()->Resolve(launchd->nodes[2].identity);
+    assert(shell && shell->chain_complete && shell->chain_status == "observed_chain_to_launchd");
+    assert(shell->ancestors.size() == 2 && shell->ancestors[0].node.identity.pid == 81);
+
+    struct Sink { std::vector<EvidenceRecord> records; SubmitResult Submit(EvidenceRecord record) { records.push_back(std::move(record)); return SubmitResult::Accepted; } };
+    Sink sink;
+    AgentMonitor monitor(ready, [&](EvidenceRecord record) { return sink.Submit(std::move(record)); }, {}, {"/synthetic"});
+    monitor.Scan();
+    auto python = Named(83, 8, 82, "/usr/bin/python3", "python");
+    monitor.ObserveSensitive(python, "/synthetic/secret", "fd_observed");
+    monitor.ObserveSensitive(python, "/synthetic/secret", "fd_observed");
+    const EvidenceRecord* access = nullptr;
+    for (const auto& record : sink.records) if (record.type == "activity_observed" && record.target_resource == "/synthetic/secret") access = &record;
+    assert(access && access->evidence_basis == "fd_observed");
+    assert(access->actor_process && access->actor_process->chain_complete);
+    assert(access->actor_process->chain_status == "observed_chain_to_launchd");
+    assert(access->actor_process->owning_agent && access->actor_process->owning_agent->name == "ChatGPT");
+    assert(access->actor_process->owning_agent->bundle == "ChatGPT.app");
+    assert(access->actor_process->owning_agent->root.pid == 80);
+    assert(access->summary == "Codex read /synthetic/secret via zsh -> python. The file was open in that process. This is not an upload finding.");
+    assert(access->summary.find("upload finding") != std::string::npos && access->transfer_outcome.empty() && access->content_sha256.empty());
+    assert(std::count_if(sink.records.begin(), sink.records.end(), [](const EvidenceRecord& record) {
+        return record.type == "activity_observed" && record.target_resource == "/synthetic/secret";
+    }) == 1);
+    auto json = ToJson(*access, "synthetic-session", 1);
+    assert(json.find("\"owning_agent\":{") != std::string::npos);
+    assert(json.find("\"summary\":\"Codex read /synthetic/secret via zsh -> python.") != std::string::npos);
+    assert(json.find("schema_version\":2") != std::string::npos);
+
+    monitor.NoteObservedDescendant(python, 1'000, 2'000, {});
+    monitor.NoteAccessTime("/synthetic/maybe", 1'000, 2'000);
+    const EvidenceRecord* inferred = nullptr;
+    for (const auto& record : sink.records) if (record.evidence_basis == "inferred") inferred = &record;
+    assert(inferred && inferred->actor_process && inferred->actor_process->owning_agent);
+    assert(inferred->summary.find("Codex may have read /synthetic/maybe via zsh -> python") == 0);
+    assert(inferred->summary.find("not an upload") != std::string::npos);
+    assert(inferred->risk_level == RiskLevel::Low);
+    auto other = Named(84, 9, 82, "/bin/cat", "cat");
+    monitor.NoteObservedDescendant(other, 1'000, 2'000, {});
+    monitor.NoteAccessTime("/synthetic/other", 1'000, 2'000);
+    const EvidenceRecord* ambiguous = nullptr;
+    for (const auto& record : sink.records) if (record.target_resource == "/synthetic/other") ambiguous = &record;
+    assert(ambiguous && !ambiguous->actor_process && ambiguous->evidence_basis == "access_time_change");
+    assert(ambiguous->summary.find("No process was identified") != std::string::npos);
+    assert(ambiguous->summary.find("not an upload") != std::string::npos);
+
+    auto self_source = std::make_shared<FakeSource>();
+    self_source->confirm_launchd = true;
+    self_source->sensitive_pids = std::set<pid_t>{90};
+    self_source->nodes = {Named(90, 4, 1, "/Applications/ReinsCredential.app/Contents/Helpers/agent-monitor", "agent-monitor"),
+        Named(91, 5, 90, "/bin/cat", "cat")};
+    ProcessCache self_cache(self_source, {}); self_cache.Refresh();
+    Sink self_sink;
+    AgentMonitor self_monitor(self_cache, [&](EvidenceRecord record) { return self_sink.Submit(std::move(record)); }, {}, {"/synthetic"});
+    self_monitor.Scan();
+    assert(self_monitor.Stats().candidates == 0);
+    assert(!self_monitor.FocusRoots().size());
+    for (const auto& record : self_sink.records) {
+        assert(record.type != "activity_observed");
+        assert(record.type != "agent_discovered");
+        if (record.actor_process) {
+            assert(record.actor_process->classification == "collector_self");
+            assert(!record.actor_process->owning_agent);
+        }
+    }
+    ActorProcess collector; collector.classification = "collector_self";
+    collector.process.node = self_source->nodes[0];
+    auto self_summary = SummarizeAccess(&collector, "/synthetic/secret", "fd_observed", {});
+    assert(self_summary.find("monitoring app itself") != std::string::npos && self_summary.find("not an upload") != std::string::npos);
+
+    auto security = std::make_shared<FakeSource>();
+    security->confirm_launchd = true;
+    security->sensitive_pids = std::set<pid_t>{92};
+    security->nodes = {Named(92, 4, 1, "/Applications/AgentReins.app/Contents/MacOS/AgentReins", "AgentReins")};
+    ProcessCache security_cache(security, {}); security_cache.Refresh();
+    Sink security_sink;
+    AgentMonitor security_monitor(security_cache, [&](EvidenceRecord record) { return security_sink.Submit(std::move(record)); }, {}, {"/synthetic"});
+    security_monitor.Scan();
+    const EvidenceRecord* security_access = nullptr;
+    for (const auto& record : security_sink.records) if (record.type == "activity_observed") security_access = &record;
+    assert(security_access && security_access->actor_process);
+    assert(security_access->actor_process->classification == "unclassified_process");
+    assert(!security_access->actor_process->owning_agent);
+    assert(security_access->summary.find("AgentReins opened /synthetic/secret") == 0);
+    assert(security_access->summary.find("not labeled as an AI agent") != std::string::npos);
+    assert(security_access->summary.find("not an upload") != std::string::npos);
+    assert(security_monitor.Stats().candidates == 0);
+    std::cout << "PASS: launchd boundary, owning agent, plain-language sensitive access, self exclusion, security tool stays unclassified\n";
+}
+EgressObservation Http(bool match, bool ok, const std::string& destination) {
+    EgressObservation item;
+    item.kind = EgressObservation::Kind::HttpInspected;
+    item.content_match = match;
+    item.transfer_succeeded = ok;
+    item.destination = destination;
+    item.transfer_outcome = ok ? "upstream_http_2xx" : "connect_failed";
+    return item;
+}
+void VerdictTests() {
+    const auto uploaded = CloseAccess(true, {Http(true, true, "http://127.0.0.1:9/upload")});
+    assert(uploaded.verdict == UploadVerdict::Uploaded);
+    assert(uploaded.destination == "http://127.0.0.1:9/upload");
+    assert(uploaded.transfer_outcome == "upstream_http_2xx");
+    assert(std::string(UploadVerdictLabel(uploaded.verdict)) == "已上传");
+    const auto attempted = CloseAccess(true, {Http(true, false, "http://127.0.0.1:9/upload")});
+    assert(attempted.verdict == UploadVerdict::Attempted);
+    assert(std::string(UploadVerdictLabel(attempted.verdict)) == "已尝试未成功");
+    const auto benign = CloseAccess(true, {Http(false, true, "http://127.0.0.1:9/upload")});
+    assert(benign.verdict == UploadVerdict::NotFound);
+    assert(benign.transfer_outcome == "watched_http_no_registered_content");
+    assert(std::string(UploadVerdictLabel(benign.verdict)) == "未发现");
+    const auto idle = CloseAccess(true, {});
+    assert(idle.verdict == UploadVerdict::NotFound && idle.transfer_outcome == "watched_http_egress_idle");
+    EgressObservation tunnel;
+    tunnel.kind = EgressObservation::Kind::OpaqueTunnel;
+    tunnel.destination = "127.0.0.1:9";
+    tunnel.transfer_outcome = "opaque_tunnel_body_not_visible";
+    const auto hidden = CloseAccess(true, {Http(false, true, "http://127.0.0.1:9/upload"), tunnel});
+    assert(hidden.verdict == UploadVerdict::NotVisible);
+    assert(hidden.destination == "127.0.0.1:9");
+    assert(hidden.transfer_outcome == "opaque_tunnel_body_not_visible");
+    assert(std::string(UploadVerdictLabel(hidden.verdict)) == "看不到");
+    const auto unwatched = CloseAccess(false, {});
+    assert(unwatched.verdict == UploadVerdict::NotVisible && unwatched.transfer_outcome == "egress_not_watched");
+    const auto success_beats_tunnel = CloseAccess(true, {tunnel, Http(true, true, "http://127.0.0.1:9/ok")});
+    assert(success_beats_tunnel.verdict == UploadVerdict::Uploaded);
+    assert(success_beats_tunnel.destination == "http://127.0.0.1:9/ok");
+    const auto summary = UploadVerdictSummary(hidden, "python3", "/tmp/synthetic.env");
+    assert(summary.rfind("看不到", 0) == 0);
+    assert(summary.find("127.0.0.1:9") != std::string::npos);
+    assert(summary.find("opaque_tunnel_body_not_visible") != std::string::npos);
+    EvidenceRecord record;
+    record.upload_verdict = "not_visible";
+    const auto json = ToJson(record, "verdict", 1);
+    assert(json.find("\"upload_verdict\":\"not_visible\"") != std::string::npos);
+    EvidenceRecord blank;
+    assert(ToJson(blank, "verdict", 2).find("\"upload_verdict\":\"\"") != std::string::npos);
+    std::cout << "PASS: upload verdicts stay uploaded, attempted, not-found, or not-visible\n";
+}
 } // namespace
 int main() {
-    CacheTests(); RingTests(); StoreTests(); ClassificationTests(); UnknownProcessTests(); ContentTests();
+    CacheTests(); RingTests(); StoreTests(); ClassificationTests(); UnknownProcessTests(); ContentTests(); AttributionTests(); VerdictTests();
 }

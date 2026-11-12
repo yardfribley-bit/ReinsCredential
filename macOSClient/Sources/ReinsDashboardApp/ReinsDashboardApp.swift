@@ -14,7 +14,6 @@ struct ReinsDashboardApp: App {
             }
                 .frame(minWidth: 1_050, minHeight: 640)
                 .onOpenURL { store.importLog(from: $0) }
-                .onReceive(runtime.$records) { store.applyLive(records: $0) }
                 .onAppear {
                     guard !didStartSession else { return }
                     didStartSession = true
