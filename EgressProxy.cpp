@@ -670,6 +670,7 @@ struct Session {
         ActorProcess actor;
         bool known = false;
         bool inspection_complete = true;
+        bool saw_complete_listing = false;
         int samples = 0;
         struct FileHold {
             std::string event_id;
@@ -692,7 +693,15 @@ struct Session {
         proc.identity = node.identity;
         proc.root = root;
         proc.actor = actor;
-        if (!activity.descriptors_complete || !activity.identity_validated) proc.inspection_complete = false;
+        // A dying process can fail one descriptor listing. That must not erase
+        // an earlier complete listing, or a measured small send becomes 看不到.
+        const bool listing_ok = activity.descriptors_complete && activity.identity_validated;
+        if (listing_ok) {
+            proc.inspection_complete = true;
+            proc.saw_complete_listing = true;
+        } else if (!proc.saw_complete_listing) {
+            proc.inspection_complete = false;
+        }
         std::set<std::string> open_now(activity.sensitive_files.begin(), activity.sensitive_files.end());
         for (const auto& path : open_now) {
             auto& hold = proc.files[path];
