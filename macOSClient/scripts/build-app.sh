@@ -47,7 +47,12 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 PLIST
-if [[ "${REINS_SIGNING_IDENTITY:--}" == - ]]; then
+# Empty or "-" is an ad-hoc local signature. A Developer ID string is used
+# only when the caller supplies REINS_SIGNING_IDENTITY. Missing credentials
+# never fail this script.
+signing_identity="${REINS_SIGNING_IDENTITY:--}"
+if [[ -z "$signing_identity" || "$signing_identity" == "-" ]]; then
+  signing_identity="-"
   /usr/libexec/PlistBuddy -c 'Add :ReinsLocalLaunchAgent bool true' "$app_dir/Contents/Info.plist"
 fi
 cat > "$app_dir/Contents/Library/LaunchAgents/io.github.yardfribley-bit.ReinsCredential.runtime.plist" <<'PLIST'
@@ -63,11 +68,10 @@ cat > "$app_dir/Contents/Library/LaunchAgents/io.github.yardfribley-bit.ReinsCre
   <key>ProcessType</key><string>Background</string>
 </dict></plist>
 PLIST
-identity="${REINS_SIGNING_IDENTITY:--}"
-/usr/bin/codesign --force --sign "$identity" "$app_dir/Contents/Helpers/agent-monitor"
-/usr/bin/codesign --force --sign "$identity" "$app_dir/Contents/Helpers/agent-egress"
-/usr/bin/codesign --force --sign "$identity" "$app_dir/Contents/MacOS/ReinsRuntime"
-/usr/bin/codesign --force --sign "$identity" "$app_dir"
+/usr/bin/codesign --force --sign "$signing_identity" "$app_dir/Contents/Helpers/agent-monitor"
+/usr/bin/codesign --force --sign "$signing_identity" "$app_dir/Contents/Helpers/agent-egress"
+/usr/bin/codesign --force --sign "$signing_identity" "$app_dir/Contents/MacOS/ReinsRuntime"
+/usr/bin/codesign --force --sign "$signing_identity" "$app_dir"
 /usr/bin/codesign --verify --deep --strict "$app_dir"
 rm -rf "$client_dir/dist/ReinsCredential.app"
 mv "$app_dir" "$client_dir/dist/ReinsCredential.app"

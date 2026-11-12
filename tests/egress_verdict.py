@@ -7,6 +7,8 @@ does not start the Unix content gateway.
 import gzip
 import json
 import os
+import shlex
+import shutil
 import socket
 import ssl
 import statistics
@@ -45,6 +47,11 @@ LAUNCHED_VERDICTS = {
     "https-fail": "attempted",
     "https-pinned": "not_visible",
 }
+# Idle watch-live on a table that already has extra sleep processes.
+# RSS is kilobytes from ps. CPU is one sample's percent of one core.
+IDLE_RSS_KB_MAX = 150_000
+IDLE_CPU_PERCENT_MAX = 150
+
 LIVE_VERDICTS = {
     "live-proxy": "uploaded",
     "live-direct": "not_found",
@@ -566,6 +573,72 @@ def live_after_canary(directory, unknown, secret):
     return "uploaded"
 
 
+def xcode_python():
+    roots = sorted(Path("/Applications").glob(
+        "Xcode*.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/*/Resources/Python.app/Contents/MacOS/Python"))
+    return roots[-1] if roots else None
+
+
+def live_toolchain_chain(directory, secret):
+    """A shell child under Grok Bot, with Xcode's Python in the middle, is owned by Grok Bot.app."""
+    host = routable_ip()
+    python = xcode_python()
+    if not host:
+        return "skipped"
+    if python is None:
+        raise SystemExit("live-toolchain-chain could not find Xcode's Python.app")
+    chain = directory / "chain_wait"
+    hold = directory / "hold-upload"
+    subprocess.check_call(["/usr/bin/clang", "-O2", "-o", str(chain), str(ROOT / "tests/chain_wait.c")])
+    subprocess.check_call(["/usr/bin/clang", "-O2", "-o", str(hold), str(ROOT / "tests/live_agent.c")])
+    grok = directory / "Grok Bot.app" / "Contents" / "MacOS" / "Grok Bot"
+    helper = directory / "Grok Bot.app" / "Contents" / "Frameworks" / "Grok Bot Helper.app" / "Contents" / "MacOS" / "Grok Bot Helper"
+    grok.parent.mkdir(parents=True, exist_ok=True)
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(chain, grok)
+    shutil.copy(chain, helper)
+    os.chmod(grok, 0o755)
+    os.chmod(helper, 0o755)
+    server = Server(accept_timeout=20, bind_host="0.0.0.0")
+    ready = directory / "toolchain.ready"
+    log = directory / "live-toolchain.jsonl"
+    hold_cmd = shlex.join([str(hold), "direct", str(secret), host, str(server.port), str(ready)])
+    zsh_cmd = shlex.join([str(python), str(ROOT / "tests/toolchain_parent.py"), "/bin/bash", "-c", hold_cmd])
+    proc = subprocess.Popen(
+        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "16",
+         "--sample-ms", "40"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    time.sleep(0.3)
+    agent = subprocess.Popen([str(grok), str(helper), "/bin/zsh", "-c", zsh_cmd])
+    time.sleep(2.0)
+    ready.write_text("go\n")
+    _out, err = finish(proc)
+    try:
+        agent.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        agent.kill()
+    server.join()
+    records = load_records(log)
+    closes = [record for record in records if record["type"] == "sensitive_access_closed"
+              and secret.name in (record.get("target_resource") or "")
+              and record.get("evidence_basis") == "flow_txbytes"
+              and record.get("upload_verdict") == "uploaded"]
+    if not closes:
+        sys.stderr.write(redact(err))
+        raise SystemExit("live-toolchain-chain missing uploaded flow close: " + redact(json.dumps(records)))
+    owner = ((closes[-1].get("actor_process") or {}).get("owning_agent") or {})
+    if owner.get("bundle") != "Grok Bot.app" or owner.get("name") != "Grok":
+        raise SystemExit(f"toolchain chain owner {owner}")
+    executable = (((closes[-1].get("actor_process") or {}).get("process") or {}).get("executable") or "")
+    if not executable.endswith("/hold-upload"):
+        raise SystemExit(f"toolchain chain actor {executable}")
+    if host not in (closes[-1].get("destination") or ""):
+        raise SystemExit(f"toolchain destination {closes[-1].get('destination')}")
+    if MARKER not in server.box.get("data", b""):
+        raise SystemExit("toolchain receiver did not get the synthetic bytes")
+    return "uploaded"
+
+
 def main():
     if not PROXY.exists():
         raise SystemExit("agent-egress is not built")
@@ -580,6 +653,7 @@ def main():
         secret.write_bytes(MARKER)
         os.chmod(secret, 0o600)
         ca = make_ca(directory)
+        sleepers = [subprocess.Popen(["/bin/sleep", "8"]) for _ in range(40)]
         idle = subprocess.Popen(
             [str(PROXY), "--log", str(idle_log), "--sensitive-file", str(secret), "--watch-live", "--duration", "3",
              "--sample-ms", "50"],
@@ -587,8 +661,16 @@ def main():
         )
         idle_cpu, idle_rss = sample_process(idle.pid, 3.4)
         idle_out, idle_err = idle.communicate(timeout=10)
+        for sleeper in sleepers:
+            sleeper.kill()
         if idle.returncode != 0:
             raise SystemExit(f"idle proxy failed\n{idle_out}\n{idle_err}")
+        idle_rss_median = median(idle_rss)
+        idle_cpu_median = median(idle_cpu)
+        if idle_rss_median is None or idle_rss_median > IDLE_RSS_KB_MAX or idle_cpu_median is None or idle_cpu_median > IDLE_CPU_PERCENT_MAX:
+            raise SystemExit(
+                f"idle watch exceeded the resource budget: rss_kb={idle_rss_median} cpu={idle_cpu_median} "
+                f"caps rss_kb={IDLE_RSS_KB_MAX} cpu={IDLE_CPU_PERCENT_MAX}")
         active_cpu, active_rss = [], []
         for mode in LAUNCHED_VERDICTS:
             kind, cpu, rss, _err = one_case(directory, mode, measure=(mode == "https"), ca=ca)
@@ -635,6 +717,13 @@ def main():
             upload_tp += 1
         else:
             fn += 1
+        toolchain = live_toolchain_chain(directory, secret)
+        if toolchain == "skipped":
+            print("SKIP live-toolchain-chain no routable address")
+        elif toolchain == "uploaded":
+            upload_tp += 1
+        else:
+            fn += 1
     # False positives and false negatives are assertion failures above. A passed
     # run has none. not_visible is a true negative for the verdict and a content miss.
     print(
@@ -651,6 +740,8 @@ def main():
     counted.update({mode: verdict for mode, verdict in LIVE_VERDICTS.items() if mode not in skipped})
     if after_canary == "uploaded":
         counted["live-after-canary"] = "uploaded"
+    if toolchain == "uploaded":
+        counted["live-toolchain-chain"] = "uploaded"
     expect_upload, expect_attempted, expect_tn, expect_unseen = matrix_counts(counted)
     if (upload_tp, attempted_tp, tn, content_unseen, fp, fn) != (expect_upload, expect_attempted, expect_tn, expect_unseen, 0, 0):
         raise SystemExit(

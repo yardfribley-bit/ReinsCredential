@@ -13,9 +13,18 @@
 
 数据保存在 `~/Library/Application Support/ReinsCredential`，不会自动上传。运行目录 0700、日志 0600；保留当前日志与最近 5 个归档。16 MiB 是请求轮转阈值，队列排空可能超量，旧归档会删除。界面保留最近 2,000 条实时记录；历史归档可用“打开证据日志”查看。
 
-卸载：先在 App 中停止监控（本机版同时移除本产品的 LaunchAgent plist），再退出并将 App 移到废纸篓。证据与配置默认保留；确需删除时，可手动删除上述应用数据目录。
+卸载会停掉本产品的用户 LaunchAgent 并删除 App。证据目录默认留下：
 
-本地构建使用 ad-hoc 签名，尚未进行 Developer ID 签名/Apple 公证。它适合这台机器的安装验收；不应当作已经通过 Gatekeeper 的互联网正式发行包。不要关闭系统安全设置。升级本地版本时先停止并退出旧版，再替换 App、重新启动。
+```sh
+macOSClient/scripts/uninstall-local.sh
+macOSClient/scripts/uninstall-local.sh --delete-evidence
+```
+
+也可以先在 App 中停止监控，再退出并把 App 移到废纸篓。不要删除其它应用的 plist。
+
+升级时先停止监控并退出旧版，再替换 App、重新启动。替换 App 不会删除 `~/Library/Application Support/ReinsCredential`。
+
+本地构建在未设置 `REINS_SIGNING_IDENTITY` 时使用 ad-hoc 签名。把该变量设为 Developer ID 后，`build-app.sh` 改用该身份。`notarize-local.sh` 只在 `APPLE_ID`、`APPLE_TEAM_ID` 和 `APPLE_APP_SPECIFIC_PASSWORD` 都存在时公证，否则直接成功返回。不要关闭系统安全设置。
 
 开发者构建与安装：
 

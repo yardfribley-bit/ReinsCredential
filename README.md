@@ -8,7 +8,14 @@ A normal result reads like this:
 
 That sentence means the file was open inside that process, or, when the sentence says so, that only the file's access time overlapped one short-lived tool. It does not by itself mean the file was uploaded.
 
-An upload sentence is separate, and it is written only by the local egress proxy. The closing words are **已上传** (the registered content was in the request and the destination returned success), **已尝试未成功** (the content matched and the transfer failed), **未发现** (the proxy watched that tree's plaintext HTTP and the content was not in it), and **看不到** (that channel's bytes were not visible). 看不到 is not a clean bill. A socket peer or a TLS tunnel is not an upload.
+An upload sentence is separate. The closing words are:
+
+- **已上传** — the registered content was in a proxied request that succeeded, or the same process sent an off-host TCP byte span large enough for the file (`flow_txbytes`). That span is not a decrypted TLS body and not a remote receipt.
+- **已尝试未成功** — the content matched and the transfer failed, or an off-host connect failed.
+- **未发现** — the process was visible and no off-host upload of the file was observed. A loopback send stays here.
+- **看不到** — the descriptors or the channel could not be read. UDP and QUIC stay here. 看不到 is not a clean bill.
+
+Privacy, install, and this version: [PRIVACY.md](PRIVACY.md), [macOSClient/INSTALL.md](macOSClient/INSTALL.md), [CHANGELOG.md](CHANGELOG.md), [RELEASE_NOTES_0.2.0.md](RELEASE_NOTES_0.2.0.md). The release gate and the check for each item are in [RELEASE_CRITERIA.md](RELEASE_CRITERIA.md).
 
 The collector is a user-space Mac app. It does not install a system extension and it does not decrypt TLS. The app's own processes are never the suspected agent. Other security tools stay unlabeled programs, not agents.
 
@@ -63,7 +70,7 @@ FSEvents 不提供修改者 PID，也不监测纯读取。文件变更的 actor_
 
 新增实验性 `agent-gateway` 提供显式接入的文件内容交付与发送审计。它以 Unix socket audit token 验证连接方身份，记录来源版本 hash、内容匹配、目的地、传输结果及关联事件。原文、JSON、Base64 和有界 gzip 已测试；跨请求分片和未进入该套接字的发送仍会漏报。它不是透明 HTTPS 监控，也不会自动接入已安装 Agent。
 
-`agent-egress` 在 `127.0.0.1` 上提供本地 HTTP 代理。`--launch` 只给它自己启动的那棵进程树设置代理环境变量。`--watch-live` 不按名称名单选进程。任何非采集器进程打开已登记敏感文件就会被跟踪，属主是最外层 `.app`（可以含空格），没有 bundle 时是最靠近根的非系统祖先。已知名称只用于显示。不改这些程序的环境、MCP 配置或系统代理。能看全时按文件打开和 TCP 发送字节数下结论。看不到只用于确实读不到的通道。可选的 `--tls-ca-cert` 与 `--tls-ca-key` 让 CONNECT 里的 HTTPS 正文参加同一套指纹匹配。CA 只作为文件使用，不写入登录钥匙串。证书固定、QUIC 和直连仍然是看不到。成功的检查过的传输记为已上传，失败记为已尝试未成功，看过且没有指纹记为未发现。日志不写原始字节。用法和实测见最新验收报告。
+`agent-egress` 在 `127.0.0.1` 上提供本地 HTTP 代理。`--launch` 只给它自己启动的那棵进程树设置代理环境变量。`--watch-live` 不按名称名单选进程。任何非采集器进程打开已登记敏感文件就会被跟踪。属主是该进程自己的 `.app`；进程不在应用里时，跳过 Xcode 和其中的 Python.app，继续找到上面的桌面应用（名字可以有空格，例如 `Grok Bot.app`）。已知名称只用于显示。启动自检的正文匹配只覆盖那次启动的进程，不取消后来另一个进程对同一文件的结论。不改这些程序的环境、MCP 配置或系统代理。能看全时按文件打开和 TCP 发送字节数下结论。看不到只用于确实读不到的通道，包括 UDP 和 QUIC。可选的 `--tls-ca-cert` 与 `--tls-ca-key` 让 CONNECT 里的 HTTPS 正文参加同一套指纹匹配。CA 只作为文件使用，不写入登录钥匙串。没有进入代理的 TLS 仍然是看不到。日志不写原始字节。用法和发布门槛见 [RELEASE_CRITERIA.md](RELEASE_CRITERIA.md)。
 
 ```sh
 ./agent-egress --log ./evidence.jsonl --sensitive-file ./synthetic.env \

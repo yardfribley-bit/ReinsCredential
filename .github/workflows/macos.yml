@@ -26,6 +26,20 @@ jobs:
           name: evidence-chain-snapshots
           path: chain-snapshots
           if-no-files-found: error
+      - name: Packaging and uninstall contracts
+        run: |
+          bash -n macOSClient/scripts/build-app.sh
+          bash -n macOSClient/scripts/package-local.sh
+          bash -n macOSClient/scripts/notarize-local.sh
+          bash -n macOSClient/scripts/uninstall-local.sh
+          macOSClient/scripts/uninstall-local.sh --dry-run > /tmp/uninstall-keep.txt
+          grep -q 'kept evidence directory' /tmp/uninstall-keep.txt
+          if grep -q 'Application Support/ReinsCredential' /tmp/uninstall-keep.txt; then
+            echo 'default uninstall would delete evidence' >&2
+            exit 1
+          fi
+          macOSClient/scripts/uninstall-local.sh --dry-run --delete-evidence > /tmp/uninstall-drop.txt
+          grep -q 'Application Support/ReinsCredential' /tmp/uninstall-drop.txt
       - name: Fake-secret acceptance harness
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
