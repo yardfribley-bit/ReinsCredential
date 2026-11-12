@@ -1,5 +1,6 @@
 #include "EgressVerdict.h"
 #include <arpa/inet.h>
+#include <cctype>
 #include <cstring>
 
 namespace agentsec {
@@ -112,6 +113,13 @@ bool FailedOffHostAttempt(const LiveFlow& flow, uint64_t file_bytes) {
     // It never became established and did not carry the file.
     return file_bytes == 0 || TxDelta(flow) < file_bytes;
 }
+bool OpaqueOffHost(const LiveFlow& flow, uint64_t file_bytes) {
+    if (flow.loopback || flow.to_local_proxy) return false;
+    if (flow.kind != LiveFlowKind::TcpMeasured) return true;
+    if (!IsProviderOrRelay(flow.destination)) return false;
+    if (ConsistentOffHostSend(flow, file_bytes) || FailedOffHostAttempt(flow, file_bytes)) return false;
+    return true;
+}
 std::string DeltaText(const LiveFlow& flow, uint64_t file_bytes) {
     return "tx_delta=" + std::to_string(TxDelta(flow)) + ";file_bytes=" + std::to_string(file_bytes) +
         ";slack=" + std::to_string(kFlowTxSlack);
@@ -137,12 +145,10 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
     const LiveFlow* upload = nullptr;
     const LiveFlow* attempt = nullptr;
     const LiveFlow* loopback_send = nullptr;
-    const LiveFlow* unmeasured = nullptr;
-    bool measured_tcp = false;
+    const LiveFlow* opaque = nullptr;
     for (const auto& flow : view.flows) {
         if (flow.to_local_proxy) continue;
-        if (flow.kind == LiveFlowKind::TcpMeasured) measured_tcp = true;
-        else if (view.file_open && !unmeasured) unmeasured = &flow;
+        if (view.file_open && !opaque && OpaqueOffHost(flow, view.file_bytes)) opaque = &flow;
         if (!upload && ConsistentOffHostSend(flow, view.file_bytes)) upload = &flow;
         else if (!attempt && view.file_open && FailedOffHostAttempt(flow, view.file_bytes)) attempt = &flow;
         if (view.file_open && flow.kind == LiveFlowKind::TcpMeasured && flow.loopback && !flow.to_local_proxy &&
@@ -166,7 +172,7 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.detail = "match=flow_attempt;file_open_observed;off_host_payload_not_delivered;app_settings_not_modified";
         return result;
     }
-    if (loopback_send) {
+    if (loopback_send && !opaque) {
         result.verdict = UploadVerdict::NotFound;
         result.destination = loopback_send->destination;
         result.match_basis = "live_agent_observed";
@@ -175,15 +181,16 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         if (!view.inspection_complete) result.detail += ";descriptors_or_flows_incomplete";
         return result;
     }
-    // A partial descriptor listing must not erase a UDP/QUIC peer we already
-    // saw. Both conclusions are 看不到; the peer is the one the chain can show.
-    if (view.file_open && unmeasured && !measured_tcp) {
+    // Off-host bytes we could not read are unresolved. That includes a model
+    // provider or relay, UDP/QUIC, and undecrypted TLS. It is not 未发现.
+    if (view.file_open && opaque) {
         result.verdict = UploadVerdict::NotVisible;
-        result.destination = unmeasured->destination;
+        result.destination = opaque->destination;
         result.match_basis = "observation_impossible";
-        result.transfer_outcome = unmeasured->kind == LiveFlowKind::UdpOrQuic ? "udp_or_quic_body_not_visible"
-                                                                              : "channel_bytes_unreadable";
-        result.detail = "unmeasured_channel_while_file_open;cannot_call_this_not_found;app_settings_not_modified";
+        if (IsProviderOrRelay(opaque->destination)) result.transfer_outcome = "provider_or_relay_body_not_visible";
+        else if (opaque->kind == LiveFlowKind::UdpOrQuic) result.transfer_outcome = "udp_or_quic_body_not_visible";
+        else result.transfer_outcome = "channel_bytes_unreadable";
+        result.detail = "off_host_body_not_inspected;unresolved_not_a_clean_bill;not_rewritten_as_not_found;app_settings_not_modified";
         if (!view.inspection_complete) result.detail += ";descriptors_or_flows_incomplete";
         return result;
     }
@@ -203,7 +210,6 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.transfer_outcome = "live_agent_observed_no_access";
         result.detail = "agent_seen;no_registered_file_open;no_offhost_upload;app_settings_not_modified";
     }
-    if (view.file_open && unmeasured) result.detail += ";udp_or_quic_not_counted";
     return result;
 }
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path) {
@@ -232,6 +238,30 @@ bool ProxyBodyCoversLiveActor(const ProcessIdentity& proxy_actor, bool proxy_fro
     const ProcessIdentity& live_actor, bool live_in_launched_tree) noexcept {
     if (proxy_actor == live_actor) return true;
     return proxy_from_launched_tree && live_in_launched_tree;
+}
+bool IsProviderOrRelay(const std::string& destination) noexcept {
+    std::string host = destination;
+    if (!host.empty() && host[0] == '[') {
+        const auto end = host.find(']');
+        host = end == std::string::npos ? std::string() : host.substr(1, end - 1);
+    } else {
+        const auto colon = host.rfind(':');
+        if (colon != std::string::npos) host.resize(colon);
+    }
+    for (char& c : host) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    auto ends = [&](const char* suffix) {
+        const auto n = std::strlen(suffix);
+        if (host.size() < n) return false;
+        if (host.compare(host.size() - n, n, suffix) != 0) return false;
+        return host.size() == n || host[host.size() - n - 1] == '.';
+    };
+    for (const char* suffix : {"anthropic.com", "claude.ai", "openai.com", "chatgpt.com", "azure.com",
+        "googleapis.com", "amazonaws.com", "openrouter.ai", "groq.com", "together.ai", "together.xyz",
+        "fireworks.ai", "mistral.ai", "cohere.com", "cohere.ai", "huggingface.co", "hf.co", "x.ai",
+        "cursor.com", "cursor.sh", "githubcopilot.com"}) {
+        if (ends(suffix)) return true;
+    }
+    return false;
 }
 bool Ipv4PeerOctets(bool ipv4_flag, const uint8_t address[16], uint8_t out[4]) noexcept {
     if (!out) return false;

@@ -57,7 +57,7 @@
 - 安装、升级、卸载：`macOSClient/INSTALL.md`、`INSTALL.zh-CN.md` 和 `uninstall-local.sh`
 - 历史和本版本：`CHANGELOG.md`、`CHANGELOG.zh-CN.md`、`RELEASE_NOTES_0.2.0.md`、`RELEASE_NOTES_0.2.0.zh-CN.md`
 
-这些文档里保持的限制：TLS 正文不解密，流量字节匹配不是远端回执，UDP/QUIC 是看不到。
+这些文档里保持的限制：TLS 正文不解密，流量字节匹配不是远端回执，UDP/QUIC 是看不到。看不到是尚未解决的盲区，不是验收通过。子进程扫描之前就结束的短打开，不写成已经覆盖所有读取。
 
 ## 7. CI 和带标签的发布
 

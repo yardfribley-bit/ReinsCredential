@@ -105,6 +105,7 @@ def main():
                 time.sleep(0.05)
             idle = samples(monitor.pid, 3)
             held = run_cohort(log, "hold", 20, 30, app, credential)
+            quick = run_cohort(log, "hold", 10, 40, app, credential)
             active = []
             sampler = threading.Thread(target=lambda: active.extend(samples(monitor.pid, 4)))
             sampler.start()
@@ -137,11 +138,16 @@ def main():
             if label == "cat":
                 assert any("via cat" in record["summary"] for record in cohort["hits"]), "cat tool chain missing"
         check(held, "hold")
+        check(quick, "hold")
         if cat["hits"]:
             check(cat, "cat")
         held_recall = recall(held)
+        quick_recall = recall(quick)
         cat_recall = recall(cat)
         assert held_recall >= 0.9, held
+        assert quick_recall >= 0.9, quick
+        # Immediate cat can still finish before the subtree sweep. That gap is
+        # unsolved. This test does not claim every read is observed.
         assert cat_recall >= 0.4, cat
         coverage = [r for r in records if r["type"] == "coverage"]
         last = coverage[-1]["metrics"] if coverage else {}
@@ -151,6 +157,8 @@ def main():
         report = {
             "held_open_30ms": {"detected": held["detected_identities"], "attempts": held["iterations"],
                                "recall": held_recall},
+            "quick_open_read_40ms": {"detected": quick["detected_identities"], "attempts": quick["iterations"],
+                                     "recall": quick_recall},
             "cat_immediate": {"detected": cat["detected_identities"], "attempts": cat["iterations"],
                               "recall": cat_recall},
             "cpu_rss": {"idle_median_cpu_percent": median(idle, "cpu_percent"),
@@ -162,6 +170,7 @@ def main():
                 "activity_scan_duration_ms", "fd_scans_partial", "subtree_focused", "subtree_bursts",
                 "subtree_fd_hits", "subtree_fork_notes", "subtree_sweep_us", "fast_fd_hits")},
             "upload_detection_claimed": False,
+            "complete_read_coverage_claimed": False,
         }
         print("SHORT_READ " + json.dumps(report, sort_keys=True))
         print("PASS: short-lived synthetic credential opens name ChatGPT, complete the chain, and do not claim upload")

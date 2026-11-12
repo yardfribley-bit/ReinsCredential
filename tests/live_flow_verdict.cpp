@@ -97,6 +97,22 @@ int main() {
     assert(slack.verdict == UploadVerdict::Uploaded);
     const auto too_wide = CloseLiveAccess(Seen(file_bytes, {Tcp(off, 0, file_bytes + kFlowTxSlack + 1, true)}));
     assert(too_wide.verdict == UploadVerdict::NotFound);
+    assert(!IsProviderOrRelay(off));
+    assert(IsProviderOrRelay("api.anthropic.com:443"));
+    assert(IsProviderOrRelay("relay.openai.com:443"));
+    LiveFlow provider_tls;
+    provider_tls.destination = "api.anthropic.com:443";
+    provider_tls.kind = LiveFlowKind::Unreadable;
+    const auto provider_hidden = CloseLiveAccess(Seen(file_bytes, {provider_tls}));
+    assert(provider_hidden.verdict == UploadVerdict::NotVisible);
+    assert(provider_hidden.verdict != UploadVerdict::NotFound);
+    assert(provider_hidden.transfer_outcome == "provider_or_relay_body_not_visible");
+    const auto provider_wide = CloseLiveAccess(Seen(file_bytes, {Tcp("api.anthropic.com:443", 0, file_bytes + kFlowTxSlack + 1, true)}));
+    assert(provider_wide.verdict == UploadVerdict::NotVisible);
+    assert(provider_wide.verdict != UploadVerdict::NotFound);
+    const auto provider_proven = CloseLiveAccess(Seen(file_bytes, {Tcp("api.anthropic.com:443", 0, file_bytes, true)}));
+    assert(provider_proven.verdict == UploadVerdict::Uploaded);
+    assert(provider_proven.match_basis == "flow_txbytes");
 
     LiveFlow syn = Tcp("203.0.113.10:443", 0, 0, false);
     syn.failed = true;

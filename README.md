@@ -59,4 +59,4 @@ make integration
 
 ## Limits
 
-FSEvents do not name the process that changed a file, and they do not report a pure read. A file-change record leaves the actor empty. An open descriptor is not a read. A socket peer is not a payload. Polling can miss a short-lived process. An optional TLS CA file is used only for CONNECT bodies that enter the proxy. It is not written to the login keychain.
+FSEvents do not name the process that changed a file, and they do not report a pure read. A file-change record leaves the actor empty. An open descriptor is not proof the bytes were read. A socket peer is not a payload. A subtree sweep can still miss an open that ends before the next child scan; immediate `cat` recall is incomplete and is not claimed as full read coverage. A registered file held while the process connects to a model provider or relay whose body cannot be inspected is not closed as Not found. UDP, QUIC, and TLS that never entered the proxy stay Not visible. That is unsolved, not a clean bill. An optional TLS CA file is used only for CONNECT bodies that enter the proxy. It is not written to the login keychain.

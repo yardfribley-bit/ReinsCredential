@@ -86,11 +86,14 @@ struct LiveClose {
 // framing fit; a multi-megabyte unrelated stream does not match a small file.
 constexpr uint64_t kFlowTxSlack = 65536;
 
-// Verdict for an agent that was already running. 看不到 is only for a process
-// or channel that could not be inspected. A visible agent with no off-host
-// send of the file is 未发现. A failed outbound attempt after the file was
-// open is 已尝试未成功. An off-host TCP send whose byte delta can contain the
-// file is 已上传, with match basis flow_txbytes.
+// Verdict for an agent that was already running.
+// 已上传 requires a measured off-host TCP send whose byte delta can contain the
+// file, or a proxied body match with success. 已尝试未成功 is a connect that
+// never established. 未发现 is only when the channels that were open could be
+// measured and none of them was an off-host send, including to a model
+// provider or relay. An off-host peer whose body was not inspected is
+// 看不到: unresolved, not a clean bill, and not rewritten as 未发现.
+// UDP/QUIC and undecrypted TLS stay 看不到.
 LiveClose CloseLiveAccess(const LiveAccessView& view);
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path);
 
@@ -104,4 +107,6 @@ bool ProxyBodyCoversLiveActor(const ProcessIdentity& proxy_actor, bool proxy_fro
 std::string FormatSocketPeer(bool ipv4_flag, const uint8_t address[16], uint16_t port);
 // Copies the IPv4 octets when FormatSocketPeer would print them as IPv4.
 bool Ipv4PeerOctets(bool ipv4_flag, const uint8_t address[16], uint8_t out[4]) noexcept;
+// Host of host:port or [host]:port. Model providers and known relays.
+bool IsProviderOrRelay(const std::string& destination) noexcept;
 } // namespace agentsec

@@ -70,10 +70,11 @@ def matrix_counts(verdicts):
             uploaded += 1
         elif verdict == "attempted":
             attempted += 1
-        elif verdict in ("not_found", "not_visible"):
+        elif verdict == "not_found":
             true_negative += 1
-            if verdict == "not_visible":
-                unseen += 1
+        elif verdict == "not_visible":
+            # Unresolved. Not a true negative and not a delivery pass.
+            unseen += 1
     return uploaded, attempted, true_negative, unseen
 
 
@@ -702,10 +703,10 @@ def main():
                 upload_tp += 1
             elif kind == "attempted":
                 attempted_tp += 1
-            elif kind in ("not_found", "not_visible"):
+            elif kind == "not_found":
                 tn += 1
-                if kind == "not_visible":
-                    content_unseen += 1
+            elif kind == "not_visible":
+                content_unseen += 1
             elif kind != "transfer_only":
                 fn += 1
         binary = directory / "codex"
@@ -726,7 +727,6 @@ def main():
             elif kind == "attempted":
                 attempted_tp += 1
             elif kind == "not_visible":
-                tn += 1
                 content_unseen += 1
             elif kind == "not_found":
                 tn += 1
@@ -747,7 +747,7 @@ def main():
         else:
             fn += 1
     # False positives and false negatives are assertion failures above. A passed
-    # run has none. not_visible is a true negative for the verdict and a content miss.
+    # run has none. not_visible is unresolved, not a true negative and not a delivery pass.
     print(
         "RESULT "
         f"upload_tp={upload_tp} attempted_tp={attempted_tp} tn={tn} fp={fp} fn={fn} "

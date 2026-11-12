@@ -57,7 +57,7 @@ Check: `bash -n` on those scripts in the macOS workflow, plus `make-icon.sh` whi
 - Install, upgrade, uninstall: `macOSClient/INSTALL.md`, `macOSClient/INSTALL.zh-CN.md`, and `macOSClient/scripts/uninstall-local.sh`
 - History and this version: `CHANGELOG.md`, `CHANGELOG.zh-CN.md`, `RELEASE_NOTES_0.2.0.md`, `RELEASE_NOTES_0.2.0.zh-CN.md`
 
-Limits that stay true in those docs: TLS bodies are not decrypted, a flow-byte match is not a remote receipt, and UDP/QUIC is `not_visible`.
+Limits that stay true in those docs: TLS bodies are not decrypted, a flow-byte match is not a remote receipt, and UDP/QUIC is `not_visible`. `not_visible` is an unresolved blind, not an acceptance pass. Short opens that die before the subtree sweep are not claimed as complete read coverage.
 
 ## 7. CI and tagged release
 
