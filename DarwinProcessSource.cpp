@@ -1,12 +1,24 @@
 #include "ProcessCache.h"
 #include <libproc.h>
+#include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/in_pcb.h>
+#include <netinet/tcp_var.h>
+#undef inp_faddr
+#undef inp_laddr
+#undef in6p_faddr
+#undef in6p_laddr
+#undef in6p_lport
 #include <algorithm>
+#include <cerrno>
+#include <cstdint>
 #include <array>
 #include <cstring>
 #include <filesystem>
+#include <map>
+#include <mutex>
 #include <stdexcept>
 
 namespace agentsec {
@@ -26,6 +38,64 @@ std::string Executable(pid_t pid) {
 }
 bool Same(const ProcessNode& node, const proc_bsdinfo& info) {
     return node.identity == Identity(info);
+}
+// tcp_sockinfo has no cumulative send counter in the public SDK. The pcb list
+// does: snd_max - iss is the sequence span for that connection (SYN plus data).
+std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
+    struct Cache {
+        std::mutex mu;
+        MonoClock::time_point at{};
+        std::map<std::string, uint64_t> bytes;
+    };
+    static Cache cache;
+    std::lock_guard<std::mutex> lock(cache.mu);
+    const auto now = MonoClock::now();
+    if (cache.at.time_since_epoch().count() == 0 || now - cache.at > std::chrono::milliseconds(30)) {
+        cache.at = now;
+        cache.bytes.clear();
+        size_t size = 0;
+        const int probed = sysctlbyname("net.inet.tcp.pcblist64", nullptr, &size, nullptr, 0);
+        if ((probed == 0 || errno == ENOMEM) && size > sizeof(xinpgen) && size < 8 * 1024 * 1024) {
+            std::vector<char> buffer(size);
+            if (sysctlbyname("net.inet.tcp.pcblist64", buffer.data(), &size, nullptr, 0) == 0 && size >= sizeof(xinpgen) && size <= buffer.size()) {
+                auto* head = reinterpret_cast<xinpgen*>(buffer.data());
+                if (head->xig_len >= sizeof(xinpgen) && head->xig_len < size) {
+                    char* cursor = buffer.data() + head->xig_len;
+                    char* end = buffer.data() + size;
+                    while (cursor + sizeof(std::uint32_t) <= end) {
+                        std::uint32_t record_len = 0;
+                        std::memcpy(&record_len, cursor, sizeof(record_len));
+                        if (record_len < sizeof(std::uint32_t) || cursor + record_len > end) break;
+                        if (record_len >= sizeof(xtcpcb64)) {
+                            xtcpcb64 record{};
+                            std::memcpy(&record, cursor, sizeof(record));
+                            const auto& inp = record.xt_inpcb;
+                            const bool v4 = (inp.inp_vflag & INP_IPV4) != 0;
+                            const void* local_addr = v4 ? static_cast<const void*>(&inp.inp_dependladdr.inp46_local.ia46_addr4)
+                                                        : static_cast<const void*>(&inp.inp_dependladdr.inp6_local);
+                            const void* foreign_addr = v4 ? static_cast<const void*>(&inp.inp_dependfaddr.inp46_foreign.ia46_addr4)
+                                                          : static_cast<const void*>(&inp.inp_dependfaddr.inp6_foreign);
+                            std::array<char, INET6_ADDRSTRLEN> local_text{};
+                            std::array<char, INET6_ADDRSTRLEN> foreign_text{};
+                            if (inet_ntop(v4 ? AF_INET : AF_INET6, local_addr, local_text.data(), local_text.size()) &&
+                                inet_ntop(v4 ? AF_INET : AF_INET6, foreign_addr, foreign_text.data(), foreign_text.size())) {
+                                const auto local_port = ntohs(inp.inp_lport);
+                                const auto foreign_port = ntohs(inp.inp_fport);
+                                const std::string peer = std::string(v4 ? "" : "[") + foreign_text.data() + (v4 ? ":" : "]:") + std::to_string(foreign_port);
+                                const std::string key = std::to_string(IPPROTO_TCP) + "|" + local_text.data() + ":" + std::to_string(local_port) + "|" + peer;
+                                const auto span = static_cast<std::uint32_t>(record.snd_max - record.iss);
+                                cache.bytes[key] = span > 0 ? static_cast<uint64_t>(span - 1) : 0;
+                            }
+                        }
+                        cursor += record_len;
+                    }
+                }
+            }
+        }
+    }
+    auto found = cache.bytes.find(flow_id);
+    if (found == cache.bytes.end()) return std::nullopt;
+    return found->second;
 }
 void ReadArguments(ProcessNode& node) {
     int max = 0; size_t size = sizeof(max); int max_mib[] = {CTL_KERN, KERN_ARGMAX};
@@ -175,9 +245,11 @@ public:
                     if (s.soi_kind == SOCKINFO_TCP) {
                         const auto& tcp = s.soi_proto.pri_tcp;
                         flow.udp = false;
-                        flow.bytes_known = true;
-                        flow.tx_bytes = tcp.tcpsi_txbytes;
                         flow.tcp_state = tcp.tcpsi_state;
+                        if (auto sent = TcpDataBytes(flow.flow_id)) {
+                            flow.bytes_known = true;
+                            flow.tx_bytes = *sent;
+                        }
                     } else {
                         flow.udp = s.soi_protocol == IPPROTO_UDP;
                         flow.bytes_known = false;
