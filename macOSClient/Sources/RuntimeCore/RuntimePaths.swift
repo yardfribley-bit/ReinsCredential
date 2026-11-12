@@ -22,6 +22,8 @@ public struct RuntimePaths: Sendable {
     public var runtimeDirectory: URL { baseURL.appendingPathComponent("runtime", isDirectory: true) }
     public var configurationURL: URL { baseURL.appendingPathComponent("config.plist") }
     public var evidenceURL: URL { runtimeDirectory.appendingPathComponent("evidence.jsonl") }
+    /// agent-egress holds its own exclusive log lock, so it writes a separate file.
+    public var egressEvidenceURL: URL { runtimeDirectory.appendingPathComponent("egress.jsonl") }
     public var statusURL: URL { runtimeDirectory.appendingPathComponent("status.plist") }
     public var lockURL: URL { runtimeDirectory.appendingPathComponent("supervisor.lock") }
     public var archiveDirectory: URL { runtimeDirectory.appendingPathComponent("archives", isDirectory: true) }

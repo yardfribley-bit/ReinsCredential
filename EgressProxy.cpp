@@ -1116,6 +1116,8 @@ int main(int argc, char** argv) {
             else throw std::runtime_error("unknown option");
         }
         Require(!log.empty() && !files.empty() && files.size() <= 32, "usage: agent-egress --log PATH --sensitive-file PATH [--port-file PATH] [--duration SEC] [--sample-ms N] [--timeout-sec N] [--watch-live] [--tls-ca-cert PEM --tls-ca-key PEM] [--launch -- command]");
+        // --watch-live with --duration 0 (the default) and no --launch command
+        // stays up until SIGTERM so the installed app can supervise it.
         Require(tls_cert.empty() == tls_key.empty(), "tls intercept needs both a CA certificate and a CA key");
         Require(sample_ms >= 20 && sample_ms <= 1000, "sample-ms must be 20..1000");
         Require(timeout_sec >= 1 && timeout_sec <= 120, "timeout-sec must be 1..120");
@@ -1123,6 +1125,11 @@ int main(int argc, char** argv) {
         std::signal(SIGTERM, OnStop);
         std::signal(SIGINT, OnStop);
         std::signal(SIGPIPE, SIG_IGN);
+        sigset_t unblock;
+        sigemptyset(&unblock);
+        sigaddset(&unblock, SIGTERM);
+        sigaddset(&unblock, SIGINT);
+        sigprocmask(SIG_UNBLOCK, &unblock, nullptr);
         EvidenceStore store(log, {});
         auto source = MakeDarwinProcessSource();
         Session session(store, *source);
@@ -1199,9 +1206,10 @@ int main(int argc, char** argv) {
             std::cerr << "egress child " << child.pid << "\n";
         }
         const auto started = MonoClock::now();
+        const bool serve_until_signal = command.empty() && watch_live && duration == 0;
         const auto limit = command.empty() ? std::chrono::seconds(duration ? duration : 1) : std::chrono::seconds(timeout_sec);
         while (!stopping) {
-            if (MonoClock::now() - started >= limit) break;
+            if (!serve_until_signal && MonoClock::now() - started >= limit) break;
             if (child.pid > 0 && child.Exited()) break;
             if (command.empty() && duration && MonoClock::now() - started >= std::chrono::seconds(duration)) break;
             pollfd pending{listener->value, POLLIN, 0};

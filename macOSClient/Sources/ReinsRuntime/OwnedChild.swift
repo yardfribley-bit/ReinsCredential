@@ -11,7 +11,7 @@ final class OwnedChild {
     private(set) var terminationStatus: Int32?
     private(set) var exitedNormally = false
 
-    init(executable: URL, arguments: [String], workingDirectory: URL) throws {
+    init(executable: URL, arguments: [String], workingDirectory: URL, standardError: URL? = nil) throws {
         var actions: posix_spawn_file_actions_t?
         var attributes: posix_spawnattr_t?
         var result = posix_spawn_file_actions_init(&actions)
@@ -25,7 +25,11 @@ final class OwnedChild {
         }
         try check(posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0), "Redirect child input")
         try check(posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0), "Redirect child output")
-        try check(posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0), "Redirect child errors")
+        if let standardError {
+            try check(posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, standardError.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600), "Redirect child errors")
+        } else {
+            try check(posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0), "Redirect child errors")
+        }
         if #available(macOS 26, *) {
             try check(posix_spawn_file_actions_addchdir(&actions, workingDirectory.path), "Set child directory")
         } else {
@@ -34,9 +38,9 @@ final class OwnedChild {
         var defaults = sigset_t()
         var mask = sigset_t()
         sigemptyset(&defaults); sigaddset(&defaults, SIGTERM); sigaddset(&defaults, SIGINT)
-        sigemptyset(&mask)
+        sigemptyset(&mask); sigaddset(&mask, SIGTERM); sigaddset(&mask, SIGINT)
         try check(posix_spawnattr_setsigdefault(&attributes, &defaults), "Reset child signal handlers")
-        try check(posix_spawnattr_setsigmask(&attributes, &mask), "Reset child signal mask")
+        try check(posix_spawnattr_setsigmask(&attributes, &mask), "Block stop signals until the child is ready")
         try check(posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT)), "Set child spawn flags")
         let values = [executable.path] + arguments
         let strings = values.map { strdup($0) }
@@ -81,6 +85,7 @@ final class OwnedChild {
 
     func stop(gracePeriod: TimeInterval = 8) {
         guard isRunning else { return }
+        if processIdentifier <= 0 { return }
         kill(processIdentifier, SIGTERM)
         let deadline = Date().addingTimeInterval(gracePeriod)
         while isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }

@@ -80,6 +80,7 @@ final class RuntimeController: ObservableObject {
     private let paths: RuntimePaths
     private let service: BackgroundServiceManaging
     private let reader = LiveEvidenceReader()
+    private let egressReader = LiveEvidenceReader()
     private let bundleURL: URL
     private let defaults: UserDefaults
     private var polling: Task<Void, Never>?
@@ -218,9 +219,11 @@ final class RuntimeController: ObservableObject {
         defer { refreshing = false }
         do {
             let batch = try await reader.poll(url: paths.evidenceURL)
-            if !batch.records.isEmpty {
-                records = Array((batch.records.reversed() + records).prefix(2_000))
-                notifyIfNeeded(batch.records, now: now)
+            let egressRecords = (try? await egressReader.poll(url: paths.egressEvidenceURL).records) ?? []
+            let incoming = batch.records + egressRecords
+            if !incoming.isEmpty {
+                records = Array((incoming.reversed() + records).prefix(2_000))
+                notifyIfNeeded(incoming, now: now)
             }
             rejectedCount = batch.rejectedCount
             lastUpdate = batch.latestCoverage?.timestamp

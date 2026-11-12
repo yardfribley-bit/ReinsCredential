@@ -118,6 +118,11 @@ int main(int argc, char** argv) {
         FileMonitor files(sensitive, store, workers);
         SubtreeWatcher watcher(source, sensitive, agents);
         std::signal(SIGINT, SignalHandler); std::signal(SIGTERM, SignalHandler);
+        sigset_t unblock;
+        sigemptyset(&unblock);
+        sigaddset(&unblock, SIGTERM);
+        sigaddset(&unblock, SIGINT);
+        sigprocmask(SIG_UNBLOCK, &unblock, nullptr);
         live_cache.Start();
         agents.ArmFocus();
         watcher.Start();

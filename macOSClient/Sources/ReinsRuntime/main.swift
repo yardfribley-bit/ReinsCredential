@@ -48,6 +48,10 @@ private struct Options {
 }
 
 private func bundledMonitor() throws -> URL {
+    return try bundledHelper("agent-monitor")
+}
+
+private func bundledHelper(_ name: String) throws -> URL {
     // Works both when launchd starts Contents/MacOS/ReinsRuntime and when the app
     // launches its bundled executable directly. No shell or PATH lookup is used.
     // launchd may supply a relative argv[0] for BundleProgram. Resolve the loaded
@@ -62,7 +66,49 @@ private func bundledMonitor() throws -> URL {
     guard contents.lastPathComponent == "Contents" else {
         throw RuntimeFileError.invalidConfiguration("Run the installed app, or supply explicit --data-root and --monitor development paths.")
     }
-    return contents.appendingPathComponent("Helpers/agent-monitor")
+    return contents.appendingPathComponent("Helpers/\(name)")
+}
+
+private func helperNextToMonitor(_ monitor: URL, name: String) throws -> URL {
+    let url = monitor.deletingLastPathComponent().appendingPathComponent(name)
+    try validateExecutable(url)
+    return url
+}
+
+/// agent-egress fingerprints regular files of 16 bytes–1 MiB, at most 32 paths.
+private func fingerprintableFiles(from roots: [URL], limit: Int = 32, minimumBytes: off_t = 16, maximumBytes: off_t = 1_048_576) -> [URL] {
+    var files: [URL] = []
+    var queue = roots
+    var visited = 0
+    while !queue.isEmpty, files.count < limit, visited < 1024 {
+        let url = queue.removeFirst()
+        visited += 1
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { continue }
+        let type = info.st_mode & S_IFMT
+        if type == S_IFREG {
+            if info.st_size >= minimumBytes, info.st_size <= maximumBytes {
+                let fd = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+                if fd >= 0 {
+                    var opened = stat()
+                    if fstat(fd, &opened) == 0, opened.st_mode & S_IFMT == S_IFREG,
+                       opened.st_size >= minimumBytes, opened.st_size <= maximumBytes {
+                        files.append(url)
+                    }
+                    close(fd)
+                }
+            }
+            continue
+        }
+        guard type == S_IFDIR else { continue }
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: url,
+            includingPropertiesForKeys: nil,
+            options: [.skipsPackageDescendants]
+        ) else { continue }
+        queue.append(contentsOf: children)
+    }
+    return files
 }
 
 private func validateExecutable(_ url: URL) throws {
@@ -126,6 +172,11 @@ private func runSupervisor(_ options: Options) throws {
             try RuntimeConfiguration.defaults().save(to: paths.configurationURL)
         }
         let stop = StopRequest()
+        var blocked = sigset_t()
+        sigemptyset(&blocked)
+        sigaddset(&blocked, SIGTERM)
+        sigaddset(&blocked, SIGINT)
+        pthread_sigmask(SIG_BLOCK, &blocked, nil)
         signal(SIGTERM, SIG_IGN); signal(SIGINT, SIG_IGN)
         let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
         let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
@@ -135,13 +186,20 @@ private func runSupervisor(_ options: Options) throws {
         var session = UUID().uuidString
         var failures: [Date] = []
         var configuration: RuntimeConfiguration?
-        var child: OwnedChild?
+        var monitorChild: OwnedChild?
+        var egressChild: OwnedChild?
         var monitorStarted: Date?
+        func stopChildren() {
+            monitorChild?.stop()
+            egressChild?.stop()
+            monitorChild = nil
+            egressChild = nil
+        }
         func publish(_ state: RuntimeStatus.State, _ message: String? = nil) throws {
-            try RuntimeStatus(state: state, supervisorPID: getpid(), monitorPID: child?.isRunning == true ? child?.processIdentifier : nil,
+            try RuntimeStatus(state: state, supervisorPID: getpid(), monitorPID: monitorChild?.isRunning == true ? monitorChild?.processIdentifier : nil,
                               monitorStartedAt: monitorStarted, message: message, sessionID: session).save(to: paths.statusURL)
         }
-        defer { if let running = child { running.stop() } }
+        defer { stopChildren() }
         try publish(.starting)
         while !stop.isRequested {
             do {
@@ -161,21 +219,28 @@ private func runSupervisor(_ options: Options) throws {
                 continue
             }
             guard let active = configuration else { continue }
-            try paths.rotateEvidence()
             session = UUID().uuidString
-            let next: OwnedChild
             monitorStarted = Date()
             do {
-                next = try OwnedChild(executable: monitor,
+                let files = fingerprintableFiles(from: (active.sensitivePaths + [paths.selfTestDirectory.path]).map { URL(fileURLWithPath: $0) })
+                guard !files.isEmpty else {
+                    throw RuntimeFileError.invalidConfiguration("No fingerprintable sensitive files (16 bytes–1 MiB) were found.")
+                }
+                let egress = try helperNextToMonitor(monitor, name: "agent-egress")
+                monitorChild = try OwnedChild(executable: monitor,
                     arguments: ["--no-default-sensitive", "--log", paths.evidenceURL.path, "--interval-ms", String(active.intervalMilliseconds),
                                 "--max-log-bytes", "16777216"] + (active.sensitivePaths + [paths.selfTestDirectory.path]).flatMap { ["--sensitive", $0] },
-                    workingDirectory: paths.runtimeDirectory)
-                child = next
-            }
-            catch {
-                child = nil
+                    workingDirectory: paths.runtimeDirectory,
+                    standardError: paths.runtimeDirectory.appendingPathComponent("monitor.err"))
+                egressChild = try OwnedChild(executable: egress,
+                    arguments: ["--log", paths.egressEvidenceURL.path, "--watch-live", "--port-file", paths.runtimeDirectory.appendingPathComponent("egress.port").path] +
+                        files.flatMap { ["--sensitive-file", $0.path] },
+                    workingDirectory: paths.runtimeDirectory,
+                    standardError: paths.runtimeDirectory.appendingPathComponent("egress.err"))
+            } catch {
+                stopChildren()
                 failures.append(Date())
-                try publish(.backoff, "Cannot start monitor: \(error.localizedDescription)")
+                try publish(.backoff, "Cannot start monitor or egress proxy: \(error.localizedDescription)")
                 let until = Date().addingTimeInterval(min(30, pow(2, Double(failures.count))))
                 while !stop.isRequested && Date() < until { Thread.sleep(forTimeInterval: 0.1) }
                 continue
@@ -183,14 +248,14 @@ private func runSupervisor(_ options: Options) throws {
             try publish(.running)
             var reload = false
             var lastUpdate = Date()
-            while next.isRunning && !stop.isRequested {
+            while monitorChild?.isRunning == true && egressChild?.isRunning == true && !stop.isRequested {
                 if Date().timeIntervalSince(lastUpdate) >= 2 {
                     do {
                         let updated = try RuntimeConfiguration.load(from: paths.configurationURL)
                         if updated != active { reload = true; break }
                         try publish(.running)
                     } catch {
-                        next.stop()
+                        stopChildren()
                         try publish(.failed, "Configuration error: \(error.localizedDescription)")
                         reload = true
                         break
@@ -199,20 +264,27 @@ private func runSupervisor(_ options: Options) throws {
                 }
                 Thread.sleep(forTimeInterval: 0.1)
             }
-            if stop.isRequested { next.stop(); break }
-            if reload { next.stop(); child = nil; continue }
-            let exitCode = next.terminationStatus ?? -1
-            child = nil
-            if exitCode == 3 && next.exitedNormally {
+            if stop.isRequested { stopChildren(); break }
+            if reload { stopChildren(); continue }
+            let monitorCode = monitorChild?.terminationStatus ?? -1
+            let monitorNormal = monitorChild?.exitedNormally ?? false
+            let egressExited = egressChild?.isRunning != true
+            let egressCode = egressChild?.terminationStatus ?? -1
+            stopChildren()
+            if monitorCode == 3 && monitorNormal {
+                try paths.rotateEvidence()
                 try publish(.starting, "Rotating the bounded evidence log.")
                 continue
             }
             failures.append(Date())
-            try publish(.backoff, "Monitor exited with status \(exitCode). A new session will be attempted.")
+            if egressExited && monitorCode == -1 {
+                try publish(.backoff, "Egress proxy exited with status \(egressCode). A new session will be attempted.")
+            } else {
+                try publish(.backoff, "Monitor exited with status \(monitorCode). A new session will be attempted.")
+            }
             let until = Date().addingTimeInterval(min(30, pow(2, Double(failures.count))))
             while !stop.isRequested && Date() < until { Thread.sleep(forTimeInterval: 0.1) }
         }
-        child = nil
         try publish(.stopped)
     }
 }
