@@ -152,6 +152,13 @@ int main() {
 
     const auto udp = CloseLiveAccess(Seen(file_bytes, {quic}));
     assert(udp.verdict == UploadVerdict::NotVisible);
+    LiveFlow loopback_udp = quic;
+    loopback_udp.destination = "127.0.0.1:9";
+    loopback_udp.loopback = true;
+    const auto local_udp = CloseLiveAccess(Seen(file_bytes, {loopback_udp}));
+    assert(local_udp.verdict == UploadVerdict::NotVisible);
+    assert(local_udp.verdict != UploadVerdict::NotFound);
+    assert(local_udp.transfer_outcome == "udp_or_quic_body_not_visible");
     assert(udp.transfer_outcome == "udp_or_quic_body_not_visible");
     assert(udp.destination == quic.destination);
     auto udp_and_gap = Seen(file_bytes, {quic});

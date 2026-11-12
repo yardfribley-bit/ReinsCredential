@@ -114,8 +114,11 @@ bool FailedOffHostAttempt(const LiveFlow& flow, uint64_t file_bytes) {
     return file_bytes == 0 || TxDelta(flow) < file_bytes;
 }
 bool OpaqueOffHost(const LiveFlow& flow, uint64_t file_bytes) {
-    if (flow.loopback || flow.to_local_proxy) return false;
+    if (flow.to_local_proxy) return false;
+    // UDP, QUIC, and any channel with no byte count stay unresolved, including
+    // a datagram to 127.0.0.1. Measured loopback TCP is handled separately.
     if (flow.kind != LiveFlowKind::TcpMeasured) return true;
+    if (flow.loopback) return false;
     if (!IsProviderOrRelay(flow.destination)) return false;
     if (ConsistentOffHostSend(flow, file_bytes) || FailedOffHostAttempt(flow, file_bytes)) return false;
     return true;
