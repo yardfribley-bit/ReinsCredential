@@ -24,6 +24,8 @@
 
 本仓库的开发环境是 Linux，没有在这里跑采集器，也没有在主人的 Intel Mac 上执行。真实 Agent 仍然没有跑过。
 
+立即 `/bin/cat` 的短时打开召回在 CI 上不稳定，这是已知缺口。`tests/short_read.py` 仍要求至少 0.4，这个门槛没有放宽，测试文件也没有改。各 20 次里已经看到：2026-11-11 的 run [43070070831](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43070070831) 是 13/20；提交 `3f866f5` 的 push run [43143521056](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43143521056) 是 15/20，并通过了该测试；同一提交的 pull request run [43143525505](https://github.com/yardfribley-bit/ReinsCredential/actions/runs/43143525505) 是 7/20（0.35），`make integration` 因此失败。命中的记录仍然写成 ChatGPT 经 cat 打开，没有写成上传。想原样重跑这次失败的 pull request 作业时，GitHub 返回 403，当前凭证没有 `actions: write`，所以没有重跑成功。
+
 主人在自己的 Intel Mac 上先读 `scripts/acceptance/README.md`，再运行：
 
 ```sh
@@ -153,7 +155,7 @@ CPU 和 RSS 在同一次 macOS 运行里用 `ps -o %cpu=,rss=` 采样。`%cpu` �
 | 测量 | 结果 |
 | --- | --- |
 | 30ms 打开 | TP 20 / FN 0（20/20） |
-| `/bin/cat` 立即退出 | TP 13 / FN 7（13/20，65%） |
+| `/bin/cat` 立即退出 | TP 13 / FN 7（13/20，65%）。这不是稳定值：后来的 CI 上同一测试出现过 7/20 和 15/20，见 2026-11-12 一节。0.4 门槛没有改 |
 | 合计 | TP 33 / FN 7（33/40，82.5%）。33 次命中都来自快速采样（`fast_fd_hits=33`，`subtree_fd_hits=33`，`subtree_fork_notes=40`，`subtree_bursts=40`） |
 | 空闲约 3 秒 | CPU 中位数 2.2%，RSS 中位数 11216 KB（11 次 `ps`） |
 | cat 队列期间约 4 秒 | CPU 中位数 2.35%，RSS 中位数 11632 KB（14 次 `ps`） |
