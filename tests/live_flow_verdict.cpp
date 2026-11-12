@@ -109,6 +109,14 @@ int main() {
     const auto udp = CloseLiveAccess(Seen(file_bytes, {quic}));
     assert(udp.verdict == UploadVerdict::NotVisible);
     assert(udp.transfer_outcome == "udp_or_quic_body_not_visible");
+    assert(udp.destination == quic.destination);
+    auto udp_and_gap = Seen(file_bytes, {quic});
+    udp_and_gap.inspection_complete = false;
+    const auto udp_gap = CloseLiveAccess(udp_and_gap);
+    assert(udp_gap.verdict == UploadVerdict::NotVisible);
+    assert(udp_gap.transfer_outcome == "udp_or_quic_body_not_visible");
+    assert(udp_gap.destination == quic.destination);
+    assert(udp_gap.verdict != UploadVerdict::NotFound);
     assert(std::string(LiveVerdictSummary(udp, "codex", "/tmp/synthetic.env")).rfind("看不到", 0) == 0);
     assert(udp.verdict != UploadVerdict::NotFound);
 

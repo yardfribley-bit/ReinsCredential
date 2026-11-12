@@ -162,15 +162,8 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.detail = "match=flow_attempt;file_open_observed;off_host_payload_not_delivered;app_settings_not_modified";
         return result;
     }
-    if (!view.inspection_complete) {
-        result.verdict = UploadVerdict::NotVisible;
-        result.match_basis = "observation_impossible";
-        result.transfer_outcome = "descriptors_or_flows_incomplete";
-        result.detail = "inspection_incomplete;not_a_clean_bill;app_settings_not_modified";
-        return result;
-    }
-    // UDP/QUIC has no byte counter here. If the file was open and that is the
-    // only kind of egress, the upload question cannot be answered.
+    // A partial descriptor listing must not erase a UDP/QUIC peer we already
+    // saw. Both conclusions are 看不到; the peer is the one the chain can show.
     if (view.file_open && unmeasured && !measured_tcp) {
         result.verdict = UploadVerdict::NotVisible;
         result.destination = unmeasured->destination;
@@ -178,6 +171,14 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.transfer_outcome = unmeasured->kind == LiveFlowKind::UdpOrQuic ? "udp_or_quic_body_not_visible"
                                                                               : "channel_bytes_unreadable";
         result.detail = "unmeasured_channel_while_file_open;cannot_call_this_not_found;app_settings_not_modified";
+        if (!view.inspection_complete) result.detail += ";descriptors_or_flows_incomplete";
+        return result;
+    }
+    if (!view.inspection_complete) {
+        result.verdict = UploadVerdict::NotVisible;
+        result.match_basis = "observation_impossible";
+        result.transfer_outcome = "descriptors_or_flows_incomplete";
+        result.detail = "inspection_incomplete;not_a_clean_bill;app_settings_not_modified";
         return result;
     }
     result.verdict = UploadVerdict::NotFound;
