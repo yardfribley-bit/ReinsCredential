@@ -1,3 +1,5 @@
+[English](CHANGELOG.md) · [简体中文](CHANGELOG.zh-CN.md)
+
 # Changelog
 
 ## 0.2.0

@@ -5,32 +5,32 @@ import EvidenceCore
 extension EvidenceRecord {
     var findingTitle: String {
         switch sourceType {
-        case "agent_discovered": return "发现 Agent 候选进程"
-        case "process_discovered": return "发现本机进程"
-        case "agent_changed", "process_changed": return "进程映像或分类变化"
-        case "agent_no_longer_observed", "process_no_longer_observed": return "进程不再可见"
-        case "filesystem_change": return "敏感路径发生变化"
-        case "sensitive_network_cooccurrence": return "敏感文件与网络连接同时可见"
+        case "agent_discovered": return L10n.tr("finding.agent")
+        case "process_discovered": return L10n.tr("finding.process")
+        case "agent_changed", "process_changed": return L10n.tr("finding.changed")
+        case "agent_no_longer_observed", "process_no_longer_observed": return L10n.tr("finding.gone")
+        case "filesystem_change": return L10n.tr("finding.fs")
+        case "sensitive_network_cooccurrence": return L10n.tr("finding.cooccur")
         case "activity_observed":
-            return targetResource.isEmpty ? "进程活动快照" : "进程持有敏感文件描述符"
+            return targetResource.isEmpty ? L10n.tr("finding.activity") : L10n.tr("finding.held")
         case "sensitive_access_observed":
-            return evidenceBasis == "inferred" ? "敏感文件访问时间与一个进程重合" : "敏感文件访问时间发生变化"
-        case "sensor_gap": return "采集覆盖出现间隙"
-        case "fatal_error", "gateway_fatal": return "采集服务错误"
-        case "coverage": return "采集健康状态"
-        case "shutdown_summary": return "监控停止汇总"
-        case "sensitive_payload_observed": return "提交内容匹配敏感数据"
-        case "payload_observed": return "网关收到提交内容"
-        case "sensitive_content_delivery_attempt": return "准备交付敏感内容"
-        case "sensitive_content_delivered": return "内容已写入本地连接"
-        case "transfer_result": return "网关转发结果"
-        case "egress_transfer": return "本地出口代理看到的传输"
-        case "sensitive_access_closed": return "敏感文件访问的出口结论"
-        case "egress_channel_unseen": return "出口通道内容不可见"
-        case "egress_proxy_ready": return "本地出口代理已启动"
-        case "egress_proxy_stopped": return "本地出口代理已停止"
-        case "gateway_request_failed": return "网关请求失败"
-        case "gateway_ready": return "内容网关已启动"
+            return evidenceBasis == "inferred" ? L10n.tr("finding.inferred") : L10n.tr("finding.accessTime")
+        case "sensor_gap": return L10n.tr("finding.gap")
+        case "fatal_error", "gateway_fatal": return L10n.tr("finding.fatal")
+        case "coverage": return L10n.tr("finding.health")
+        case "shutdown_summary": return L10n.tr("finding.shutdown")
+        case "sensitive_payload_observed": return L10n.tr("finding.payload")
+        case "payload_observed": return L10n.tr("finding.gatewayIn")
+        case "sensitive_content_delivery_attempt": return L10n.tr("finding.deliveryPrep")
+        case "sensitive_content_delivered": return L10n.tr("finding.delivered")
+        case "transfer_result": return L10n.tr("finding.gatewayResult")
+        case "egress_transfer": return L10n.tr("finding.egress")
+        case "sensitive_access_closed": return L10n.tr("finding.closed")
+        case "egress_channel_unseen": return L10n.tr("finding.unseen")
+        case "egress_proxy_ready": return L10n.tr("finding.proxyReady")
+        case "egress_proxy_stopped": return L10n.tr("finding.proxyStopped")
+        case "gateway_request_failed": return L10n.tr("finding.requestFailed")
+        case "gateway_ready": return L10n.tr("finding.gatewayReady")
         default: return actionType
         }
     }
@@ -38,33 +38,33 @@ extension EvidenceRecord {
     var recommendedAction: String? {
         switch sourceType {
         case "activity_observed" where !targetResource.isEmpty:
-            return "The file was open in this process. That shows who touched it. It does not show an upload."
+            return L10n.tr("action.held")
         case "sensitive_access_observed" where evidenceBasis == "inferred":
-            return "This link is only a timing overlap. The file was not seen open, and this is not an upload."
+            return L10n.tr("action.inferred")
         case "sensitive_access_observed":
-            return "The file's access time changed. No process was identified, and this is not an upload."
+            return L10n.tr("action.accessTime")
         case "sensitive_network_cooccurrence":
-            return "A sensitive file and a network connection were both open. This is not an upload."
+            return L10n.tr("action.cooccur")
         case "filesystem_change":
-            return "检查文件变化是否符合预期。文件系统事件不提供行为进程，无法据此指定某个 Agent。"
+            return L10n.tr("action.fs")
         case "sensor_gap":
-            return "这一时段的采集可能不完整。查看说明中的缺口原因，检查监控目录和服务状态。"
+            return L10n.tr("action.gap")
         case "fatal_error", "gateway_fatal":
-            return "查看下方错误说明和监控状态，处理权限、空间或配置问题后重新启动监控。"
+            return L10n.tr("action.fatal")
         case "sensitive_payload_observed":
-            return "提交内容已匹配受监控数据。核查目的地与关联的传输结果；提交记录本身不代表远端已接收。"
+            return L10n.tr("action.payload")
         case "transfer_result", "egress_transfer":
-            return "根据传输结果和证据来源核查发送是否完成；远端接收需要独立回执支持。"
+            return L10n.tr("action.transfer")
         case "sensitive_access_closed" where uploadVerdict == "uploaded":
-            return "请求体与已登记内容匹配，并且目的地返回了成功状态。这不是对端的独立回执。"
+            return L10n.tr("action.uploaded")
         case "sensitive_access_closed" where uploadVerdict == "attempted":
-            return "请求体与已登记内容匹配，但这次传输没有成功。"
+            return L10n.tr("action.attempted")
         case "sensitive_access_closed" where uploadVerdict == "not_found":
-            return "已查看明文 HTTP 出口，没有看到已登记内容。"
+            return L10n.tr("action.notFound")
         case "sensitive_access_closed" where uploadVerdict == "not_visible":
-            return "这个通道的内容看不到。不能把它写成未发现。"
+            return L10n.tr("action.notVisible")
         case "egress_channel_unseen":
-            return "只看到了通道或对端，没有看到字节。这不是未发现。"
+            return L10n.tr("action.unseen")
         default: return nil
         }
     }

@@ -83,8 +83,8 @@ struct EvidenceChainAgentGallery: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("证据链").font(.title2.bold())
-            Text("合成演示 · 按所属 Agent 分组").font(.caption).foregroundStyle(.secondary)
+            Text(L10n.tr("board.chains")).font(.title2.bold())
+            Text(L10n.tr("mode.demo")).font(.caption).foregroundStyle(.secondary)
             ForEach(sections) { section in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(section.title).font(.headline)
@@ -99,7 +99,7 @@ struct EvidenceChainAgentGallery: View {
                     }
                 }
             }
-            Text(EvidenceChainExport.glossaryText)
+            Text(L10n.tr("glossary"))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

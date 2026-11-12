@@ -21,6 +21,17 @@ public enum UploadVerdictWord: String, Codable, Sendable, Equatable {
         }
     }
 
+    public var englishLabel: String {
+        switch self {
+        case .uploaded: return "Uploaded"
+        case .attempted: return "Attempted"
+        case .notFound: return "Not found"
+        case .notVisible: return "Not visible"
+        case .absent: return "No egress verdict"
+        case .unrecognized: return "Unrecognized verdict"
+        }
+    }
+
     /// Exact backend codes only. `not_visible` stays 看不到 and never becomes 未发现.
     public static func parse(_ raw: String) -> UploadVerdictWord {
         switch raw {

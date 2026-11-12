@@ -19,7 +19,9 @@ mkdir -p "$client_dir/dist"
 staging="$(mktemp -d "$client_dir/dist/.build-app.XXXXXX")"
 trap 'rm -rf "$staging"' EXIT
 app_dir="$staging/ReinsCredential.app"
-mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Helpers" "$app_dir/Contents/Library/LaunchAgents"
+mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Helpers" "$app_dir/Contents/Resources" "$app_dir/Contents/Library/LaunchAgents"
+"$client_dir/scripts/make-icon.sh" "$app_dir/Contents/Resources/ReinsCredential.icns"
+[[ -s "$app_dir/Contents/Resources/ReinsCredential.icns" ]] || { echo "app icon is missing" >&2; exit 1; }
 cp "$bin_dir/ReinsDashboard" "$app_dir/Contents/MacOS/ReinsDashboard"
 cp "$bin_dir/ReinsRuntime" "$app_dir/Contents/MacOS/ReinsRuntime"
 core=(ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp EgressVerdict.cpp)
@@ -40,6 +42,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>io.github.yardfribley-bit.ReinsCredential</string>
   <key>CFBundleExecutable</key><string>ReinsDashboard</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>ReinsCredential</string>
+  <key>CFBundleIconName</key><string>ReinsCredential</string>
   <key>CFBundleShortVersionString</key><string>0.2.0</string>
   <key>CFBundleVersion</key><string>5</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>

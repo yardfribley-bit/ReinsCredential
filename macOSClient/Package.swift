@@ -16,7 +16,11 @@ let package = Package(
         .target(name: "RuntimeCore"),
         .executableTarget(name: "ReinsRuntime", dependencies: ["RuntimeCore"]),
         .executableTarget(name: "ChainExport", dependencies: ["EvidenceCore"]),
-        .executableTarget(name: "ReinsDashboardApp", dependencies: ["EvidenceCore", "RuntimeCore"]),
+        .executableTarget(name: "ReinsDashboardApp", dependencies: ["EvidenceCore", "RuntimeCore"], resources: [
+            .copy("Resources/en.lproj"),
+            .copy("Resources/zh-Hans.lproj"),
+            .process("Resources/ReinsCredential-Logo-rounded-512.png")
+        ]),
         .testTarget(name: "EvidenceCoreTests", dependencies: ["EvidenceCore"]),
         .testTarget(name: "RuntimeCoreTests", dependencies: ["RuntimeCore"]),
         .testTarget(name: "DashboardAppTests", dependencies: ["EvidenceCore", "RuntimeCore", "ReinsDashboardApp"])

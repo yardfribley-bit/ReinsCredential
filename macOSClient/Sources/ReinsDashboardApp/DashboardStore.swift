@@ -46,10 +46,10 @@ enum RiskFilter: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .all: return "全部证据"
-        case .high: return "高风险"
-        case .medium: return "中风险"
-        case .low: return "低风险"
+        case .all: return L10n.tr("risk.all")
+        case .high: return L10n.tr("risk.high")
+        case .medium: return L10n.tr("risk.medium")
+        case .low: return L10n.tr("risk.low")
         }
     }
 
@@ -82,9 +82,9 @@ final class DashboardStore: ObservableObject {
         case live, imported, demo
         var title: String {
             switch self {
-            case .live: return "本机实时监控"
-            case .imported: return "日志快照"
-            case .demo: return "演示数据"
+            case .live: return L10n.tr("mode.live")
+            case .imported: return L10n.tr("mode.imported")
+            case .demo: return L10n.tr("mode.demo")
             }
         }
     }
@@ -254,7 +254,7 @@ final class DashboardStore: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .noUsableRecords(let rejected, let incomplete):
-                return "日志中没有完整且有效的证据记录（无效或重复行：\(rejected)，未完成尾行：\(incomplete ? "有" : "无")）。已保留当前数据。"
+                return L10n.format("store.importEmpty", rejected, incomplete ? L10n.tr("store.tailYes") : L10n.tr("store.tailNo"))
             }
         }
     }

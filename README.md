@@ -1,78 +1,62 @@
+[English](README.md) · [简体中文](README.zh-CN.md)
+
+![ReinsCredential](brand/ReinsCredential-Wordmark-light.png)
+
 # ReinsCredential
 
-ReinsCredential shows which desktop AI agent touched a sensitive file on your Mac, and through which tools.
+Detect which desktop agents access and upload sensitive files.
 
-A normal result reads like this:
+ReinsCredential shows which desktop app on your Mac opened a registered sensitive file, and whether that process uploaded it. The product name is ReinsCredential in every language.
 
-> Codex read ~/.ssh/id_ed25519 via zsh -> python. The file was open in that process. This is not an upload finding.
+A file-open sentence means the file was open in that process, or, when the sentence says so, that only the file's access time overlapped one short-lived tool. It does not by itself mean the file was uploaded.
 
-That sentence means the file was open inside that process, or, when the sentence says so, that only the file's access time overlapped one short-lived tool. It does not by itself mean the file was uploaded.
+## Verdicts
 
-An upload sentence is separate. The closing words are:
+| Code | English | 中文 | Meaning |
+| --- | --- | --- | --- |
+| `uploaded` | Uploaded | 已上传 | Registered content was in a proxied request that succeeded, or the same process sent an off-host TCP byte span large enough for the file (`flow_txbytes`). |
+| `attempted` | Attempted | 已尝试未成功 | The content matched and the transfer failed, or an off-host connect failed, including a refused connection. |
+| `not_found` | Not found | 未发现 | The process was visible and no off-host upload of the file was observed. A loopback send stays here. |
+| `not_visible` | Not visible | 看不到 | The descriptors or the channel could not be read. UDP and QUIC stay here. This is not a clean bill. |
 
-- **已上传** — the registered content was in a proxied request that succeeded, or the same process sent an off-host TCP byte span large enough for the file (`flow_txbytes`). That span is not a decrypted TLS body and not a remote receipt.
-- **已尝试未成功** — the content matched and the transfer failed, or an off-host connect failed.
-- **未发现** — the process was visible and no off-host upload of the file was observed. A loopback send stays here.
-- **看不到** — the descriptors or the channel could not be read. UDP and QUIC stay here. 看不到 is not a clean bill.
+Limits:
 
-Privacy, install, and this version: [PRIVACY.md](PRIVACY.md), [macOSClient/INSTALL.md](macOSClient/INSTALL.md), [CHANGELOG.md](CHANGELOG.md), [RELEASE_NOTES_0.2.0.md](RELEASE_NOTES_0.2.0.md). The release gate and the check for each item are in [RELEASE_CRITERIA.md](RELEASE_CRITERIA.md).
+- TLS that did not enter the local proxy is not decrypted.
+- A flow-byte match is a TCP send count on the same process. It is not a remote receipt.
+- UDP and QUIC stay Not visible.
 
-The collector is a user-space Mac app. It does not install a system extension and it does not decrypt TLS. The app's own processes are never the suspected agent. Other security tools stay unlabeled programs, not agents.
-
-```sh
-make
-./agent-monitor --log ./evidence.jsonl
-```
-
-Default sensitive locations are `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.npmrc`, `~/.git-credentials`, `~/.docker/config.json`, `~/.kube/config`, `~/.config/gcloud`, `~/.azure`, and `.env` in the launch directory. `--sensitive` adds a path. `--no-default-sensitive` clears the defaults first, which is how a saved configuration replaces them. An existing saved list that is still exactly `~/.ssh` and `~/.aws` is upgraded once; any other saved list is left as you set it.
-
-## Collector details
-
-C++17 用户态 Agent 候选监测与结构化证据收集器，使用 libproc 和 FSEvents。
-
-原生 macOS 客户端位于 [macOSClient](macOSClient/README.md)：可安装 App 包含 C++ 采集器、登录后台服务、实时风险列表、目录配置、独立健康检查和检测自检。按用户选择坚持无 ESF，接受采样覆盖限制。[安装说明](macOSClient/INSTALL.md) · [本机产品逐功能验收](macOSClient/PRODUCT_TEST_REPORT.md) · [后端整改报告](BACKEND_AUDIT_REPORT.md)。开发 Agent 请先读 [AGENTS.md](AGENTS.md)；后端证据契约见 [Schema 2](schemas/README.md)。
-
-**完整读取/外传验收尚未通过。** 最新实测、逐功能检查和真实 Agent 证据见 [ACCEPTANCE_REPORT.md](ACCEPTANCE_REPORT.md)：45 个行为用例为 17 TP、22 TN、0 FP、6 FN；已接入内容通道的真实 Codex 本机发送验证通过，模型目的地、未接入发送和公网收件仍未通过。
+## Quick start
 
 ```sh
 make
 ./agent-monitor --log ./evidence.jsonl
 ```
 
-需 Xcode Command Line Tools；使用系统自带 CoreServices、libcurl、libbsm、zlib，无需下载依赖。被动采集器等价编译命令：
+Needs Xcode Command Line Tools. The build uses the system CoreServices, libcurl, libbsm, and zlib. No extra packages are downloaded.
 
-```sh
-clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror -pthread \
-  main.cpp ProcessCache.cpp DarwinProcessSource.cpp FileMonitor.cpp \
-  AgentMonitor.cpp EvidenceStore.cpp ContentMatcher.cpp -framework CoreServices -lz -o agent-monitor
-```
+Default sensitive locations include `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.npmrc`, `~/.git-credentials`, `~/.docker/config.json`, `~/.kube/config`, `~/.config/gcloud`, `~/.azure`, and `.env` in the launch directory. `--sensitive` adds a path. `--no-default-sensitive` clears the defaults first.
 
-```sh
-./agent-monitor --duration 30 --interval-ms 200 --workers 2 --log ./evidence.jsonl
-./agent-monitor --match my-agent --sensitive /path/to/secrets
-./agent-monitor --agent-bundle 'Grok Bot.app' --log ./grok-evidence.jsonl
-./agent-monitor --include-runtimes
-./agent-monitor --pid 1234
-make check
-make integration
-make acceptance # 当前返回非零：完整验收存在漏报
-```
+Install the Mac app, upgrade, and uninstall: [macOSClient/INSTALL.md](macOSClient/INSTALL.md) ([中文](macOSClient/INSTALL.zh-CN.md)).
 
-CLI 默认敏感路径为 ~/.ssh、~/.aws、启动目录的 .env。日志模式强制要求 0600，目录应由本人控制；默认输出到 evidence.jsonl，正常监控不向 stdout 输出。--pid 返回 JSON 元数据与已观察祖先链。--match 和 --sensitive 可以重复增加规则；`--no-default-sensitive` 清除之前的路径，App 在参数开头使用它以严格应用保存的配置。--include-runtimes 会把普通解释器也列为候选，增加误报。SIGINT/SIGTERM 排空已接收事件，但不保证尚未交付的 FSEvents。退出码 0 为正常，1 为致命错误，2 为覆盖/队列丢失，3 为请求日志轮转；轮转仍需检查汇总中的丢失指标。
+Privacy: [PRIVACY.md](PRIVACY.md). This version: [RELEASE_NOTES_0.2.0.md](RELEASE_NOTES_0.2.0.md), [CHANGELOG.md](CHANGELOG.md). The release gate is [RELEASE_CRITERIA.md](RELEASE_CRITERIA.md).
 
-现在默认记录所有可见进程的清单，并对它们采样敏感文件描述符，不依赖 Agent 名称白名单。未识别工具标注为 unclassified_process；已知程序标注为 known_agent_candidate。未知进程持有敏感文件时也会采样 socket 对端并输出风险线索。--agent-bundle 可重复配置应用目录标签，无需重新编译；标签不是身份认证或 Agent 语义证明。
+## What the app does
 
-核心实现：[FileMonitor.cpp](FileMonitor.cpp)、[ProcessCache.cpp](ProcessCache.cpp)、[EvidenceStore.cpp](EvidenceStore.cpp)。完整类图、状态机、资源所有权、Schema 和故障语义见 [ARCHITECTURE.md](ARCHITECTURE.md)。测试结果见 [TEST_RESULTS.md](TEST_RESULTS.md)。
+The collector is user-space. It does not install a system extension. It does not install a CA, set a system proxy, or edit other apps' MCP or client configuration. The app's own processes are never the suspected agent.
 
-真实 Cursor、WorkBuddy AI、Codex、Grok Bot 的进程对照结果，以及未完成的 CLI 动作验收见 [REAL_AGENT_TESTS.md](REAL_AGENT_TESTS.md)。该报告明确区分程序发现、实际工具执行、登录/网络阻塞，不以客户端退出码或 AI 自述代替证据。
+Any non-collector process that opens a registered sensitive file is tracked. The owner is that process's own `.app`. If the process is not inside an app, Xcode and the Python.app it ships are toolchain hops and the walk continues to the desktop app above them, including names with spaces such as `Grok Bot.app`. Known names are display labels, not a detection gate. A startup-canary body match covers only that launched process. A later actor on the same file still gets its own close.
 
-FSEvents 不提供修改者 PID，也不监测纯读取。文件变更的 actor_process 必须为空；敏感文件描述符与网络对端共现只提示风险，不能证明数据上传。缓存使用 PID+启动时间防止常见复用误关联，但轮询不能保证观测所有 Agent 或彻底消除竞态。本项目尚未完成长期生产负载与部署验收。
-
-新增实验性 `agent-gateway` 提供显式接入的文件内容交付与发送审计。它以 Unix socket audit token 验证连接方身份，记录来源版本 hash、内容匹配、目的地、传输结果及关联事件。原文、JSON、Base64 和有界 gzip 已测试；跨请求分片和未进入该套接字的发送仍会漏报。它不是透明 HTTPS 监控，也不会自动接入已安装 Agent。
-
-`agent-egress` 在 `127.0.0.1` 上提供本地 HTTP 代理。`--launch` 只给它自己启动的那棵进程树设置代理环境变量。`--watch-live` 不按名称名单选进程。任何非采集器进程打开已登记敏感文件就会被跟踪。属主是该进程自己的 `.app`；进程不在应用里时，跳过 Xcode 和其中的 Python.app，继续找到上面的桌面应用（名字可以有空格，例如 `Grok Bot.app`）。已知名称只用于显示。启动自检的正文匹配只覆盖那次启动的进程，不取消后来另一个进程对同一文件的结论。不改这些程序的环境、MCP 配置或系统代理。能看全时按文件打开和 TCP 发送字节数下结论。看不到只用于确实读不到的通道，包括 UDP 和 QUIC。可选的 `--tls-ca-cert` 与 `--tls-ca-key` 让 CONNECT 里的 HTTPS 正文参加同一套指纹匹配。CA 只作为文件使用，不写入登录钥匙串。没有进入代理的 TLS 仍然是看不到。日志不写原始字节。用法和发布门槛见 [RELEASE_CRITERIA.md](RELEASE_CRITERIA.md)。
+`agent-egress` is a local HTTP proxy on `127.0.0.1`. `--launch` sets proxy environment variables only for the process tree it starts. `--watch-live` watches processes that already have a registered file open. Logs do not store raw secret bytes.
 
 ```sh
 ./agent-egress --log ./evidence.jsonl --sensitive-file ./synthetic.env \
   --launch -- python3 your-synthetic-case.py
+make check
+make integration
 ```
+
+`make acceptance` stays a strict gate and can return non-zero while known misses remain. Do not weaken it to make a report green.
+
+## Limits
+
+FSEvents do not name the process that changed a file, and they do not report a pure read. A file-change record leaves the actor empty. An open descriptor is not a read. A socket peer is not a payload. Polling can miss a short-lived process. An optional TLS CA file is used only for CONNECT bodies that enter the proxy. It is not written to the login keychain.

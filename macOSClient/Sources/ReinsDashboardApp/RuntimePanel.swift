@@ -48,13 +48,13 @@ struct RuntimeStatusPanel: View {
                 if runtime.isBusy {
                     ProgressView().controlSize(.small)
                 }
-                Button(runtime.state.canStop ? "停止监控" : "启动监控") {
+                Button(runtime.state.canStop ? L10n.tr("menu.stop") : L10n.tr("menu.start")) {
                     if runtime.state.canStop { runtime.stop() } else { runtime.start() }
                 }
                 .disabled(runtime.isBusy)
             }
             if runtime.state == .approvalRequired {
-                Button("前往系统设置允许后台运行", action: runtime.openBackgroundSettings)
+                Button(L10n.tr("runtime.openSettings"), action: runtime.openBackgroundSettings)
                     .buttonStyle(.link)
             }
             if !runtime.selfTestStatus.isEmpty {
@@ -63,7 +63,7 @@ struct RuntimeStatusPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if runtime.rejectedCount > 0 {
-                Label("有 \(runtime.rejectedCount) 条日志无法解析，请检查服务状态。", systemImage: "exclamationmark.triangle")
+                Label(L10n.format("runtime.rejected", runtime.rejectedCount), systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
@@ -72,7 +72,7 @@ struct RuntimeStatusPanel: View {
         .background(runtime.state.statusColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(runtime.state.statusColor.opacity(0.18)))
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("本机监控状态")
+        .accessibilityLabel(L10n.tr("runtime.a11y"))
     }
 }
 
@@ -85,18 +85,18 @@ struct RuntimeConfigurationView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Label("监控范围", systemImage: "folder.badge.gearshape")
+                Label(L10n.tr("scope.title"), systemImage: "folder.badge.gearshape")
                     .font(.title2.bold())
                 Spacer()
-                Button("完成") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button(L10n.tr("scope.done")) { dismiss() }.keyboardShortcut(.defaultAction)
             }
-            Text("选择存放敏感文件的目录，例如 SSH 配置、云凭据或项目目录。监控只使用本机用户权限；无法访问的目录不会自动获得授权。")
+            Text(L10n.tr("scope.help"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             List {
                 if runtime.watchedPaths.isEmpty {
-                    Text("尚未选择目录").foregroundStyle(.secondary)
+                    Text(L10n.tr("scope.empty")).foregroundStyle(.secondary)
                 }
                 ForEach(runtime.watchedPaths, id: \.self) { path in
                     HStack(spacing: 10) {
@@ -108,8 +108,8 @@ struct RuntimeConfigurationView: View {
                             Image(systemName: "minus.circle")
                         }
                         .buttonStyle(.borderless)
-                        .help("移除此监控目录")
-                        .accessibilityLabel("移除目录 \(path)")
+                        .help(L10n.tr("scope.removeHelp"))
+                        .accessibilityLabel(L10n.format("scope.remove", path))
                         .disabled(runtime.isBusy)
                     }.padding(.vertical, 5)
                 }
@@ -118,15 +118,15 @@ struct RuntimeConfigurationView: View {
             .frame(minHeight: 180)
             HStack {
                 Button { isDirectoryImporterPresented = true } label: {
-                    Label("添加目录…", systemImage: "plus")
+                    Label(L10n.tr("scope.add"), systemImage: "plus")
                 }
                 .disabled(runtime.isBusy)
                 Spacer()
-                Button("重新加载配置", action: runtime.reloadConfiguration)
+                Button(L10n.tr("scope.reload"), action: runtime.reloadConfiguration)
                     .disabled(runtime.isBusy)
             }
             Divider()
-            Text("检测范围：文件变化、可见进程及敏感文件描述符。短暂读取可能漏报；网络连接本身不证明文件已上传。")
+            Text(L10n.tr("scope.limit"))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -144,10 +144,10 @@ struct RuntimeConfigurationView: View {
                 }
             }
         }
-        .alert("无法选择目录", isPresented: Binding(
+        .alert(L10n.tr("scope.chooseFailed"), isPresented: Binding(
             get: { selectionError != nil }, set: { if !$0 { selectionError = nil } }
         )) {
-            Button("好", role: .cancel) { selectionError = nil }
+            Button(L10n.tr("alert.ok"), role: .cancel) { selectionError = nil }
         } message: { Text(selectionError ?? "") }
     }
 }

@@ -1,0 +1,25 @@
+ReinsCredential brand assets (2026-11-13)
+
+Product name (both locales): ReinsCredential
+Do not invent a Chinese product name. Keep the English name in the Dock, About window, and titles.
+Tagline EN: Detect which desktop agents access and upload sensitive files
+Tagline ZH: 检测桌面 Agent 对敏感文件的访问与上传
+
+Mark: a copper-gold open rein ring (bridle / snaffle) around a silver-white geometric key, with a short cyan evidence-chain gleam on the lower-right gap. Field is deep navy #0B1220. No letters in the app icon.
+
+Colors:
+- Navy field: #0B1220
+- Copper gold: #C9A36A (highlights toward #E8D5A3, shadows toward #8A6A32)
+- Key / light text: #F4F0E8
+- Cyan accent: #5EEAD4
+- Light background: #FAFAF8
+- Dark text on light: #0B1220
+
+Files:
+- ReinsCredential-AppIcon-1024.png — master 1024×1024 app icon (full-bleed navy square; macOS will apply the squircle)
+- ReinsCredential-Logo-rounded-512.png — rounded tile for README and docs
+- ReinsCredential-Wordmark-light.png — horizontal lockup on light
+- ReinsCredential-Wordmark-dark.png — horizontal lockup on navy
+- ReinsCredential-Icon-preview.png — squircle preview only, do not ship as the icon source
+
+Packaging: generate ReinsCredential.icns from the 1024 PNG in build-app.sh (iconutil on macOS). Set CFBundleIconFile / CFBundleIconName. The icon must appear in Dock, Finder, About, and the DMG/zip.

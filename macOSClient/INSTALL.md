@@ -1,35 +1,39 @@
-# ReinsCredential 0.2 本机版
+[English](INSTALL.md) · [简体中文](INSTALL.zh-CN.md)
 
-需要 macOS 13 或更新版本。本版本使用用户态采样，不要求 ESF、管理员守护进程或全局网络代理。
+# ReinsCredential 0.2 local build
 
-1. 打开 `ReinsCredential-0.2.0-local.dmg`，把 App 拖入“应用程序”；也可放入个人的 `~/Applications`。
-2. 从安装位置启动 App。本地临时签名版在 `~/Library/LaunchAgents` 安装本产品的用户服务。正式签名构建使用 SMAppService。系统的后台运行控制仍有效；若受限制，到“系统设置 → 通用 → 登录项与扩展”检查 ReinsCredential。
-3. 等待状态变成“监控中”或“覆盖受限”。“覆盖受限”表示部分进程/描述符无法观察，不代表完全失效。
-4. 点击“监控范围”添加含敏感文件的目录。默认包含 `~/.ssh`、`~/.aws`；项目 `.env` 需要添加项目目录。配置改变会重启采集，有短暂覆盖间隙。
-5. 点击“运行检测自检”。它创建合成文件和回环连接，验证独立采集器能关联进程、文件与目的地；不发送到外网，也不证明完整的数据外泄检测。
-6. 实时列表中的“敏感文件与网络连接同时可见”显示对应文件、进程链与对端。检查活动是否符合预期；此提示不代表已证明该文件上传。
+Requires macOS 13 or later. This version samples in user space. It does not need ESF, an administrator daemon, or a system-wide proxy.
 
-关闭窗口或退出界面后，后台服务继续采集。停止采集请点“停止监控”。风险系统通知需在“监控 → 允许风险通知”单独允许；通知由正在运行的界面发送，退出界面后仅后台记录，不发送系统通知。
+1. Open `ReinsCredential-0.2.0-local.dmg` and drag the app into Applications. `~/Applications` is also fine.
+2. Launch the app from that location. An ad-hoc build installs this product's per-user LaunchAgent under `~/Library/LaunchAgents`. A Developer ID build uses SMAppService. System background controls still apply. If they block the app, check System Settings → General → Login Items & Extensions for ReinsCredential.
+3. Wait until the status is Monitoring or coverage limited. Coverage limited means some processes or descriptors cannot be observed. It does not mean the app is off.
+4. Open Watch scope and add directories that contain sensitive files. Defaults include `~/.ssh` and `~/.aws`. A project `.env` needs the project directory. Changing configuration restarts collection and leaves a short gap.
+5. Run the self-test. It creates a synthetic file and a loopback connection so the collector can relate a process, a file, and a destination. It does not send anything off the Mac and it does not prove full exfiltration detection.
+6. A "sensitive file and network connection both visible" row shows the file, the process chain, and the peer. Check that the activity is expected. The row is not a proven upload.
 
-数据保存在 `~/Library/Application Support/ReinsCredential`，不会自动上传。运行目录 0700、日志 0600；保留当前日志与最近 5 个归档。16 MiB 是请求轮转阈值，队列排空可能超量，旧归档会删除。界面保留最近 2,000 条实时记录；历史归档可用“打开证据日志”查看。
+Closing the window leaves the background service running. Stop collection with Stop Monitoring. Risk notifications are sent only by the open interface. After you quit the interface, the service keeps recording and does not post notifications.
 
-卸载会停掉本产品的用户 LaunchAgent 并删除 App。证据目录默认留下：
+Data stays in `~/Library/Application Support/ReinsCredential` and is not uploaded. The runtime directory is mode 0700 and logs are 0600. The current log and the five newest archives are kept. 16 MiB is the rotation request. Draining the queue can exceed it, and older archives are deleted. The interface keeps the latest 2,000 live records. Older archives can be opened from the evidence log.
+
+Uninstall stops this product's per-user LaunchAgent and removes the app. The evidence directory stays:
 
 ```sh
 macOSClient/scripts/uninstall-local.sh
 macOSClient/scripts/uninstall-local.sh --delete-evidence
 ```
 
-也可以先在 App 中停止监控，再退出并把 App 移到废纸篓。不要删除其它应用的 plist。
+You can also stop monitoring in the app, quit, and move the app to the Trash. Do not delete another app's plist.
 
-升级时先停止监控并退出旧版，再替换 App、重新启动。替换 App 不会删除 `~/Library/Application Support/ReinsCredential`。
+To upgrade, stop monitoring and quit the old app, then replace the app and launch it again. Replacing the app does not delete `~/Library/Application Support/ReinsCredential`.
 
-本地构建在未设置 `REINS_SIGNING_IDENTITY` 时使用 ad-hoc 签名。把该变量设为 Developer ID 后，`build-app.sh` 改用该身份。`notarize-local.sh` 只在 `APPLE_ID`、`APPLE_TEAM_ID` 和 `APPLE_APP_SPECIFIC_PASSWORD` 都存在时公证，否则直接成功返回。不要关闭系统安全设置。
+A local build uses an ad-hoc signature when `REINS_SIGNING_IDENTITY` is unset. Set that variable to a Developer ID and `build-app.sh` signs with it. `notarize-local.sh` notarizes only when `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD` are all set. Otherwise it returns success. Do not turn off system security.
 
-开发者构建与安装：
+Developer build and install:
 
 ```sh
 macOSClient/scripts/build-app.sh --arch arm64 --arch x86_64
 macOSClient/scripts/package-local.sh
 macOSClient/scripts/install-local.sh
 ```
+
+The Dock, Finder, and About icon is generated from `brand/ReinsCredential-AppIcon-1024.png`. The product name in the Dock and About window stays ReinsCredential.

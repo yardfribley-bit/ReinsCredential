@@ -1,3 +1,5 @@
+[English](RELEASE_CRITERIA.md) · [简体中文](RELEASE_CRITERIA.zh-CN.md)
+
 # ReinsCredential 0.2.0 release gate
 
 Marketing version stays `0.2.0` (`CFBundleShortVersionString`). A build is releasable only when every item below is true. Each item names the automated check that locks it. Checks that need a Mac run in `.github/workflows/macos.yml`. The tag workflow in `.github/workflows/release.yml` does not run on pull requests.
@@ -46,14 +48,14 @@ Measured on macOS CI run 43242914536 (2026-11-12): idle median CPU 1.6 percent, 
 
 `macOSClient/scripts/build-app.sh` produces `ReinsCredential.app` at version 0.2.0. With `REINS_SIGNING_IDENTITY` unset or `-`, the signature is ad-hoc and the local LaunchAgent flag is set. A Developer ID value in that variable is used when a person provides it. `package-local.sh` writes `ReinsCredential-0.2.0-local.dmg`, `ReinsCredential-0.2.0-local.zip`, and `SHA256SUMS.txt`. `notarize-local.sh` notarizes only when `APPLE_ID`, `APPLE_TEAM_ID`, and `APPLE_APP_SPECIFIC_PASSWORD` are set; otherwise it exits 0.
 
-Check: `bash -n` on those scripts in the macOS workflow. The scripts do not need credentials to succeed.
+Check: `bash -n` on those scripts in the macOS workflow, plus `make-icon.sh` which fails if `brand/ReinsCredential-AppIcon-1024.png` is missing or `iconutil` writes an empty `ReinsCredential.icns`. `CFBundleIconFile` must be set. The scripts do not need credentials to succeed.
 
 ## 6. Docs
 
-- Quick start, verdict words, and the limits of each word: `README.md`
-- Privacy: `PRIVACY.md`
-- Install, upgrade, uninstall: `macOSClient/INSTALL.md` and `macOSClient/scripts/uninstall-local.sh`
-- History and this version: `CHANGELOG.md`, `RELEASE_NOTES_0.2.0.md`
+- Quick start, verdict words, and the limits of each word: `README.md` and `README.zh-CN.md`
+- Privacy: `PRIVACY.md` and `PRIVACY.zh-CN.md`
+- Install, upgrade, uninstall: `macOSClient/INSTALL.md`, `macOSClient/INSTALL.zh-CN.md`, and `macOSClient/scripts/uninstall-local.sh`
+- History and this version: `CHANGELOG.md`, `CHANGELOG.zh-CN.md`, `RELEASE_NOTES_0.2.0.md`, `RELEASE_NOTES_0.2.0.zh-CN.md`
 
 Limits that stay true in those docs: TLS bodies are not decrypted, a flow-byte match is not a remote receipt, and UDP/QUIC is `not_visible`.
 

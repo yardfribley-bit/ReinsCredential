@@ -1,3 +1,5 @@
+[English](RELEASE_NOTES_0.2.0.md) · [简体中文](RELEASE_NOTES_0.2.0.zh-CN.md)
+
 # ReinsCredential 0.2.0
 
 ReinsCredential 0.2.0 reports which desktop app opened a registered sensitive file, and whether that process uploaded it, tried and failed, showed no off-host send, or could not be seen.

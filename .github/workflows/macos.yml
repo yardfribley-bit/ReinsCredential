@@ -29,6 +29,10 @@ jobs:
       - name: Packaging and uninstall contracts
         run: |
           bash -n macOSClient/scripts/build-app.sh
+          test -s brand/ReinsCredential-AppIcon-1024.png
+          grep -q CFBundleIconFile macOSClient/scripts/build-app.sh
+          macOSClient/scripts/make-icon.sh /tmp/ReinsCredential.icns
+          test -s /tmp/ReinsCredential.icns
           bash -n macOSClient/scripts/package-local.sh
           bash -n macOSClient/scripts/notarize-local.sh
           bash -n macOSClient/scripts/uninstall-local.sh

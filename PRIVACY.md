@@ -1,3 +1,5 @@
+[English](PRIVACY.md) · [简体中文](PRIVACY.zh-CN.md)
+
 # Privacy
 
 ReinsCredential runs on the Mac where it is installed. It does not upload evidence, configuration, or file contents.
