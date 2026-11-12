@@ -1,4 +1,6 @@
 #include "EgressVerdict.h"
+#include <arpa/inet.h>
+#include <cstring>
 
 namespace agentsec {
 const char* UploadVerdictCode(UploadVerdict verdict) noexcept {
@@ -105,7 +107,9 @@ bool ConsistentOffHostSend(const LiveFlow& flow, uint64_t file_bytes) {
 }
 bool FailedOffHostAttempt(const LiveFlow& flow, uint64_t file_bytes) {
     if (flow.kind != LiveFlowKind::TcpMeasured || flow.loopback || flow.to_local_proxy || !flow.failed) return false;
-    if (flow.preexisting && TxDelta(flow) == 0) return false;
+    if (flow.established) return false;
+    // A refused connect is often already on the socket at the first sample.
+    // It never became established and did not carry the file.
     return file_bytes == 0 || TxDelta(flow) < file_bytes;
 }
 std::string DeltaText(const LiveFlow& flow, uint64_t file_bytes) {
@@ -228,5 +232,30 @@ bool ProxyBodyCoversLiveActor(const ProcessIdentity& proxy_actor, bool proxy_fro
     const ProcessIdentity& live_actor, bool live_in_launched_tree) noexcept {
     if (proxy_actor == live_actor) return true;
     return proxy_from_launched_tree && live_in_launched_tree;
+}
+bool Ipv4PeerOctets(bool ipv4_flag, const uint8_t address[16], uint8_t out[4]) noexcept {
+    if (!out) return false;
+    if (ipv4_flag) {
+        std::memcpy(out, address + 12, 4);
+        return true;
+    }
+    for (int i = 0; i < 10; ++i) if (address[i] != 0) return false;
+    const bool mapped = address[10] == 0xff && address[11] == 0xff;
+    const bool compatible = address[10] == 0 && address[11] == 0;
+    if (!mapped && !compatible) return false;
+    // :: and ::1 are IPv6. IPv4-compatible 0.0.0.0 and 0.0.0.1 use the same bytes.
+    if (compatible && address[12] == 0 && address[13] == 0 && address[14] == 0) return false;
+    std::memcpy(out, address + 12, 4);
+    return true;
+}
+std::string FormatSocketPeer(bool ipv4_flag, const uint8_t address[16], uint16_t port) {
+    uint8_t v4[4];
+    if (Ipv4PeerOctets(ipv4_flag, address, v4)) {
+        return std::to_string(v4[0]) + "." + std::to_string(v4[1]) + "." + std::to_string(v4[2]) + "." +
+            std::to_string(v4[3]) + ":" + std::to_string(port);
+    }
+    char text[INET6_ADDRSTRLEN];
+    if (!inet_ntop(AF_INET6, address, text, sizeof(text))) return "";
+    return "[" + std::string(text) + "]:" + std::to_string(port);
 }
 } // namespace agentsec

@@ -1,4 +1,5 @@
 #include "ProcessCache.h"
+#include "EgressVerdict.h"
 #include <libproc.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
@@ -248,43 +249,57 @@ public:
                 if (s.soi_kind == SOCKINFO_TCP) in = &s.soi_proto.pri_tcp.tcpsi_ini;
                 else if (s.soi_kind == SOCKINFO_IN) in = &s.soi_proto.pri_in;
                 if (!in || !in->insi_fport) continue;
-                std::array<char, INET6_ADDRSTRLEN> address{};
-                const bool ipv4 = in->insi_vflag & INI_IPV4;
-                const void* raw = ipv4 ? static_cast<const void*>(&in->insi_faddr.ina_46.i46a_addr4) : static_cast<const void*>(&in->insi_faddr.ina_6);
-                if (inet_ntop(ipv4 ? AF_INET : AF_INET6, raw, address.data(), static_cast<socklen_t>(address.size()))) {
-                    const auto port = ntohs(static_cast<uint16_t>(in->insi_fport));
-                    const auto peer = std::string(ipv4 ? "" : "[") + address.data() + (ipv4 ? ":" : "]:") + std::to_string(port);
-                    result.socket_peers.insert(peer + "/protocol=" + std::to_string(s.soi_protocol));
-                    SocketFlow flow;
-                    flow.destination = peer;
-                    std::array<char, INET6_ADDRSTRLEN> local_address{};
-                    const void* local_raw = ipv4 ? static_cast<const void*>(&in->insi_laddr.ina_46.i46a_addr4)
-                                                 : static_cast<const void*>(&in->insi_laddr.ina_6);
-                    std::string local = "?";
-                    if (inet_ntop(ipv4 ? AF_INET : AF_INET6, local_raw, local_address.data(), static_cast<socklen_t>(local_address.size())))
-                        local = local_address.data();
-                    flow.flow_id = std::to_string(s.soi_protocol) + "|" + local + ":" +
-                        std::to_string(ntohs(static_cast<uint16_t>(in->insi_lport))) + "|" + peer;
-                    const auto foreign = ipv4 ? ntohl(in->insi_faddr.ina_46.i46a_addr4.s_addr) : 0;
-                    const bool v4_loop = ipv4 && (foreign >> 24) == 127;
-                    const bool v6_loop = !ipv4 && peer.rfind("[::1]:", 0) == 0;
-                    const bool v4_mapped_loop = !ipv4 && peer.rfind("[::ffff:127.", 0) == 0;
-                    flow.loopback = v4_loop || v6_loop || v4_mapped_loop;
-                    if (s.soi_kind == SOCKINFO_TCP) {
-                        const auto& tcp = s.soi_proto.pri_tcp;
-                        flow.udp = false;
-                        flow.tcp_state = tcp.tcpsi_state;
-                        if (auto sent = TcpDataBytes(flow.flow_id)) {
-                            flow.bytes_known = true;
-                            flow.tx_bytes = *sent;
-                        }
-                    } else {
-                        flow.udp = s.soi_protocol == IPPROTO_UDP;
-                        flow.bytes_known = false;
-                        flow.tcp_state = -1;
-                    }
-                    result.flows.push_back(std::move(flow));
+                uint8_t foreign_raw[16] = {};
+                uint8_t local_raw[16] = {};
+                std::memcpy(foreign_raw, &in->insi_faddr, sizeof(foreign_raw));
+                std::memcpy(local_raw, &in->insi_laddr, sizeof(local_raw));
+                const bool v4_flag = (in->insi_vflag & INI_IPV4) != 0;
+                const auto port = ntohs(static_cast<uint16_t>(in->insi_fport));
+                const auto peer = FormatSocketPeer(v4_flag, foreign_raw, port);
+                if (peer.empty()) continue;
+                result.socket_peers.insert(peer + "/protocol=" + std::to_string(s.soi_protocol));
+                SocketFlow flow;
+                flow.destination = peer;
+                uint8_t v4[4];
+                const bool ipv4 = Ipv4PeerOctets(v4_flag, foreign_raw, v4);
+                const auto local_port = ntohs(static_cast<uint16_t>(in->insi_lport));
+                // The pcb table keys the local side as address:port, without brackets.
+                std::string local_id = "?:" + std::to_string(local_port);
+                uint8_t local_v4[4];
+                if (Ipv4PeerOctets(v4_flag, local_raw, local_v4)) {
+                    local_id = std::to_string(local_v4[0]) + "." + std::to_string(local_v4[1]) + "." +
+                        std::to_string(local_v4[2]) + "." + std::to_string(local_v4[3]) + ":" + std::to_string(local_port);
+                } else {
+                    char local_text[INET6_ADDRSTRLEN];
+                    if (inet_ntop(AF_INET6, local_raw, local_text, sizeof(local_text)))
+                        local_id = std::string(local_text) + ":" + std::to_string(local_port);
                 }
+                flow.flow_id = std::to_string(s.soi_protocol) + "|" + local_id + "|" + peer;
+                const bool v4_loop = ipv4 && v4[0] == 127;
+                const bool v6_loop = !ipv4 && (peer.rfind("[::1]:", 0) == 0 || peer.rfind("[::ffff:127.", 0) == 0);
+                flow.loopback = v4_loop || v6_loop;
+                if (s.soi_kind == SOCKINFO_TCP) {
+                    const auto& tcp = s.soi_proto.pri_tcp;
+                    flow.udp = false;
+                    flow.tcp_state = tcp.tcpsi_state;
+                    if (auto sent = TcpDataBytes(flow.flow_id)) {
+                        flow.bytes_known = true;
+                        flow.tx_bytes = *sent;
+                    }
+                } else if (s.soi_protocol == IPPROTO_TCP) {
+                    // ECONNREFUSED and RST leave a TCP socket without a PCB.
+                    // libproc reports SOCKINFO_IN. No sequence span exists, and
+                    // the connect did not become established.
+                    flow.udp = false;
+                    flow.bytes_known = true;
+                    flow.tx_bytes = 0;
+                    flow.tcp_state = 0;
+                } else {
+                    flow.udp = s.soi_protocol == IPPROTO_UDP;
+                    flow.bytes_known = false;
+                    flow.tcp_state = -1;
+                }
+                result.flows.push_back(std::move(flow));
         }
         return result;
     }

@@ -13,7 +13,7 @@ Any non-collector process that opens a registered sensitive file is attributed t
 | (a) Unlisted `.app` sends off-loopback | `uploaded`, owner `UnknownAgent.app` | `make integration` mode `live-unknown-app` |
 | (b) Shell child of a desktop agent, with Xcode's Python between the shell and `Grok Bot.app` | `uploaded`, owner `Grok Bot.app`, actor `hold-upload` | `make integration` mode `live-toolchain-chain`; unit test `ApplyBehaviorOwner` on the same shape |
 | (c) Loopback-only send | `not_found`, outcome `loopback_not_off_host` | `make integration` mode `live-direct` |
-| (d) Failed connect | `attempted` | `make integration` mode `live-attempt` |
+| (d) Failed connect | `attempted` | `make integration` mode `live-attempt` (SYN_SENT to TEST-NET) and `live-refused` (blocking `connect` to a closed port on this host's own address) |
 | (e) UDP | `not_visible` | `make integration` mode `live-udp` |
 | (f) Later actor on a file the startup canary already matched | a new `uploaded` close with `flow_txbytes`, plus the canary's `exact_bytes` close | `make integration` mode `live-after-canary` |
 | (g) Proxy-launched body match | `uploaded` with `exact_bytes` | `make integration` launched modes `plaintext`, `json`, `base64`, `gzip` |

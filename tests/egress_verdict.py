@@ -58,6 +58,7 @@ LIVE_VERDICTS = {
     "live-udp": "not_visible",
     "live-offhost": "uploaded",
     "live-attempt": "attempted",
+    "live-refused": "attempted",
     "live-unknown-app": "uploaded",
 }
 
@@ -344,6 +345,14 @@ def finish_close(mode, expected, record, records, receipt):
             raise SystemExit(f"attempt basis {record['evidence_basis']}")
         if "203.0.113.10" not in record["destination"]:
             raise SystemExit(f"attempt destination {record['destination']}")
+    if mode == "live-refused":
+        if record["evidence_basis"] != "flow_attempt":
+            raise SystemExit(f"refused basis {record['evidence_basis']}")
+        destination = record.get("destination") or ""
+        if "[::" in destination:
+            raise SystemExit(f"refused IPv4 was formatted as IPv6: {destination}")
+        if destination.count(".") != 3:
+            raise SystemExit(f"refused destination is not dotted IPv4: {destination}")
     if mode == "live-unknown-app":
         owner = ((record.get("actor_process") or {}).get("owning_agent") or {})
         if owner.get("bundle") != "UnknownAgent.app" or owner.get("name") != "UnknownAgent":
@@ -471,6 +480,19 @@ def live_case(directory, mode, binary, secret):
     elif mode == "live-attempt":
         host = "203.0.113.10"
         port = 443
+    elif mode == "live-refused":
+        host = routable_ip()
+        if not host:
+            return "skipped"
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind((host, 0))
+        except OSError:
+            probe.close()
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.bind(("0.0.0.0", 0))
+        port = probe.getsockname()[1]
+        probe.close()
     elif mode in ("live-offhost", "live-unknown-app"):
         host = routable_ip()
         if not host:
@@ -481,7 +503,7 @@ def live_case(directory, mode, binary, secret):
         server = Server(accept_timeout=10)
         port = server.port
     port_file = directory / f"{mode}.port"
-    duration = "8" if mode == "live-proxy" else "12"
+    duration = "8" if mode == "live-proxy" else "16" if mode == "live-refused" else "12"
     if mode == "live-proxy":
         agent = subprocess.Popen([str(binary), "proxy", str(secret), str(port_file), server.url("/upload")])
         time.sleep(0.3)
@@ -490,7 +512,7 @@ def live_case(directory, mode, binary, secret):
              "--sample-ms", "40", "--port-file", str(port_file)],
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
-        action = {"live-direct": "direct", "live-offhost": "direct", "live-unknown-app": "direct", "live-udp": "udp", "live-attempt": "attempt"}[mode]
+        action = {"live-direct": "direct", "live-offhost": "direct", "live-unknown-app": "direct", "live-udp": "udp", "live-attempt": "attempt", "live-refused": "refused"}[mode]
         ready = directory / f"{mode}.ready"
         agent = subprocess.Popen([str(binary), action, str(secret), host, str(port), str(ready)])
         time.sleep(0.2)

@@ -98,4 +98,10 @@ std::string LiveVerdictSummary(const LiveClose& close, const std::string& proces
 // that sent it. A later process that opens the same file is not covered.
 bool ProxyBodyCoversLiveActor(const ProcessIdentity& proxy_actor, bool proxy_from_launched_tree,
     const ProcessIdentity& live_actor, bool live_in_launched_tree) noexcept;
+
+// Peer text for a libproc address. IPv4, IPv4-mapped, and IPv4-compatible
+// addresses are dotted decimal. :: and ::1 stay IPv6.
+std::string FormatSocketPeer(bool ipv4_flag, const uint8_t address[16], uint16_t port);
+// Copies the IPv4 octets when FormatSocketPeer would print them as IPv4.
+bool Ipv4PeerOctets(bool ipv4_flag, const uint8_t address[16], uint8_t out[4]) noexcept;
 } // namespace agentsec

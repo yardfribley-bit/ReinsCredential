@@ -640,7 +640,6 @@ struct Session {
         for (const auto& flow : activity.flows) {
             seen.insert(flow.flow_id);
             auto& memory = proc.flows[flow.flow_id];
-            const bool created = memory.destination.empty() && memory.baseline == 0 && memory.latest == 0 && !memory.seen_now && !memory.preexisting && !memory.established;
             if (memory.destination.empty()) {
                 memory.destination = flow.destination;
                 memory.loopback = flow.loopback;
@@ -654,8 +653,9 @@ struct Session {
             memory.seen_now = true;
             memory.closed = false;
             // BSD TCP states: ESTABLISHED is 4, TIME_WAIT is 10. SYN_SENT is 2.
+            // State 0 is a refused or reset TCP socket that never got a PCB.
             if (flow.tcp_state >= 4 && flow.tcp_state <= 10) memory.established = true;
-            if (!first && created && flow.bytes_known && !flow.loopback && flow.tcp_state >= 0 && flow.tcp_state < 4)
+            if (flow.bytes_known && !flow.loopback && flow.tcp_state >= 0 && flow.tcp_state < 4)
                 memory.failed = true;
         }
         for (auto& item : proc.flows) {
@@ -687,7 +687,7 @@ struct Session {
         // Only a connect that never became established counts as a failed
         // attempt. A finished connection that sent some other, smaller payload
         // is ordinary traffic, not an upload attempt.
-        flow.failed = (memory.failed || memory.closed) && !memory.preexisting && !memory.established;
+        flow.failed = (memory.failed || memory.closed) && !memory.established;
         if (!memory.bytes_known && memory.udp) flow.kind = LiveFlowKind::UdpOrQuic;
         else if (!memory.bytes_known) flow.kind = LiveFlowKind::Unreadable;
         else flow.kind = LiveFlowKind::TcpMeasured;

@@ -131,6 +131,24 @@ int main(int argc, char** argv) {
             }
             close(fd);
         }
+    } else if (strcmp(mode, "refused") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) rc = 5;
+        else {
+            struct sockaddr_in address;
+            memset(&address, 0, sizeof(address));
+            address.sin_family = AF_INET;
+            address.sin_port = htons((unsigned short)atoi(argv[4]));
+            if (inet_pton(AF_INET, argv[3], &address.sin_addr) != 1) rc = 5;
+            else {
+                /* Blocking connect to a closed local port returns ECONNREFUSED.
+                   The fd stays open so libproc can still see the peer. */
+                connect(fd, (struct sockaddr*)&address, sizeof(address));
+                sleep(6);
+            }
+            close(fd);
+        }
     } else if (strcmp(mode, "udp") == 0 && (argc == 5 || argc == 6)) {
         wait_ready(argc == 6 ? argv[5] : NULL);
         int fd = socket(AF_INET, SOCK_DGRAM, 0);
