@@ -1001,6 +1001,12 @@ public enum EvidenceChainBuilder {
     }
 
     private static func closingRank(_ record: EvidenceRecord) -> Int {
+        // A descriptor listing that came up short is provisional. A later close
+        // that names the channel (including 未发现 for a measured loopback send)
+        // is the card to show.
+        if record.uploadVerdict == "not_visible" && record.transferOutcome == "descriptors_or_flows_incomplete" {
+            return 0
+        }
         switch record.uploadVerdict {
         case "uploaded": return 4
         case "attempted": return 3

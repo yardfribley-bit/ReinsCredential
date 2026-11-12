@@ -254,8 +254,15 @@ def assert_live_case(mode, expected, records, receipt, file_name):
     named = [record for record in records if record["type"] == "sensitive_access_closed" and file_name in (record.get("target_resource") or "")]
     if len(named) < 1:
         raise SystemExit(f"{mode} expected a close for {file_name}, got {redact(json.dumps(records))}")
-    rank = {"uploaded": 4, "attempted": 3, "not_visible": 2, "not_found": 1}
-    named.sort(key=lambda record: rank.get(record.get("upload_verdict"), 0))
+    def close_rank(record):
+        verdict = record.get("upload_verdict") or ""
+        outcome = record.get("transfer_outcome") or ""
+        # Provisional. A measured loopback 未发现 or a UDP 看不到 with a peer wins.
+        if verdict == "not_visible" and outcome == "descriptors_or_flows_incomplete":
+            return 0
+        return {"uploaded": 4, "attempted": 3, "not_visible": 2, "not_found": 1}.get(verdict, 0)
+
+    named.sort(key=close_rank)
     return finish_close(mode, expected, named[-1], records, receipt)
 
 

@@ -162,6 +162,15 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.detail = "match=flow_attempt;file_open_observed;off_host_payload_not_delivered;app_settings_not_modified";
         return result;
     }
+    if (loopback_send) {
+        result.verdict = UploadVerdict::NotFound;
+        result.destination = loopback_send->destination;
+        result.match_basis = "live_agent_observed";
+        result.transfer_outcome = "live_agent_observed_loopback_not_off_host;" + DeltaText(*loopback_send, view.file_bytes);
+        result.detail = "agent_seen;loopback_send_did_not_leave_host;app_settings_not_modified";
+        if (!view.inspection_complete) result.detail += ";descriptors_or_flows_incomplete";
+        return result;
+    }
     // A partial descriptor listing must not erase a UDP/QUIC peer we already
     // saw. Both conclusions are 看不到; the peer is the one the chain can show.
     if (view.file_open && unmeasured && !measured_tcp) {
@@ -183,11 +192,7 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
     }
     result.verdict = UploadVerdict::NotFound;
     result.match_basis = "live_agent_observed";
-    if (loopback_send) {
-        result.destination = loopback_send->destination;
-        result.transfer_outcome = "live_agent_observed_loopback_not_off_host;" + DeltaText(*loopback_send, view.file_bytes);
-        result.detail = "agent_seen;loopback_send_did_not_leave_host;app_settings_not_modified";
-    } else if (view.file_open) {
+    if (view.file_open) {
         result.transfer_outcome = "live_agent_observed_no_upload";
         result.detail = "agent_seen;file_open_observed;no_offhost_upload;app_settings_not_modified";
     } else {

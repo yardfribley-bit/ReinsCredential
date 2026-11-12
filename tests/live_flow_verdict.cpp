@@ -76,6 +76,13 @@ int main() {
     assert(local.destination == loop);
     assert(local.transfer_outcome.find("loopback_not_off_host") != std::string::npos);
     assert(local.verdict != UploadVerdict::Uploaded);
+    auto local_gap = Seen(file_bytes, {Tcp(loop, 0, file_bytes + 200, true, true)});
+    local_gap.inspection_complete = false;
+    const auto local_incomplete = CloseLiveAccess(local_gap);
+    assert(local_incomplete.verdict == UploadVerdict::NotFound);
+    assert(local_incomplete.destination == loop);
+    assert(local_incomplete.transfer_outcome.find("loopback_not_off_host") != std::string::npos);
+    assert(local_incomplete.transfer_outcome != "descriptors_or_flows_incomplete");
 
     const auto uploaded = CloseLiveAccess(Seen(file_bytes, {Tcp(off, 0, file_bytes, true)}));
     assert(uploaded.verdict == UploadVerdict::Uploaded);

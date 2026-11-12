@@ -149,6 +149,28 @@ final class EvidenceChainTests: XCTestCase {
         XCTAssertEqual(chain.verdictLabel, "没有出口结论")
     }
 
+    func testIncompleteScanDoesNotHideAMeasuredLoopbackClose() throws {
+        let loopback = event(id: 41, type: "sensitive_access_closed", path: "/synthetic/demo/loopback.env",
+                             tree: codexTree, agent: "Codex", bundle: "Codex.app", basis: "live_agent_observed",
+                             destination: "127.0.0.1:9",
+                             outcome: "live_agent_observed_loopback_not_off_host;tx_delta=80;file_bytes=44;slack=65536",
+                             verdict: "not_found", complete: true, status: "observed_chain_to_launchd",
+                             detail: "agent_seen;loopback_send_did_not_leave_host")
+        let gap = event(id: 42, type: "sensitive_access_closed", path: "/synthetic/demo/loopback.env",
+                        tree: codexTree, agent: "Codex", bundle: "Codex.app", basis: "observation_impossible",
+                        outcome: "descriptors_or_flows_incomplete", verdict: "not_visible",
+                        complete: true, status: "observed_chain_to_launchd",
+                        detail: "inspection_incomplete;not_a_clean_bill",
+                        at: loopback.timestamp.addingTimeInterval(1))
+        let chains = EvidenceChainBuilder.chains(from: [loopback, gap])
+        let chain = try XCTUnwrap(chains.first { $0.filePath == "/synthetic/demo/loopback.env" })
+        XCTAssertEqual(chains.filter { $0.filePath == "/synthetic/demo/loopback.env" }.count, 1)
+        XCTAssertEqual(chain.verdict, .notFound)
+        XCTAssertEqual(chain.verdictLabel, "未发现")
+        XCTAssertTrue(chain.transferOutcome.contains("loopback_not_off_host"))
+        XCTAssertNotEqual(chain.verdict, .notVisible)
+    }
+
     func testLiveAgentFlowChainsKeepTheFourVerdicts() throws {
         let open = event(id: 31, type: "sensitive_fd_observed", path: "/synthetic/demo/flow.env",
                          tree: codexTree, agent: "Codex", bundle: "Codex.app", basis: "fd_observed",
