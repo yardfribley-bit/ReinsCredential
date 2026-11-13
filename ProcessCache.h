@@ -48,6 +48,8 @@ public:
     virtual std::vector<SocketFlow> RetainedFlows(pid_t pid) const { (void)pid; return {}; }
     // Pids that opened or closed a flow since the previous call.
     virtual std::vector<pid_t> TakeHotPids() { return {}; }
+    // Egress asks for kernel flow notifications. The monitor does not.
+    virtual void WatchFlows(pid_t pid) { (void)pid; }
 };
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource();
 struct ProcessSnapshot {

@@ -949,6 +949,7 @@ struct Session {
         activity.identity_validated = true;
         for (const auto& path : activity.sensitive_files) NoteAccess(actor, path);
         if (!launched_tree) {
+            source.WatchFlows(node.identity.pid);
             ObserveLive(node, actor, activity, root);
             return;
         }

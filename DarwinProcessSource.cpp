@@ -720,7 +720,6 @@ public:
         }
         // Unknown software is always inspected for sensitive files. Only expand
         // peers when such a file is observed, or when a known candidate requests it.
-        if (!result.sensitive_files.empty()) Ntstat().Watch(pid);
         if (include_idle_peers || !result.sensitive_files.empty()) for (const int socket_fd : socket_fds) {
                 socket_fdinfo socket{};
                 if (proc_pidfdinfo(pid, socket_fd, PROC_PIDFDSOCKETINFO, &socket, sizeof(socket)) != sizeof(socket)) {
@@ -806,6 +805,7 @@ public:
     }
     std::vector<SocketFlow> RetainedFlows(pid_t pid) const override { return Ntstat().FlowsFor(pid); }
     std::vector<pid_t> TakeHotPids() override { return Ntstat().TakeHot(); }
+    void WatchFlows(pid_t pid) override { Ntstat().Watch(pid); }
 };
 } // namespace
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource() { return std::make_shared<DarwinProcessSource>(); }
