@@ -197,11 +197,13 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
     const LiveFlow* loopback_send = nullptr;
     bool any_offhost = false;
     bool any_measured_offhost = false;
+    bool saw_measured_flow = false;
     for (const auto& flow : view.flows) {
         if (flow.to_local_proxy) continue;
         const auto delta = TxDelta(flow);
         const auto app = ApplicationBytes(flow, delta);
         const bool measured = Measured(flow);
+        if (measured) saw_measured_flow = true;
         if (flow.loopback) {
             if (measured && flow.kind == LiveFlowKind::TcpMeasured && flow.established && delta >= lower && !loopback_send)
                 loopback_send = &flow;
@@ -302,7 +304,7 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         return result;
     }
     if (!view.window_settled) return Defer(UploadVerdict::NotFound);
-    if (view.process_exited && sum == 0 && !any_measured_offhost) {
+    if (view.process_exited && !saw_measured_flow) {
         result.verdict = UploadVerdict::NotVisible;
         result.match_basis = "observation_impossible";
         result.transfer_outcome = "process_exited_before_send_measured";
