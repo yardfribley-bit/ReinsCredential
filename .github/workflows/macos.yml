@@ -35,12 +35,13 @@ jobs:
           test -s /tmp/ReinsCredential.icns
           macOSClient/scripts/build-app.sh
           app="macOSClient/dist/ReinsCredential.app"
-          test -s "$app/Contents/Resources/ReinsCredential.icns"
+          require() { [[ -s "$1" ]] || { echo "missing $1" >&2; find "$(dirname "$1")" -maxdepth 3 -print >&2; exit 1; }; }
+          require "$app/Contents/Resources/ReinsCredential.icns"
           bundle="$app/Contents/Resources/ReinsCredentialDashboard_ReinsDashboardApp.bundle"
-          test -s "$bundle/en.lproj/Localizable.strings"
-          test -s "$bundle/zh-Hans.lproj/Localizable.strings"
-          test -s "$bundle/ReinsCredential-Logo-rounded-512.png"
-          grep -q '<key>CFBundleVersion</key><string>5</string>' "$app/Contents/Info.plist"
+          require "$bundle/en.lproj/Localizable.strings"
+          require "$bundle/zh-Hans.lproj/Localizable.strings"
+          require "$bundle/ReinsCredential-Logo-rounded-512.png"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" = 5
           bash -n macOSClient/scripts/package-local.sh
           bash -n macOSClient/scripts/notarize-local.sh
           bash -n macOSClient/scripts/uninstall-local.sh
