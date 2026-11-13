@@ -985,6 +985,10 @@ struct Session {
             auto found = live_procs.find(identity);
             if (found != live_procs.end() && found->second.known) {
                 found->second.exited = true;
+                for (auto& flow : found->second.flows) {
+                    if (!flow.second.established && !flow.second.loopback && flow.second.bytes_known)
+                        flow.second.failed = true;
+                }
                 for (auto& file : found->second.files) {
                     file.second.open_now = false;
                     if (!file.second.saw_close) {
