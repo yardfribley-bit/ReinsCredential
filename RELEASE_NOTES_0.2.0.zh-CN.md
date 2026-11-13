@@ -6,7 +6,13 @@ ReinsCredential 0.2.0 报告哪个桌面应用打开了已登记的敏感文件�
 
 ## 安装
 
-打开 `ReinsCredential-0.2.0-local.dmg`，或解压 `ReinsCredential-0.2.0-local.zip`，把 `ReinsCredential.app` 放进“应用程序”。临时签名版第一次启动会登记本用户的 LaunchAgent。Developer ID 构建使用系统登录项服务。打开安装包前核对 `SHA256SUMS.txt`。
+把 `ReinsCredential-0.2.0-local.dmg`、`ReinsCredential-0.2.0-local.zip` 和 `SHA256SUMS.txt` 下载到同一个文件夹。校验文件里的两个安装包都是文件名。先核对，再打开磁盘映像或解压，把 `ReinsCredential.app` 放进 `/Applications` 或 `~/Applications`：
+
+```sh
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+临时签名版第一次启动会登记本用户的 LaunchAgent。Developer ID 构建使用系统登录项服务。ad-hoc 安装包未公证。如果 Gatekeeper 拦住，按住 Control 点这个 App，选择“打开”，再选“打开”。不要关闭系统安全设置。
 
 ## 四句结论
 

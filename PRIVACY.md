@@ -19,4 +19,4 @@ What it does not store or show:
 - A certificate authority in the system or login keychain. An optional TLS CA is a file the operator passes in, and it is not installed.
 - A system-wide proxy. The egress proxy listens on `127.0.0.1` and sets proxy variables only on a process tree it launched.
 
-A flow verdict counts TCP send bytes on the same process that held the file. It is not a decrypted TLS body and not a receipt from the remote server. UDP and QUIC payloads are not read; those closes stay `not_visible`.
+A flow verdict counts send bytes on the process tree that held the file, summed across measured TCP and UDP/QUIC. It is not a decrypted TLS body and not a receipt from the remote server. UDP and QUIC payloads are not read. A measured datagram count can still close as `uploaded` when it falls in the size window (`flow_txbytes_udp`). An unmeasured UDP or QUIC channel stays `not_visible`.

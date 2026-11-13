@@ -54,7 +54,7 @@ classDiagram
     EvidenceStore --> EvidenceRecord
 ```
 
-生产编译单元为 main.cpp、ProcessCache.cpp、DarwinProcessSource.cpp、FileMonitor.cpp、AgentMonitor.cpp、EvidenceStore.cpp；共享类型在 Types.h，资源包装在 SystemResources.h，队列在 SpscRing.h。没有第三方队列或 JSON 依赖。
+`agent-monitor` 链接 `main.cpp` 与 `ProcessCache.cpp`、`DarwinProcessSource.cpp`、`EvidenceStore.cpp`、`FileMonitor.cpp`、`AgentMonitor.cpp`、`ContentMatcher.cpp`、`SubtreeWatcher.cpp`、`EgressVerdict.cpp`。`agent-egress` 再链接 `EgressProxy.cpp` 与 `TlsIntercept.cpp`。`agent-gateway` 链接 `ContentGateway.cpp` 与同一组核心文件，并使用系统 libcurl 与 libbsm。共享类型在 `Types.h`，资源包装在 `SystemResources.h`，队列在 `SpscRing.h`。没有第三方队列或 JSON 依赖。
 
 ## 未知与未来 Agent
 
@@ -125,13 +125,13 @@ CFArray、CFString、FSEventStream、dispatch queue 均由 unique_ptr 配合对�
 
 回调队列溢出、路径过长、OS gap、证据队列满都计数，通过 coverage/shutdown_summary 报告，健康退出码为 2 表示覆盖缺失，致命错误退出码为 1。致命错误以同样 schema 输出 stderr，磁盘失效时不能保证还能将故障写回失效磁盘。队列满时普通记录不等待，SubmitCritical 仅用于控制线程健康/关闭记录，有超时并传播失败。
 
-本地追加并不等于内核强制 append-only、防篡改、WORM 或远端持久化。默认逐条 fsync 的吞吐需按部署负载评估；当前实现不做自动日志轮转、压缩或删除。
+本地追加并不等于内核强制 append-only、防篡改、WORM 或远端持久化。默认逐条 fsync 的吞吐需按部署负载评估。EvidenceStore 自己不压缩、不删除旧文件。`agent-monitor --max-log-bytes` 在已写入的文件达到该请求阈值时以退出码 3 结束；这不是硬上限，排空队列仍可能超过。Mac 应用的监督进程看到退出码 3 后轮转证据日志，保留当前日志和最近 5 个归档。
 
 ## 部署验收范围
 
 该重构实现生产架构所需的职责边界、资源管理、损失计量和故障传播，但不能据此宣称已获企业生产验收。无 ESF 的轮询仍会遗漏短命、权限不可见、未知/改名 Agent 和瞬间活动；PID+启动时间不能成为操作系统原子进程句柄，也不能识别任意同进程 exec。缓存消除的是按 PID 拼接到新身份的错误设计，不是彻底消除内核状态竞态。
 
-上线还需实际负载/长稳测试、Intel 实机验证、部署签名/权限与 launchd 管理、日志轮转与保留策略、故障告警接入。需要真实读写者或上传内容时，应接入有相应授权的事件源或受控内容出口；不能伪造 FSEvents 的能力。
+Mac 应用的监督进程已经按退出码 3 轮转证据日志，并保留当前日志和最近 5 个归档。本机 ad-hoc 构建登记的是本用户 LaunchAgent，Developer ID 构建使用 SMAppService。仍未完成的是实际负载/长稳测试、Intel 实机执行、作为已发布产品的签名与公证，以及故障告警接入。需要真实读写者或上传内容时，应接入有相应授权的事件源或受控内容出口；不能伪造 FSEvents 的能力。
 
 Apple 参考：[FSEvents](https://developer.apple.com/documentation/coreservices/file_system_events)、[dispatch 调度约束](https://developer.apple.com/documentation/coreservices/1444164-fseventstreamsetdispatchqueue)、[进程结构](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info.h)。
 
@@ -172,6 +172,6 @@ EvidenceStore 异步追加，关键提交会等待队列空间或报错，但不
 
 敏感文件描述符仍然只说明文件打开过。`sensitive_access_closed` 才是对该访问的出口结论，并带上 `destination`、`transfer_outcome` 和 `upload_verdict`。没有看到打开、但请求体匹配已登记版本时，只写 `egress_transfer`，并写明打开未被证明。
 
-`--watch-live` 会在已有进程里寻找 Cursor、Codex、ChatGPT、Claude、WorkBuddy、Kiro 和 Grok 的名称或 bundle。它不修改这些程序的环境、MCP 配置或系统代理，也不把已有连接改道。能看全该进程的描述符时，用同一条 TCP 连接的序号跨度做关联。公开的 `tcp_sockinfo` 没有累计发送字节；`net.inet.tcp.pcblist64` 里的 `snd_max - iss` 去掉 SYN 之后，是这条连接交给 TCP 的数据字节数。文件打开之后，发往非回环地址的这段增量不少于文件大小、且不超过文件大小加 65536，结论是已上传，依据 `flow_txbytes`（不是解密后的正文，也不是对端回执）。同样条件下连接没有建立，是已尝试未成功，依据 `flow_attempt`。进程能看全、但没有这样的离机发送（包括只发到回环地址），是未发现，依据 `live_agent_observed`。描述符读不全、连接在字节数拿到之前就关闭、或合计超过文件窗口，才是看不到。UDP/QUIC 在 `com.apple.network.statistics` 给出发送字节数时按同一窗口判断；该控制不可用时，这条通道保持看不到。短连接关闭后仍留在进程树的合计里。自己连到本地代理的明文 HTTP，以及在提供了 CA 时完成拦截的 HTTPS，仍然按正文做 `exact_bytes` 匹配。由 `--launch` 启动的那棵树如果绕过代理，仍然是看不到，不能写成未发现。
+`--watch-live` 不按名称名单挑选进程。任何非采集器进程打开已登记敏感文件就会被跟踪；采集器自身和 Apple 系统守护进程除外。已知名称只用于显示。它不修改这些程序的环境、MCP 配置或系统代理，也不把已有连接改道。能看全该进程的描述符时，用同一条 TCP 连接的序号跨度做关联。公开的 `tcp_sockinfo` 没有累计发送字节；`net.inet.tcp.pcblist64` 里的 `snd_max - iss` 去掉 SYN 之后，是这条连接交给 TCP 的数据字节数。文件打开之后，进程树上已测量的离机发送（TCP 应用字节与 UDP/QUIC 合计）落在压缩下界和原始大小加 65536 之间，结论是已上传。依据是 `flow_txbytes`；当 UDP/QUIC 字节把合计推进窗口、而仅有的 TCP 应用字节仍低于下界时，依据是 `flow_txbytes_udp`。这不是解密后的正文，也不是对端回执。TLS 形态的 TCP 会先扣掉至多 1024 字节的客户端握手，握手本身不是上传。文件已打开、连接发往非回环地址但没有建立、并且送出的字节低于压缩下界时，是已尝试未成功，依据 `flow_attempt`。进程能看全，并且每一条离机通道都测到了字节数、合计低于压缩下界（包括只发到回环地址），是未发现，依据 `live_agent_observed`。描述符读不全、连接在字节数拿到之前就关闭、进程在测到发送之前退出，或合计超过文件加 65536，才是看不到。UDP/QUIC 在 `com.apple.network.statistics` 给出发送字节数时按同一窗口判断；该控制不可用时，这条通道保持看不到。短连接关闭后仍留在进程树的合计里。自己连到本地代理的明文 HTTP，以及在提供了 CA 时完成拦截的 HTTPS，仍然按正文做 `exact_bytes` 匹配。由 `--launch` 启动的那棵树如果绕过代理，仍然是看不到，不能写成未发现。
 
 `--tls-ca-cert` 和 `--tls-ca-key` 打开可选的 CONNECT 内容检查。代理在临时目录里签发短命叶子证书，用系统 SecureTransport 做握手，不把 CA 放进登录钥匙串，也不改默认钥匙串搜索列表。上游证书只用调用方提供的这个 CA 做锚。没有这两个参数时，CONNECT 仍然是看不到。

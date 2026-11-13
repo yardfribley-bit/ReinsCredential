@@ -6,7 +6,13 @@ ReinsCredential 0.2.0 reports which desktop app opened a registered sensitive fi
 
 ## Install
 
-Open `ReinsCredential-0.2.0-local.dmg` or unzip `ReinsCredential-0.2.0-local.zip`, and move `ReinsCredential.app` to the Applications folder. The first launch of an ad-hoc build registers a per-user LaunchAgent. A Developer ID build uses the system login-item service. Check `SHA256SUMS.txt` before opening the package.
+Download `ReinsCredential-0.2.0-local.dmg`, `ReinsCredential-0.2.0-local.zip`, and `SHA256SUMS.txt` into one folder. The checksum file lists the two packages by file name. Check them, then open the disk image or unzip the archive, and move `ReinsCredential.app` to `/Applications` or `~/Applications`:
+
+```sh
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+The first launch of an ad-hoc build registers a per-user LaunchAgent. A Developer ID build uses the system login-item service. An ad-hoc package is not notarized. If Gatekeeper blocks it, Control-click the app, choose Open, then Open. Do not turn off system security.
 
 ## What the four verdicts mean
 
