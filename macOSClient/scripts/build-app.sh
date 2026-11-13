@@ -24,6 +24,20 @@ mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Helpers" "$app_dir/Content
 [[ -s "$app_dir/Contents/Resources/ReinsCredential.icns" ]] || { echo "app icon is missing" >&2; exit 1; }
 cp "$bin_dir/ReinsDashboard" "$app_dir/Contents/MacOS/ReinsDashboard"
 cp "$bin_dir/ReinsRuntime" "$app_dir/Contents/MacOS/ReinsRuntime"
+resource_bundle="$bin_dir/ReinsCredentialDashboard_ReinsDashboardApp.bundle"
+[[ -d "$resource_bundle/en.lproj" && -d "$resource_bundle/zh-Hans.lproj" ]] || {
+  echo "dashboard localization bundle is missing: $resource_bundle" >&2
+  exit 1
+}
+cp -R "$resource_bundle" "$app_dir/Contents/Resources/"
+[[ -s "$app_dir/Contents/Resources/ReinsCredentialDashboard_ReinsDashboardApp.bundle/en.lproj/Localizable.strings" ]] || {
+  echo "English catalog was not copied into the app" >&2
+  exit 1
+}
+[[ -s "$app_dir/Contents/Resources/ReinsCredentialDashboard_ReinsDashboardApp.bundle/zh-Hans.lproj/Localizable.strings" ]] || {
+  echo "Chinese catalog was not copied into the app" >&2
+  exit 1
+}
 core=(ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp EgressVerdict.cpp)
 monitor_sources=(main.cpp "${core[@]}")
 egress_sources=(EgressProxy.cpp TlsIntercept.cpp "${core[@]}")

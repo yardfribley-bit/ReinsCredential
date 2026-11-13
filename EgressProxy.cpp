@@ -663,6 +663,7 @@ struct Session {
         bool failed = false;
         bool closed = false;
         bool seen_now = false;
+        std::string sni;
     };
     struct LiveProc {
         ProcessIdentity identity;
@@ -671,6 +672,7 @@ struct Session {
         bool known = false;
         bool inspection_complete = true;
         bool saw_complete_listing = false;
+        bool exited = false;
         int samples = 0;
         struct FileHold {
             std::string event_id;
@@ -733,6 +735,7 @@ struct Session {
             }
             if (flow.bytes_known) memory.bytes_known = true;
             if (flow.loopback) memory.loopback = true;
+            if (memory.sni.empty()) memory.sni = flow.sni;
             memory.latest = std::max(memory.latest, flow.tx_bytes);
             (void)PeerName(flow.destination);
             memory.seen_now = true;
@@ -769,6 +772,7 @@ struct Session {
                 memory.latest = std::max(memory.latest, flow.tx_bytes);
             }
             if (flow.loopback) memory.loopback = true;
+            if (memory.sni.empty()) memory.sni = flow.sni;
             if (flow.tcp_state >= 4 && flow.tcp_state <= 10) {
                 memory.established = true;
                 memory.failed = false;
@@ -801,6 +805,7 @@ struct Session {
         // is ordinary traffic, not an upload attempt.
         flow.failed = (memory.failed || memory.closed) && !memory.established;
         flow.measured = memory.bytes_known;
+        flow.sni = memory.sni;
         if (memory.udp) flow.kind = LiveFlowKind::UdpOrQuic;
         else if (!memory.bytes_known) flow.kind = LiveFlowKind::Unreadable;
         else flow.kind = LiveFlowKind::TcpMeasured;
@@ -878,12 +883,13 @@ struct Session {
                 view.file_bytes = RegisteredSize(file.first);
                 view.content_lower_bound = RegisteredLower(file.first);
                 const auto tail = std::chrono::milliseconds(500);
-                view.window_settled = finishing ||
+                view.process_exited = proc.exited;
+                view.window_settled = finishing || proc.exited ||
                     (file.second.saw_close && MonoClock::now() - file.second.closed_at >= tail);
                 const auto closed = CloseLiveAccess(view);
                 if (closed.defer) continue;
                 const auto rank = VerdictRank(closed.verdict);
-                if (rank < 3 && proc.samples < 2 && !finishing) continue;
+                if (rank < 3 && proc.samples < 2 && !finishing && !proc.exited) continue;
                 EmitLiveClose(proc, file.first, closed, proc.emitted_event[file.first]);
             }
         }
@@ -973,6 +979,20 @@ struct Session {
     }
     void SampleTree(pid_t root, const ProcessIdentity& identity, bool launched_tree) {
         if (root <= 0) return;
+        if (!launched_tree && !source.Lookup(root)) {
+            auto found = live_procs.find(identity);
+            if (found != live_procs.end() && found->second.known) {
+                found->second.exited = true;
+                for (auto& file : found->second.files) {
+                    file.second.open_now = false;
+                    if (!file.second.saw_close) {
+                        file.second.saw_close = true;
+                        file.second.closed_at = MonoClock::now();
+                    }
+                }
+            }
+            return;
+        }
         std::vector<pid_t> pending{root};
         std::set<pid_t> visited;
         size_t seen = 0;
@@ -1016,7 +1036,26 @@ struct Session {
             }
         }
     }
+    void AdoptHotPids() {
+        if (!watch_live) return;
+        for (const auto pid : source.TakeHotPids()) {
+            auto node = source.Lookup(pid);
+            if (!node || IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) continue;
+            auto activity = source.Inspect(*node, roots, false);
+            if (activity.sensitive_files.empty()) continue;
+            bool known = false;
+            for (const auto& root : watched) if (root.identity == node->identity) known = true;
+            if (known) continue;
+            if (watched.size() >= 64) { tree_truncated = true; break; }
+            auto actor = Describe(source, *node);
+            std::string label = node->name.empty() ? node->executable : node->name;
+            if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
+            watched.push_back(Root{node->identity, node->identity.pid, false});
+            std::cerr << "egress live " << node->identity.pid << " " << label << "\n";
+        }
+    }
     void SampleWatched() {
+        AdoptHotPids();
         if (watch_live && MonoClock::now() >= next_discover) {
             next_discover = MonoClock::now() + std::chrono::milliseconds(200);
             try {

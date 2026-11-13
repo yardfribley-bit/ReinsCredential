@@ -41,7 +41,7 @@ LiveAccessView Seen(uint64_t file_bytes, std::vector<LiveFlow> flows, bool file_
 
 int main() {
     const uint64_t file_bytes = 48;
-    const auto off = std::string("203.0.113.10:443");
+    const auto off = std::string("203.0.113.10:8443");
     const auto loop = std::string("127.0.0.1:9");
 
     LiveAccessView invisible;
@@ -121,14 +121,28 @@ int main() {
     assert(provider_hidden.verdict == UploadVerdict::NotVisible);
     assert(provider_hidden.verdict != UploadVerdict::NotFound);
     assert(provider_hidden.transfer_outcome == "provider_or_relay_body_not_visible");
-    const auto provider_wide = CloseLiveAccess(Seen(file_bytes, {Tcp("api.anthropic.com:443", 0, file_bytes + kFlowTxSlack + 1, true)}));
+    const auto provider_wide = CloseLiveAccess(Seen(file_bytes, {Tcp("api.anthropic.com:443", 0, file_bytes + kFlowTxSlack + kTlsHandshakeAllowance + 1, true)}));
     assert(provider_wide.verdict == UploadVerdict::NotVisible);
     assert(provider_wide.verdict != UploadVerdict::NotFound);
-    const auto provider_proven = CloseLiveAccess(Seen(file_bytes, {Tcp("api.anthropic.com:443", 0, file_bytes, true)}));
+    const auto provider_handshake = CloseLiveAccess(Seen(37, {Tcp("api.anthropic.com:443", 0, 206, true)}));
+    assert(provider_handshake.verdict == UploadVerdict::NotVisible);
+    assert(provider_handshake.verdict != UploadVerdict::Uploaded);
+    assert(provider_handshake.verdict != UploadVerdict::NotFound);
+    assert(provider_handshake.transfer_outcome == "provider_or_relay_body_not_visible");
+    const auto provider_hello = CloseLiveAccess(Seen(37, {Tcp("192.168.1.20:443", 0, 299, true)}));
+    assert(provider_hello.verdict == UploadVerdict::NotVisible);
+    assert(provider_hello.verdict != UploadVerdict::NotFound);
+    assert(provider_hello.transfer_outcome == "tls_handshake_body_not_visible");
+    LiveFlow named = Tcp("192.168.1.20:443", 0, 299, true);
+    named.sni = "api.anthropic.com";
+    const auto named_hello = CloseLiveAccess(Seen(37, {named}));
+    assert(named_hello.verdict == UploadVerdict::NotVisible);
+    assert(named_hello.detail.find("sni=api.anthropic.com") != std::string::npos);
+    const auto provider_proven = CloseLiveAccess(Seen(file_bytes, {Tcp("api.anthropic.com:443", 0, file_bytes + kTlsHandshakeAllowance, true)}));
     assert(provider_proven.verdict == UploadVerdict::Uploaded);
     assert(provider_proven.match_basis == "flow_txbytes");
 
-    LiveFlow syn = Tcp("203.0.113.10:443", 0, 0, false);
+    LiveFlow syn = Tcp(off, 0, 0, false);
     syn.failed = true;
     syn.preexisting = false;
     const auto attempted = CloseLiveAccess(Seen(file_bytes, {syn}));
@@ -213,13 +227,13 @@ int main() {
     assert(compressed_upload.match_basis == "flow_txbytes");
     assert(compressed_upload.detail.find("lower_bound=40") != std::string::npos);
     const auto chunked = CloseLiveAccess(Seen(file_bytes, {
-        Tcp("203.0.113.10:443", 0, 16, true),
-        Tcp("203.0.113.11:443", 0, 16, true),
-        Tcp("203.0.113.12:443", 0, 16, true)}));
+        Tcp("203.0.113.10:8443", 0, 16, true),
+        Tcp("203.0.113.11:8443", 0, 16, true),
+        Tcp("203.0.113.12:8443", 0, 16, true)}));
     assert(chunked.verdict == UploadVerdict::Uploaded);
     assert(chunked.match_basis == "flow_txbytes");
     LiveFlow partial_gap;
-    partial_gap.destination = "198.51.100.8:443";
+    partial_gap.destination = "198.51.100.8:8443";
     partial_gap.kind = LiveFlowKind::Unreadable;
     const auto partial = CloseLiveAccess(Seen(file_bytes, {Tcp(off, 0, 4, true), partial_gap}));
     assert(partial.verdict == UploadVerdict::NotVisible);

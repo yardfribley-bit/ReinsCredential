@@ -107,6 +107,40 @@ uint64_t LowerBound(const LiveAccessView& view) {
 bool Measured(const LiveFlow& flow) {
     return flow.measured || flow.kind == LiveFlowKind::TcpMeasured;
 }
+uint16_t PeerPort(const std::string& destination) {
+    std::string text;
+    if (!destination.empty() && destination[0] == '[') {
+        const auto mark = destination.rfind("]:");
+        if (mark == std::string::npos) return 0;
+        text = destination.substr(mark + 2);
+    } else {
+        const auto colon = destination.rfind(':');
+        if (colon == std::string::npos) return 0;
+        text = destination.substr(colon + 1);
+    }
+    unsigned value = 0;
+    if (text.empty()) return 0;
+    for (char c : text) {
+        if (c < '0' || c > '9') return 0;
+        value = value * 10u + static_cast<unsigned>(c - '0');
+        if (value > 65535u) return 0;
+    }
+    return static_cast<uint16_t>(value);
+}
+bool TlsShaped(const LiveFlow& flow) {
+    if (!flow.sni.empty()) return true;
+    if (IsProviderOrRelay(flow.destination)) return true;
+    return PeerPort(flow.destination) == 443;
+}
+uint64_t ApplicationBytes(const LiveFlow& flow, uint64_t delta) {
+    if (flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow))
+        return delta > kTlsHandshakeAllowance ? delta - kTlsHandshakeAllowance : 0;
+    return delta;
+}
+void NoteSni(LiveClose& result, const LiveFlow* flow) {
+    if (!flow || flow->sni.empty() || result.detail.find("sni=") != std::string::npos) return;
+    result.detail += ";sni=" + flow->sni;
+}
 std::string SumText(uint64_t sum, uint64_t lower, uint64_t file_bytes) {
     return "tx_sum=" + std::to_string(sum) + ";lower_bound=" + std::to_string(lower) +
         ";file_bytes=" + std::to_string(file_bytes) + ";slack=" + std::to_string(kFlowTxSlack);
@@ -159,12 +193,14 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
     const LiveFlow* upload_peer = nullptr;
     const LiveFlow* attempt = nullptr;
     const LiveFlow* unmeasured = nullptr;
+    const LiveFlow* handshake = nullptr;
     const LiveFlow* loopback_send = nullptr;
     bool any_offhost = false;
     bool any_measured_offhost = false;
     for (const auto& flow : view.flows) {
         if (flow.to_local_proxy) continue;
         const auto delta = TxDelta(flow);
+        const auto app = ApplicationBytes(flow, delta);
         const bool measured = Measured(flow);
         if (flow.loopback) {
             if (measured && flow.kind == LiveFlowKind::TcpMeasured && flow.established && delta >= lower && !loopback_send)
@@ -186,8 +222,9 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
             continue;
         }
         if (flow.established) {
-            tcp_sum += delta;
-            if (delta > 0 && !upload_peer) upload_peer = &flow;
+            tcp_sum += app;
+            if (app > 0 && !upload_peer) upload_peer = &flow;
+            else if (TlsShaped(flow) && delta > 0 && app < lower && !handshake) handshake = &flow;
         } else if (flow.failed && !attempt && delta < lower) {
             attempt = &flow;
         }
@@ -202,6 +239,18 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.transfer_outcome = result.match_basis + ";left_host;" + SumText(sum, lower, view.file_bytes);
         result.detail = "match=" + result.match_basis + ";" + SumText(sum, lower, view.file_bytes) +
             ";plaintext_not_recovered;no_ca;no_system_proxy;app_settings_not_modified";
+        NoteSni(result, upload_peer);
+        return result;
+    }
+    if (handshake) {
+        result.verdict = UploadVerdict::NotVisible;
+        result.destination = handshake->destination;
+        result.match_basis = "observation_impossible";
+        result.transfer_outcome = IsProviderOrRelay(handshake->destination) || !handshake->sni.empty()
+            ? "provider_or_relay_body_not_visible" : "tls_handshake_body_not_visible";
+        result.detail = "tls_handshake_bytes_are_not_a_body;unresolved_not_a_clean_bill;not_rewritten_as_not_found;" +
+            SumText(TxDelta(*handshake), lower, view.file_bytes) + ";app_settings_not_modified";
+        NoteSni(result, handshake);
         return result;
     }
     if (unmeasured) {
@@ -242,7 +291,6 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.detail = "inspection_incomplete;not_a_clean_bill;app_settings_not_modified";
         return result;
     }
-    if (!view.window_settled) return Defer(UploadVerdict::NotFound);
     if (loopback_send && !any_offhost) {
         result.verdict = UploadVerdict::NotFound;
         result.destination = loopback_send->destination;
@@ -251,6 +299,14 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
             SumText(TxDelta(*loopback_send), lower, view.file_bytes);
         result.detail = "agent_seen;loopback_send_did_not_leave_host;app_settings_not_modified";
         if (!view.inspection_complete) result.detail += ";descriptors_or_flows_incomplete";
+        return result;
+    }
+    if (!view.window_settled) return Defer(UploadVerdict::NotFound);
+    if (view.process_exited && sum == 0 && !any_measured_offhost) {
+        result.verdict = UploadVerdict::NotVisible;
+        result.match_basis = "observation_impossible";
+        result.transfer_outcome = "process_exited_before_send_measured";
+        result.detail = "process_exited;no_measured_offhost_send;not_rewritten_as_not_found;app_settings_not_modified";
         return result;
     }
     result.verdict = UploadVerdict::NotFound;

@@ -25,6 +25,7 @@ struct SocketFlow {
     bool bytes_known = false;
     uint64_t tx_bytes = 0;
     int tcp_state = -1;
+    std::string sni;
 };
 struct ActivitySample {
     bool identity_validated = false, descriptors_complete = true;
@@ -45,6 +46,8 @@ public:
     virtual ActivitySample Inspect(const ProcessNode& node, const std::vector<std::string>& roots, bool include_idle_peers) = 0;
     // Flows this source saw for the pid, including sockets that have already closed.
     virtual std::vector<SocketFlow> RetainedFlows(pid_t pid) const { (void)pid; return {}; }
+    // Pids that opened or closed a flow since the previous call.
+    virtual std::vector<pid_t> TakeHotPids() { return {}; }
 };
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource();
 struct ProcessSnapshot {

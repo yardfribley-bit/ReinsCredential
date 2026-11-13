@@ -166,6 +166,12 @@ public:
         for (const auto& item : found->second) out.push_back(item.second);
         return out;
     }
+    std::vector<pid_t> TakeHot() {
+        std::lock_guard<std::mutex> lock(mu_);
+        std::vector<pid_t> out(hot_.begin(), hot_.end());
+        hot_.clear();
+        return out;
+    }
     void Watch(pid_t pid) {
         if (pid <= 0) return;
         {
@@ -191,6 +197,7 @@ private:
         bool loopback = false;
         std::string flow_id;
         std::string destination;
+        std::string sni;
     };
     struct AddAll {
         uint64_t context;
@@ -398,8 +405,11 @@ private:
         flow.bytes_known = source.have_tx;
         flow.tx_bytes = source.tx;
         flow.tcp_state = source.tcp_state;
+        flow.sni = source.sni;
         if (source.have_tx && !source.udp && source.tcp_state < 0 && source.tx > 0) flow.tcp_state = 4;
         auto& slot = retained_[source.pid][source.flow_id];
+        const bool changed = slot.flow_id.empty() || (flow.bytes_known && flow.tx_bytes > slot.tx_bytes) ||
+            (!source.sni.empty() && slot.sni.empty());
         if (slot.flow_id.empty()) slot = flow;
         else {
             if (flow.bytes_known) {
@@ -413,6 +423,8 @@ private:
             if (!flow.destination.empty()) slot.destination = flow.destination;
         }
         if (source.have_tx) Publish(source.flow_id, source.tx);
+        if (!source.sni.empty() && slot.sni.empty()) slot.sni = source.sni;
+        if (changed) hot_.insert(source.pid);
         if (retained_[source.pid].size() > 64) retained_[source.pid].erase(retained_[source.pid].begin());
     }
     void Drain(int budget_ms) {
@@ -545,42 +557,23 @@ private:
             Open();
         }
         while (!stop_.load()) {
-            std::vector<pid_t> pids;
+            int fd = -1;
             {
                 std::lock_guard<std::mutex> lock(mu_);
-                DrainNonblock();
-                Pump(32);
-                pids.assign(watch_.begin(), watch_.end());
+                fd = fd_;
             }
-            std::vector<std::pair<pid_t, SocketFlow>> batch;
-            for (const auto pid : pids)
-                for (auto& flow : Snapshot(pid)) batch.emplace_back(pid, std::move(flow));
-            {
-                std::lock_guard<std::mutex> lock(mu_);
-                for (auto& item : batch) {
-                    auto& flow = item.second;
-                    if (flow.udp && !flow.bytes_known) {
-                        auto found = bytes_.find(flow.flow_id);
-                        if (found == bytes_.end()) found = bytes_.find(Wildcard(flow.flow_id));
-                        if (found != bytes_.end()) {
-                            flow.bytes_known = true;
-                            flow.tx_bytes = found->second;
-                        }
-                    }
-                    Source remembered;
-                    remembered.pid = item.first;
-                    remembered.flow_id = flow.flow_id;
-                    remembered.destination = flow.destination;
-                    remembered.loopback = flow.loopback;
-                    remembered.udp = flow.udp;
-                    remembered.have_tx = flow.bytes_known;
-                    remembered.tx = flow.tx_bytes;
-                    remembered.tcp_state = flow.tcp_state;
-                    remembered.described = true;
-                    Remember(remembered);
-                }
+            if (fd >= 0) {
+                pollfd wait{};
+                wait.fd = fd;
+                wait.events = POLLIN;
+                ::poll(&wait, 1, 50);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (stop_.load()) break;
+            std::lock_guard<std::mutex> lock(mu_);
+            DrainNonblock();
+            Pump(32);
         }
     }
     void Refresh() {
@@ -608,6 +601,7 @@ private:
     std::deque<uint64_t> pending_;
     std::map<std::string, uint64_t> bytes_;
     std::map<pid_t, std::map<std::string, SocketFlow>> retained_;
+    std::set<pid_t> hot_;
 };
 NetworkStatistics& Ntstat() {
     static NetworkStatistics stats;
@@ -811,6 +805,7 @@ public:
         return result;
     }
     std::vector<SocketFlow> RetainedFlows(pid_t pid) const override { return Ntstat().FlowsFor(pid); }
+    std::vector<pid_t> TakeHotPids() override { return Ntstat().TakeHot(); }
 };
 } // namespace
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource() { return std::make_shared<DarwinProcessSource>(); }

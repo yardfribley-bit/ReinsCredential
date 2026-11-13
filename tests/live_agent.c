@@ -247,6 +247,17 @@ int main(int argc, char** argv) {
             }
             close(fd);
         }
+    } else if (strcmp(mode, "tls-hello") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
+        int fd = connect_ip(argv[3], atoi(argv[4]));
+        if (fd < 0) rc = 5;
+        else {
+            char hello[206];
+            memset(hello, 'T', sizeof(hello));
+            if (send_all(fd, hello, sizeof(hello))) rc = 6;
+            else usleep(150000);
+            close(fd);
+        }
     } else if (strcmp(mode, "sleep") == 0) {
         sleep(2);
     } else rc = 2;

@@ -65,6 +65,7 @@ LIVE_VERDICTS = {
     "live-short-udp": "uploaded",
     "live-short-refused": "attempted",
     "live-short-unmeasured": "not_visible",
+    "live-tls-hello": "not_visible",
     "live-offhost": "uploaded",
     "live-attempt": "attempted",
     "live-refused": "attempted",
@@ -115,7 +116,7 @@ def sample_process(pid, seconds):
 
 
 class Server:
-    def __init__(self, status=200, raw=False, tls_cert=None, tls_key=None, accept_timeout=15, bind_host="127.0.0.1", accepts=1):
+    def __init__(self, status=200, raw=False, tls_cert=None, tls_key=None, accept_timeout=15, bind_host="127.0.0.1", accepts=1, bind_port=0):
         self.status = status
         self.raw = raw
         self.tls_cert = tls_cert
@@ -125,7 +126,7 @@ class Server:
         self.box = {}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind((bind_host, 0))
+        self.sock.bind((bind_host, bind_port))
         self.sock.listen(max(self.accepts, 1))
         self.sock.settimeout(accept_timeout)
         self.port = self.sock.getsockname()[1]
@@ -419,6 +420,13 @@ def finish_close(mode, expected, record, records, receipt):
             raise SystemExit(f"short unmeasured closed as {record['upload_verdict']} {record['transfer_outcome']}")
         if record["upload_verdict"] == "not_found":
             raise SystemExit("short unmeasured connection was called 未发现")
+    if mode == "live-tls-hello":
+        if record["upload_verdict"] != "not_visible":
+            raise SystemExit(f"tls handshake closed as {record['upload_verdict']} {record['transfer_outcome']}")
+        if "tls_handshake_body_not_visible" not in record["transfer_outcome"]:
+            raise SystemExit(f"tls handshake outcome {record['transfer_outcome']}")
+        if record["evidence_basis"] == "flow_txbytes":
+            raise SystemExit("tls handshake was counted as an upload")
     if mode == "live-direct":
         if "loopback_not_off_host" not in record["transfer_outcome"]:
             raise SystemExit(f"live direct outcome {record['transfer_outcome']}")
@@ -605,6 +613,17 @@ def live_case(directory, mode, binary, secret):
             return "skipped"
         server = Server(accept_timeout=10, bind_host="0.0.0.0", raw=True, accepts=3)
         port = server.port
+    elif mode == "live-tls-hello":
+        host = routable_ip()
+        if not host:
+            return "skipped"
+        try:
+            server = Server(accept_timeout=10, bind_host=host, raw=True, bind_port=443)
+        except OSError:
+            return "skipped"
+        port = server.port
+        if port != 443:
+            return "skipped"
     elif mode == "live-short-refused":
         host = routable_ip()
         if not host:
@@ -646,7 +665,7 @@ def live_case(directory, mode, binary, secret):
             "live-attempt": "attempt", "live-refused": "refused", "live-compressed": "payload",
             "live-chunked": "chunk3", "live-partial": "partial", "live-short-post": "short",
             "live-short-udp": "udp-short", "live-short-unmeasured": "udp-short",
-            "live-short-refused": "refused-short",
+            "live-short-refused": "refused-short", "live-tls-hello": "tls-hello",
         }[mode]
         ready = directory / f"{mode}.ready"
         agent = subprocess.Popen([str(binary), action, str(held), host, str(port), str(ready)])
@@ -657,6 +676,14 @@ def live_case(directory, mode, binary, secret):
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=proxy_env)
         time.sleep(1.0)
         ready.write_text("go\n")
+        if mode in ("live-direct", "live-short-post", "live-tls-hello"):
+            deadline = time.time() + 8
+            while time.time() < deadline:
+                if log.exists() and "sensitive_access_closed" in log.read_text():
+                    break
+                time.sleep(0.2)
+            else:
+                raise SystemExit(f"{mode} produced no sensitive_access_closed while the watch was still running")
     _out, err = finish(proc)
     try:
         agent.wait(timeout=5)

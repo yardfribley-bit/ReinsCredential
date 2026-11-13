@@ -21,7 +21,7 @@ A file-open sentence means the file was open in that process, or, when the sente
 
 Limits:
 
-- TLS that did not enter the local proxy is not decrypted. The verdict uses the measured send count and, when the resolver returns one, a reverse-DNS name. ClientHello SNI is not read.
+- TLS that did not enter the local proxy is not decrypted. A client handshake of at most 1024 sent bytes does not prove the file left. The recorded name is reverse DNS, or a hostname the network-statistics source already has. ClientHello bytes are not copied off the socket.
 - A flow-byte match is a local send count. It is not a remote receipt.
 - A send larger than the file plus 64 KiB stays Not visible. The file may be inside that traffic, and the count does not isolate it.
 
@@ -59,4 +59,4 @@ make integration
 
 ## Limits
 
-FSEvents do not name the process that changed a file, and they do not report a pure read. A file-change record leaves the actor empty. An open descriptor is not proof the bytes were read. A socket peer is not a payload. A subtree sweep can still miss an open that ends before the next child scan; immediate `cat` recall is incomplete and is not claimed as full read coverage. Short off-host sends are kept after the socket closes, from a 5 ms descriptor poll and from `com.apple.network.statistics` when that kernel control is available. A connection that disappears between polls and is absent from that control can still be missed. The compression lower bound is the smaller of the raw size, gzip, zlib, and raw deflate. A zstd payload smaller than that bound can still be closed as Not found. An optional TLS CA file is used only for CONNECT bodies that enter the proxy. It is not written to the login keychain.
+FSEvents do not name the process that changed a file, and they do not report a pure read. A file-change record leaves the actor empty. An open descriptor is not proof the bytes were read. A socket peer is not a payload. A subtree sweep can still miss an open that ends before the next child scan; immediate `cat` recall is incomplete and is not claimed as full read coverage. Short off-host sends are kept after the socket closes from `com.apple.network.statistics` notifications when that kernel control is available. A TLS client handshake, by itself, is not an upload. A connection the control never reports can still be missed. The compression lower bound is the smaller of the raw size, gzip, zlib, and raw deflate. A zstd payload smaller than that bound can still be closed as Not found. An optional TLS CA file is used only for CONNECT bodies that enter the proxy. It is not written to the login keychain.

@@ -17,7 +17,7 @@ Open `ReinsCredential-0.2.0-local.dmg` or unzip `ReinsCredential-0.2.0-local.zip
 
 ## Limits
 
-TLS that never entered the local proxy is not decrypted. The peer name is reverse DNS when the resolver returns one; ClientHello SNI is not read. The compression lower bound is gzip, zlib, or raw deflate, not zstd. The proxy is not system-wide. No CA is added to the keychain, and other apps' MCP settings are not changed. FSEvents still do not name the process that read a file. A connect that vanishes between the 5 ms poll and is missing from the network-statistics control can still be missed.
+TLS that never entered the local proxy is not decrypted. A client handshake of at most 1024 sent bytes is not an upload. The peer name is reverse DNS when the resolver returns one, or a hostname already present in the network-statistics source. ClientHello bytes are not copied off the socket. The compression lower bound is gzip, zlib, or raw deflate, not zstd. The proxy is not system-wide. No CA is added to the keychain, and other apps' MCP settings are not changed. FSEvents still do not name the process that read a file. A connect the network-statistics control never reports can still be missed.
 
 ## Upgrade and uninstall
 

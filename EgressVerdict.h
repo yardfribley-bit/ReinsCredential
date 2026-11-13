@@ -65,6 +65,8 @@ struct LiveFlow {
     bool established = false;
     // Connect never completed, or the flow closed before a full off-host send.
     bool failed = false;
+    // Hostname from the socket or the network-statistics domain, when one was visible.
+    std::string sni;
 };
 
 // What was visible for one already-running agent, or for one file it opened.
@@ -77,9 +79,11 @@ struct LiveAccessView {
     uint64_t file_bytes = 0;
     // Smallest compressed size computed at registration. Zero means use file_bytes.
     uint64_t content_lower_bound = 0;
-    // True after the file has been closed and the tail has elapsed, or when
-    // the watch itself is finishing. 未发现 waits for this.
+    // True after the file has been closed and the tail has elapsed, when the
+    // process has exited, or when the watch itself is finishing.
     bool window_settled = true;
+    // The holder exited before this close. Silence is not a result.
+    bool process_exited = false;
     std::vector<LiveFlow> flows;
 };
 
@@ -95,9 +99,12 @@ struct LiveClose {
     bool defer = false;
 };
 
-// Sent-byte slack above the registered file size. A TLS handshake and request
-// framing fit; a multi-megabyte unrelated stream does not match a small file.
+// Sent-byte slack above the registered file size. Request framing fits; a
+// multi-megabyte unrelated stream does not match a small file.
 constexpr uint64_t kFlowTxSlack = 65536;
+// Client TLS flight with no application data. Observed handshake-only sends
+// were 206 and 299 bytes. Bytes at or below this allowance do not prove a body.
+constexpr uint64_t kTlsHandshakeAllowance = 1024;
 
 // Verdict for an agent that was already running.
 // 已上传 requires the tree's measured off-host send, summed across TCP and
