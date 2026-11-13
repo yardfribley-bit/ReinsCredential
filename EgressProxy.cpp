@@ -743,7 +743,8 @@ struct Session {
             // BSD TCP states: ESTABLISHED is 4, TIME_WAIT is 10. SYN_SENT is 2.
             // State 0 is a refused or reset TCP socket that never got a PCB.
             if (flow.tcp_state >= 4 && flow.tcp_state <= 10) memory.established = true;
-            if (flow.bytes_known && !flow.loopback && flow.tcp_state >= 0 && flow.tcp_state < 4)
+            // State 0 is already refused or reset. SYN_SENT can still complete.
+            if (flow.bytes_known && !flow.loopback && flow.tcp_state == 0)
                 memory.failed = true;
         }
         MergeRetained(proc, seen);
@@ -776,7 +777,7 @@ struct Session {
             if (flow.tcp_state >= 4 && flow.tcp_state <= 10) {
                 memory.established = true;
                 memory.failed = false;
-            } else if (flow.bytes_known && !flow.loopback && flow.tcp_state >= 0 && flow.tcp_state < 4) {
+            } else if (flow.bytes_known && !flow.loopback && flow.tcp_state == 0) {
                 memory.failed = true;
             }
             (void)PeerName(flow.destination);
