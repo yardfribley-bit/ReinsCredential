@@ -14,6 +14,18 @@ struct AgentRules {
 };
 std::string MatchAgent(const ProcessNode& node, const AgentRules& rules);
 void AnnotateActor(ActorProcess& actor, const AgentRules& rules);
+// Leftmost `Name.app` component, including spaces (`Grok Bot.app`, `WorkBuddy AI.app`).
+// Nested helpers stay inside the outer bundle.
+std::optional<std::string> OutermostAppBundle(const std::string& executable);
+// This process is the collector. It reads registered files to fingerprint them.
+bool IsCollectorProcess(const ProcessNode& node) noexcept;
+// Spotlight, backup, and other launchd maintenance daemons live here and open
+// user files while indexing. They are not agents. Shells under /bin and
+// /usr/bin are not excluded: agents run those on the user's behalf.
+bool IsAppleSystemDaemon(const ProcessNode& node) noexcept;
+// Owner of a process that opened a sensitive file. Known-name matches are only
+// a display label. The gate is the open, not the name table.
+void ApplyBehaviorOwner(ActorProcess& actor);
 // Plain sentence for a sensitive-file event. It names the agent and tool chain
 // and states that an upload was not observed.
 std::string SummarizeAccess(const ActorProcess* actor, const std::string& path, const std::string& basis, const AgentRules& rules);

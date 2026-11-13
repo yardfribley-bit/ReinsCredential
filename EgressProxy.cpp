@@ -24,6 +24,8 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <chrono>
+#include <mutex>
 #include <thread>
 
 extern char** environ;
@@ -46,10 +48,11 @@ void Wipe(std::string& bytes) noexcept {
 }
 struct Version {
     std::string path, sha256, bytes;
+    uint64_t lower_bound = 0;
     Version() = default;
-    Version(Version&& other) noexcept : path(std::move(other.path)), sha256(std::move(other.sha256)), bytes(std::move(other.bytes)) {}
+    Version(Version&& other) noexcept : path(std::move(other.path)), sha256(std::move(other.sha256)), bytes(std::move(other.bytes)), lower_bound(other.lower_bound) {}
     Version& operator=(Version&& other) noexcept {
-        if (this != &other) { Wipe(bytes); path = std::move(other.path); sha256 = std::move(other.sha256); bytes = std::move(other.bytes); }
+        if (this != &other) { Wipe(bytes); path = std::move(other.path); sha256 = std::move(other.sha256); bytes = std::move(other.bytes); lower_bound = other.lower_bound; }
         return *this;
     }
     Version(const Version&) = delete;
@@ -468,6 +471,7 @@ ActorProcess Describe(IProcessSource& source, const ProcessNode& node) {
         }
     }
     AnnotateActor(actor, {});
+    ApplyBehaviorOwner(actor);
     return actor;
 }
 struct StoredObservation {
@@ -475,6 +479,8 @@ struct StoredObservation {
     std::string matched_path;
     std::string match_kind;
     std::string event_id;
+    std::optional<ProcessIdentity> actor_identity;
+    bool launched_tree = false;
 };
 struct Access {
     std::string event_id;
@@ -509,12 +515,61 @@ struct ChildProcess {
         return false;
     }
 };
+std::string SanitizePeer(const std::string& name) {
+    std::string clean;
+    for (unsigned char c : name) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-')
+            clean.push_back(static_cast<char>(c));
+        if (clean.size() >= 253) break;
+    }
+    return clean;
+}
+// Reverse DNS for a numeric peer. ClientHello SNI is not on a socket we can
+// read, so a resolver name is the only hostname available without decryption.
+// The lookup runs off the sample thread and is skipped when it is still pending.
+std::string PeerName(const std::string& destination) {
+    if (destination.empty()) return {};
+    std::string host = destination;
+    if (!host.empty() && host[0] == '[') {
+        const auto end = host.find(']');
+        host = end == std::string::npos ? std::string() : host.substr(1, end - 1);
+    } else {
+        const auto colon = host.rfind(':');
+        if (colon != std::string::npos) host.resize(colon);
+    }
+    if (host.empty() || host.rfind("127.", 0) == 0 || host == "::1" || host == "0.0.0.0") return {};
+    in_addr parsed{};
+    if (inet_pton(AF_INET, host.c_str(), &parsed) != 1) return {};
+    struct Entry { bool done = false; std::string name; };
+    static std::mutex mu;
+    static std::map<std::string, Entry> cache;
+    {
+        std::lock_guard<std::mutex> lock(mu);
+        auto found = cache.find(host);
+        if (found != cache.end()) return found->second.done ? found->second.name : std::string();
+        cache[host] = Entry{};
+    }
+    std::thread([host] {
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_port = htons(80);
+        inet_pton(AF_INET, host.c_str(), &address.sin_addr);
+        char node[NI_MAXHOST];
+        std::string resolved;
+        if (getnameinfo(reinterpret_cast<sockaddr*>(&address), sizeof(address), node, sizeof(node), nullptr, 0, NI_NAMEREQD) == 0)
+            resolved = SanitizePeer(node);
+        if (resolved == host) resolved.clear();
+        std::lock_guard<std::mutex> lock(mu);
+        cache[host] = Entry{true, resolved};
+    }).detach();
+    return {};
+}
 struct Session {
     EvidenceStore& store;
     IProcessSource& source;
     std::vector<Version> versions;
     std::vector<std::string> roots;
-    struct Root { ProcessIdentity identity; pid_t pid = 0; };
+    struct Root { ProcessIdentity identity; pid_t pid = 0; bool launched = false; };
     std::vector<Root> watched;
     bool launched = false;
     bool watch_live = false;
@@ -522,6 +577,7 @@ struct Session {
     MonoClock::time_point next_discover{};
     uint16_t proxy_port = 0;
     bool tree_truncated = false;
+    bool launched_tree_truncated = false;
     std::map<std::string, Access> accesses;
     std::vector<StoredObservation> observations;
     std::set<std::string> socket_seen;
@@ -553,10 +609,351 @@ struct Session {
         std::cerr << "egress access " << path << "\n";
         Emit(std::move(record));
     }
-    void NoteFilesAndSockets(const ProcessNode& node) {
+    bool LaunchedActor(const ActorProcess& actor) const {
+        for (const auto& root : watched) {
+            if (!root.launched) continue;
+            if (root.identity == actor.process.node.identity) return true;
+            for (const auto& ancestor : actor.ancestors)
+                if (ancestor.node.identity == root.identity) return true;
+        }
+        return false;
+    }
+    const Version* FindVersion(const std::string& path) const {
+        const auto base = [](const std::string& value) {
+            const auto slash = value.rfind('/');
+            return slash == std::string::npos ? value : value.substr(slash + 1);
+        };
+        for (const auto& version : versions) if (version.path == path) return &version;
+        const Version* by_name = nullptr;
+        int named = 0;
+        for (const auto& version : versions) {
+            if (base(version.path) != base(path)) continue;
+            if (version.path.find(path) != std::string::npos || path.find(version.path) != std::string::npos) return &version;
+            by_name = &version;
+            ++named;
+        }
+        // /tmp and /private/tmp can name the same file. A unique basename is enough.
+        return named == 1 ? by_name : nullptr;
+    }
+    uint64_t RegisteredSize(const std::string& path) const {
+        const auto* version = FindVersion(path);
+        return version ? version->bytes.size() : 0;
+    }
+    uint64_t RegisteredLower(const std::string& path) const {
+        const auto* version = FindVersion(path);
+        return version ? version->lower_bound : 0;
+    }
+    std::string RegisteredHash(const std::string& path) const {
+        const auto* version = FindVersion(path);
+        return version ? version->sha256 : std::string();
+    }
+    bool ToLocalProxy(const std::string& destination) const {
+        const auto port = std::to_string(proxy_port);
+        return destination == "127.0.0.1:" + port || destination == "[::1]:" + port || destination == "[::ffff:127.0.0.1]:" + port;
+    }
+    struct FlowMemory {
+        std::string destination;
+        bool loopback = false;
+        bool udp = false;
+        bool bytes_known = false;
+        uint64_t baseline = 0;
+        uint64_t latest = 0;
+        bool preexisting = false;
+        bool established = false;
+        bool failed = false;
+        bool closed = false;
+        bool seen_now = false;
+        std::string sni;
+    };
+    struct LiveProc {
+        ProcessIdentity identity;
+        ProcessIdentity root;
+        ActorProcess actor;
+        bool known = false;
+        bool inspection_complete = true;
+        bool saw_complete_listing = false;
+        bool exited = false;
+        int samples = 0;
+        struct FileHold {
+            std::string event_id;
+            bool open_now = false;
+            bool saw_close = false;
+            MonoClock::time_point closed_at{};
+        };
+        std::map<std::string, FileHold> files;
+        std::map<std::string, FlowMemory> flows;
+        std::map<std::string, int> emitted_rank;
+        std::map<std::string, std::string> emitted_outcome;
+        std::map<std::string, std::string> emitted_event;
+    };
+    std::map<ProcessIdentity, LiveProc> live_procs;
+    std::set<ProcessIdentity> live_roots_closed_without_file;
+    void ObserveLive(const ProcessNode& node, const ActorProcess& actor, const ActivitySample& activity, const ProcessIdentity& root) {
+        auto& proc = live_procs[node.identity];
+        const bool first = !proc.known;
+        proc.known = true;
+        proc.identity = node.identity;
+        proc.root = root;
+        proc.actor = actor;
+        // A dying process can fail one descriptor listing. That must not erase
+        // an earlier complete listing, or a measured small send becomes 看不到.
+        const bool listing_ok = activity.descriptors_complete && activity.identity_validated;
+        if (listing_ok) {
+            proc.inspection_complete = true;
+            proc.saw_complete_listing = true;
+        } else if (!proc.saw_complete_listing) {
+            proc.inspection_complete = false;
+        }
+        std::set<std::string> open_now(activity.sensitive_files.begin(), activity.sensitive_files.end());
+        for (const auto& path : open_now) {
+            auto& hold = proc.files[path];
+            if (hold.event_id.empty()) {
+                auto noted = accesses.find(path);
+                if (noted != accesses.end()) hold.event_id = noted->second.event_id;
+            }
+            hold.open_now = true;
+            hold.saw_close = false;
+            (void)path;
+        }
+        for (auto& item : proc.files) {
+            if (open_now.count(item.first)) continue;
+            if (!item.second.open_now) continue;
+            item.second.open_now = false;
+            item.second.saw_close = true;
+            item.second.closed_at = MonoClock::now();
+        }
+        std::set<std::string> seen;
+        for (const auto& flow : activity.flows) {
+            seen.insert(flow.flow_id);
+            auto& memory = proc.flows[flow.flow_id];
+            if (memory.destination.empty()) {
+                memory.destination = flow.destination;
+                memory.loopback = flow.loopback;
+                memory.udp = flow.udp;
+                memory.preexisting = first;
+                memory.baseline = first ? flow.tx_bytes : 0;
+            }
+            if (flow.bytes_known) memory.bytes_known = true;
+            if (flow.loopback) memory.loopback = true;
+            if (memory.sni.empty()) memory.sni = flow.sni;
+            memory.latest = std::max(memory.latest, flow.tx_bytes);
+            (void)PeerName(flow.destination);
+            memory.seen_now = true;
+            memory.closed = false;
+            // BSD TCP states: ESTABLISHED is 4, TIME_WAIT is 10. SYN_SENT is 2.
+            // State 0 is a refused or reset TCP socket that never got a PCB.
+            if (flow.tcp_state >= 4 && flow.tcp_state <= 10) memory.established = true;
+            // State 0 is already refused or reset. SYN_SENT can still complete.
+            if (flow.bytes_known && !flow.loopback && flow.tcp_state == 0)
+                memory.failed = true;
+        }
+        MergeRetained(proc, seen);
+        for (auto& item : proc.flows) {
+            if (seen.count(item.first) || item.second.destination.empty()) continue;
+            item.second.closed = true;
+            if (!item.second.established && !item.second.preexisting) item.second.failed = true;
+            item.second.seen_now = false;
+        }
+        ++proc.samples;
+    }
+    void MergeRetained(LiveProc& proc, std::set<std::string>& seen) {
+        for (const auto& flow : source.RetainedFlows(proc.identity.pid)) {
+            if (flow.flow_id.empty()) continue;
+            seen.insert(flow.flow_id);
+            auto& memory = proc.flows[flow.flow_id];
+            if (memory.destination.empty()) {
+                memory.destination = flow.destination;
+                memory.loopback = flow.loopback;
+                memory.udp = flow.udp;
+                memory.preexisting = false;
+                memory.baseline = 0;
+            }
+            if (flow.bytes_known) {
+                memory.bytes_known = true;
+                memory.latest = std::max(memory.latest, flow.tx_bytes);
+            }
+            if (flow.loopback) memory.loopback = true;
+            if (memory.sni.empty()) memory.sni = flow.sni;
+            if (flow.tcp_state >= 4 && flow.tcp_state <= 10) {
+                memory.established = true;
+                memory.failed = false;
+            } else if (flow.bytes_known && !flow.loopback && flow.tcp_state == 0) {
+                memory.failed = true;
+            }
+            (void)PeerName(flow.destination);
+        }
+    }
+    static int VerdictRank(UploadVerdict verdict) {
+        switch (verdict) {
+        case UploadVerdict::Uploaded: return 4;
+        case UploadVerdict::Attempted: return 3;
+        case UploadVerdict::NotVisible: return 2;
+        case UploadVerdict::NotFound: return 1;
+        }
+        return 0;
+    }
+    LiveFlow ToLiveFlow(const FlowMemory& memory) const {
+        LiveFlow flow;
+        flow.destination = memory.destination;
+        flow.loopback = memory.loopback;
+        flow.to_local_proxy = ToLocalProxy(memory.destination);
+        flow.tx_baseline = memory.baseline;
+        flow.tx_latest = memory.latest;
+        flow.preexisting = memory.preexisting;
+        flow.established = memory.established;
+        // Only a connect that never became established counts as a failed
+        // attempt. A finished connection that sent some other, smaller payload
+        // is ordinary traffic, not an upload attempt.
+        flow.failed = (memory.failed || memory.closed) && !memory.established;
+        flow.measured = memory.bytes_known;
+        flow.sni = memory.sni;
+        if (memory.udp) flow.kind = LiveFlowKind::UdpOrQuic;
+        else if (!memory.bytes_known) flow.kind = LiveFlowKind::Unreadable;
+        else flow.kind = LiveFlowKind::TcpMeasured;
+        return flow;
+    }
+    void EmitLiveClose(LiveProc& proc, const std::string& path, const LiveClose& closed, const std::string& previous) {
+        const auto key = path.empty() ? std::string("*") : path;
+        const auto rank = VerdictRank(closed.verdict);
+        auto& prior = proc.emitted_rank[key];
+        auto& prior_outcome = proc.emitted_outcome[key];
+        // Same-rank updates still matter: a file can be open before the send
+        // starts, and the first close is then "no upload" until the flow appears.
+        if (rank < prior) return;
+        if (rank == prior && prior_outcome == closed.transfer_outcome) return;
+        if (rank == prior && prior_outcome.find("loopback_not_off_host") != std::string::npos &&
+            closed.transfer_outcome.find("loopback_not_off_host") == std::string::npos) return;
+        EvidenceRecord record;
+        record.type = "sensitive_access_closed";
+        record.actor_process = proc.actor;
+        record.target_resource = path;
+        record.destination = closed.destination;
+        record.transfer_outcome = closed.transfer_outcome;
+        record.upload_verdict = UploadVerdictCode(closed.verdict);
+        record.evidence_basis = closed.match_basis;
+        record.detail = closed.detail;
+        record.attribution = "live_agent_flow_correlation";
+        record.risk_level = closed.verdict == UploadVerdict::Uploaded || closed.verdict == UploadVerdict::Attempted
+            ? RiskLevel::High : RiskLevel::Low;
+        if (closed.verdict == UploadVerdict::Uploaded || closed.verdict == UploadVerdict::Attempted)
+            record.content_sha256 = RegisteredHash(path);
+        auto noted = proc.files.find(path);
+        if (noted != proc.files.end() && !noted->second.event_id.empty()) record.related_event_ids.push_back(noted->second.event_id);
+        const auto peer_name = PeerName(closed.destination);
+        if (!peer_name.empty()) record.detail += ";peer_name=" + peer_name;
+        if (!previous.empty()) record.related_event_ids.push_back(previous);
+        const auto process = proc.actor.process.node.name.empty() ? proc.actor.process.node.executable : proc.actor.process.node.name;
+        record.summary = LiveVerdictSummary(closed, process, path);
+        record.event_id = NewUuid();
+        proc.emitted_event[key] = record.event_id;
+        prior = rank;
+        prior_outcome = closed.transfer_outcome;
+        std::cerr << "egress live-close " << record.upload_verdict << " basis=" << record.evidence_basis
+                  << " outcome=" << record.transfer_outcome << "\n";
+        Emit(std::move(record));
+    }
+    void FlushLive(bool finishing = false) {
+        if (!watch_live) return;
+        std::set<ProcessIdentity> roots_with_file;
+        for (auto& item : live_procs) {
+            auto& proc = item.second;
+            if (proc.samples < 1) continue;
+            if (proc.files.empty()) continue;
+            std::set<std::string> retained_seen;
+            MergeRetained(proc, retained_seen);
+            roots_with_file.insert(proc.root);
+            if (!proc.inspection_complete && proc.samples < 2 && !finishing) continue;
+            LiveAccessView shared;
+            shared.agent_visible = true;
+            shared.inspection_complete = proc.inspection_complete;
+            std::set<std::string> seen_flows;
+            for (const auto& other : live_procs) {
+                if (other.second.root != proc.root && other.first != proc.root) continue;
+                if (!other.second.inspection_complete) shared.inspection_complete = false;
+                for (const auto& flow : other.second.flows) {
+                    if (!seen_flows.insert(flow.first).second) continue;
+                    shared.flows.push_back(ToLiveFlow(flow.second));
+                }
+            }
+            for (const auto& file : proc.files) {
+                // The startup canary's exact_bytes match covers that launched
+                // process only. A later actor on the same file still closes.
+                if (ProxyCovers(file.first, proc.actor)) continue;
+                LiveAccessView view = shared;
+                view.file_open = true;
+                view.file_bytes = RegisteredSize(file.first);
+                view.content_lower_bound = RegisteredLower(file.first);
+                const auto tail = std::chrono::milliseconds(500);
+                view.process_exited = proc.exited;
+                view.window_settled = finishing || proc.exited ||
+                    (file.second.saw_close && MonoClock::now() - file.second.closed_at >= tail);
+                const auto closed = CloseLiveAccess(view);
+                if (closed.defer) continue;
+                const auto rank = VerdictRank(closed.verdict);
+                if (rank < 3 && proc.samples < 2 && !finishing && !proc.exited) continue;
+                EmitLiveClose(proc, file.first, closed, proc.emitted_event[file.first]);
+            }
+        }
+        if (tree_truncated && watched.size() >= 64 && socket_seen.insert("live_agent_scan_truncated").second) {
+            EvidenceRecord record;
+            record.type = "egress_channel_unseen";
+            record.upload_verdict = "not_visible";
+            record.evidence_basis = "observation_impossible";
+            record.transfer_outcome = "live_agent_scan_truncated";
+            record.detail = "more_than_64_agent_processes;remainder_not_judged;app_settings_not_modified";
+            record.summary = "看不到。桌面 Agent 进程超过了 64 个，多出来的没有逐个下结论。";
+            Emit(std::move(record));
+        }
+        for (const auto& root : watched) {
+            if (root.launched || roots_with_file.count(root.identity)) continue;
+            auto found = live_procs.find(root.identity);
+            if (found == live_procs.end() || found->second.samples < 2) continue;
+            if (live_roots_closed_without_file.count(root.identity)) continue;
+            LiveAccessView view;
+            view.agent_visible = true;
+            view.inspection_complete = found->second.inspection_complete;
+            view.file_open = false;
+            for (const auto& flow : found->second.flows) view.flows.push_back(ToLiveFlow(flow.second));
+            // A descendant that could not be inspected keeps the agent at 看不到.
+            for (const auto& item : live_procs) {
+                if (item.second.root == root.identity && !item.second.inspection_complete) view.inspection_complete = false;
+            }
+            const auto closed = CloseLiveAccess(view);
+            EmitLiveClose(found->second, "", closed, "");
+            live_roots_closed_without_file.insert(root.identity);
+        }
+    }
+    bool AnyProxyMatch(const std::string& path) const {
+        for (const auto& stored : observations)
+            if (stored.observation.kind == EgressObservation::Kind::HttpInspected && stored.matched_path == path &&
+                stored.observation.content_match)
+                return true;
+        return false;
+    }
+    bool ProxyCovers(const std::string& path, const ActorProcess& live) const {
+        const bool live_launched = LaunchedActor(live);
+        for (const auto& stored : observations) {
+            if (stored.observation.kind != EgressObservation::Kind::HttpInspected || stored.matched_path != path ||
+                !stored.observation.content_match || !stored.actor_identity)
+                continue;
+            if (ProxyBodyCoversLiveActor(*stored.actor_identity, stored.launched_tree, live.process.node.identity, live_launched))
+                return true;
+        }
+        return false;
+    }
+    void NoteFilesAndSockets(const ProcessNode& node, bool launched_tree, const ProcessIdentity& root) {
         auto actor = Describe(source, node);
         auto activity = source.Inspect(node, roots, true);
+        // libproc does not set identity_validated on this direct call. The
+        // lookup above already re-read the process; a missing descriptor list
+        // is the incompleteness signal.
+        activity.identity_validated = true;
         for (const auto& path : activity.sensitive_files) NoteAccess(actor, path);
+        if (!launched_tree) {
+            source.WatchFlows(node.identity.pid);
+            ObserveLive(node, actor, activity, root);
+            return;
+        }
         for (const auto& peer : activity.socket_peers) {
             const auto own = "127.0.0.1:" + std::to_string(proxy_port) + "/";
             if (peer.compare(0, own.size(), own) == 0) continue;
@@ -576,15 +973,32 @@ struct Session {
             record.upload_verdict = "not_visible";
             record.evidence_basis = "socket_peer_without_payload";
             record.summary = std::string("看不到。只看到了套接字对端 ") + peer + "，没有看到发送的字节。";
-            if (!launched) record.summary += "进程在采集开始前已经在运行。没有修改它的 MCP 或应用设置，用户态不能把已有连接改道到本地代理。";
             record.risk_level = RiskLevel::Medium;
             record.attribution = "libproc_socket_peer_in_launched_tree";
             observations.push_back(std::move(stored));
             Emit(std::move(record));
         }
     }
-    void SampleTree(pid_t root, const ProcessIdentity& identity) {
+    void SampleTree(pid_t root, const ProcessIdentity& identity, bool launched_tree) {
         if (root <= 0) return;
+        if (!launched_tree && !source.Lookup(root)) {
+            auto found = live_procs.find(identity);
+            if (found != live_procs.end() && found->second.known) {
+                found->second.exited = true;
+                for (auto& flow : found->second.flows) {
+                    if (!flow.second.established && !flow.second.loopback && flow.second.bytes_known)
+                        flow.second.failed = true;
+                }
+                for (auto& file : found->second.files) {
+                    file.second.open_now = false;
+                    if (!file.second.saw_close) {
+                        file.second.saw_close = true;
+                        file.second.closed_at = MonoClock::now();
+                    }
+                }
+            }
+            return;
+        }
         std::vector<pid_t> pending{root};
         std::set<pid_t> visited;
         size_t seen = 0;
@@ -595,39 +1009,87 @@ struct Session {
             auto node = source.Lookup(pid);
             if (!node) continue;
             if (pid == root && node->identity != identity) {
-                StoredObservation stored;
-                stored.observation.kind = EgressObservation::Kind::UninspectedSocket;
-                stored.observation.transfer_outcome = "root_identity_replaced";
-                stored.observation.destination = "";
-                if (socket_seen.insert("root_identity_replaced").second) observations.push_back(std::move(stored));
+                if (!launched_tree) {
+                    auto& proc = live_procs[identity];
+                    proc.known = true;
+                    proc.identity = identity;
+                    proc.root = identity;
+                    proc.inspection_complete = false;
+                    proc.samples = std::max(proc.samples, 2);
+                } else {
+                    StoredObservation stored;
+                    stored.observation.kind = EgressObservation::Kind::UninspectedSocket;
+                    stored.observation.transfer_outcome = "root_identity_replaced";
+                    stored.observation.destination = "";
+                    if (socket_seen.insert("root_identity_replaced").second) observations.push_back(std::move(stored));
+                }
                 return;
             }
             ++seen;
-            NoteFilesAndSockets(*node);
+            NoteFilesAndSockets(*node, launched_tree, identity);
             for (auto child : ChildPids(pid)) pending.push_back(child);
         }
-        if (!pending.empty()) tree_truncated = true;
+        if (!pending.empty()) {
+            tree_truncated = true;
+            if (launched_tree) launched_tree_truncated = true;
+            else {
+                auto& proc = live_procs[identity];
+                proc.known = true;
+                proc.identity = identity;
+                proc.root = identity;
+                proc.inspection_complete = false;
+                proc.samples = std::max(proc.samples, 2);
+            }
+        }
+    }
+    void AdoptHotPids() {
+        if (!watch_live) return;
+        for (const auto pid : source.TakeHotPids()) {
+            auto node = source.Lookup(pid);
+            if (!node || IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) continue;
+            auto activity = source.Inspect(*node, roots, false);
+            if (activity.sensitive_files.empty()) continue;
+            bool known = false;
+            for (const auto& root : watched) if (root.identity == node->identity) known = true;
+            if (known) continue;
+            if (watched.size() >= 64) { tree_truncated = true; break; }
+            auto actor = Describe(source, *node);
+            std::string label = node->name.empty() ? node->executable : node->name;
+            if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
+            watched.push_back(Root{node->identity, node->identity.pid, false});
+            std::cerr << "egress live " << node->identity.pid << " " << label << "\n";
+        }
     }
     void SampleWatched() {
+        AdoptHotPids();
         if (watch_live && MonoClock::now() >= next_discover) {
             next_discover = MonoClock::now() + std::chrono::milliseconds(200);
             try {
                 auto sample = source.Sample();
                 for (const auto& node : sample.processes) {
-                    auto reason = MatchAgent(node, {});
-                    if (reason.empty() || reason == "generic_runtime_candidate") continue;
+                    // Name lists do not decide who is watched. A registered file open does.
+                    if (IsCollectorProcess(node) || IsAppleSystemDaemon(node)) continue;
+                    auto activity = source.Inspect(node, roots, false);
+                    if (activity.sensitive_files.empty()) continue;
+                    auto actor = Describe(source, node);
+                    std::string label = node.name.empty() ? node.executable : node.name;
+                    if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
                     bool known = false;
+                    // Sample the process that holds the file, plus its descendants.
+                    // The owning bundle is stored on the actor. Sampling that ancestor
+                    // would walk an unrelated toolchain tree such as Xcode's make.
                     for (const auto& root : watched) if (root.identity == node.identity) known = true;
                     if (known) continue;
-                    if (watched.size() >= 8) { tree_truncated = true; break; }
-                    watched.push_back(Root{node.identity, node.identity.pid});
-                    std::cerr << "egress live " << node.identity.pid << " " << node.name << "\n";
+                    if (watched.size() >= 64) { tree_truncated = true; break; }
+                    watched.push_back(Root{node.identity, node.identity.pid, false});
+                    std::cerr << "egress live " << node.identity.pid << " " << label << "\n";
                 }
             } catch (const std::exception& error) {
                 std::cerr << "egress live scan failed: " << error.what() << "\n";
             }
         }
-        for (const auto& root : watched) SampleTree(root.pid, root.identity);
+        for (const auto& root : watched) SampleTree(root.pid, root.identity, root.launched);
+        FlushLive();
     }
     std::optional<ActorProcess> AttributeOne(uint16_t client_port, pid_t root, const ProcessIdentity& identity) {
         if (root <= 0) return std::nullopt;
@@ -681,39 +1143,24 @@ struct Session {
         return std::nullopt;
     }
     void CloseAccesses() {
-        if (tree_truncated && socket_seen.insert("process_tree_scan_truncated").second) {
+        if (launched_tree_truncated && socket_seen.insert("process_tree_scan_truncated").second) {
             StoredObservation stored;
             stored.observation.kind = EgressObservation::Kind::UninspectedSocket;
             stored.observation.transfer_outcome = "process_tree_scan_truncated";
             observations.push_back(std::move(stored));
         }
+        FlushLive(true);
         bool inspected_http = false, unseen = false;
         for (const auto& stored : observations) {
             if (stored.observation.kind == EgressObservation::Kind::HttpInspected) inspected_http = true;
             else unseen = true;
         }
-        // A tree we did not launch is not "watched plaintext egress" just because
-        // we can see its process. Redirecting an already-running agent would mean
-        // changing its settings or installing a system facility, which we do not do.
-        if (!launched && !inspected_http && !unseen && socket_seen.insert("live_agent_tree_not_proxied").second) {
-            StoredObservation stored;
-            stored.observation.kind = EgressObservation::Kind::UninspectedSocket;
-            stored.observation.transfer_outcome = "live_agent_tree_not_proxied;already_running;app_settings_not_modified;user_space_cannot_redirect";
-            stored.event_id = NewUuid();
-            EvidenceRecord record;
-            record.event_id = stored.event_id;
-            record.type = "egress_channel_unseen";
-            record.transfer_outcome = stored.observation.transfer_outcome;
-            record.upload_verdict = "not_visible";
-            record.evidence_basis = "live_agent_tree_not_attached";
-            record.summary = "看不到。这个 Agent 在采集开始前已经在运行。没有修改它的 MCP 或应用设置，用户态也不能把已有进程的连接改道到本地代理。";
-            observations.push_back(std::move(stored));
-            Emit(std::move(record));
-            unseen = true;
-        }
         const bool egress_watched = launched || (inspected_http && !unseen);
         for (const auto& pair : accesses) {
             const auto& access = pair.second;
+            // Already-running agents are closed from TCP send counters in FlushLive.
+            // A body that actually entered this proxy is still an exact-bytes close.
+            if (!LaunchedActor(access.actor) && !AnyProxyMatch(access.path)) continue;
             std::vector<EgressObservation> view;
             std::vector<std::string> related{access.event_id};
             std::string match_kind, digest;
@@ -739,7 +1186,7 @@ struct Session {
                 ? "egress_proxy_watched_http_no_match" : "egress_channel_not_visible";
             if (!match_kind.empty()) record.detail = "match=" + match_kind + ";raw_bytes_not_stored";
             else record.detail = "no_registered_content_in_inspected_body_or_channel_not_visible";
-            if (!launched) record.detail += ";already_running_not_redirected;app_settings_not_modified";
+            if (!LaunchedActor(access.actor)) record.detail += ";live_agent_connected_to_proxy;app_settings_not_modified";
             if (closed.destination.rfind("https://", 0) == 0) record.detail += ";tls_intercept";
             if (closed.verdict == UploadVerdict::Uploaded || closed.verdict == UploadVerdict::Attempted)
                 record.content_sha256 = digest;
@@ -764,6 +1211,8 @@ void RecordTransfer(Session& session, const ActorProcess& actor, HttpRequest& re
     stored.observation.transfer_outcome = outcome;
     stored.observation.transfer_succeeded = success;
     stored.event_id = NewUuid();
+    stored.actor_identity = actor.process.node.identity;
+    stored.launched_tree = session.LaunchedActor(actor);
     if (fingerprint) {
         stored.matched_path = fingerprint->path;
         stored.match_kind = fingerprint->kind;
@@ -951,7 +1400,7 @@ void HandleClient(UniqueFd client, Session& session) {
         try { Respond(client->value, 403, "Peer Unattributed", "peer not in launched tree\n"); } catch (...) {}
         return;
     }
-    session.NoteFilesAndSockets(actor->process.node);
+    session.NoteFilesAndSockets(actor->process.node, session.LaunchedActor(*actor), actor->process.node.identity);
     if (request.method == "CONNECT") {
         ++session.opaque_tunnels;
         auto target = ParseHostPort(request.target);
@@ -1019,6 +1468,8 @@ void HandleClient(UniqueFd client, Session& session) {
     stored.observation.transfer_outcome = outcome;
     stored.observation.transfer_succeeded = success;
     stored.event_id = NewUuid();
+    stored.actor_identity = actor->process.node.identity;
+    stored.launched_tree = session.LaunchedActor(*actor);
     if (fingerprint) {
         stored.matched_path = fingerprint->path;
         stored.match_kind = fingerprint->kind;
@@ -1141,6 +1592,7 @@ int main(int argc, char** argv) {
             version.path = path;
             version.bytes = ReadFile(path);
             version.sha256 = Sha256(version.bytes);
+            version.lower_bound = ContentLowerBound(version.bytes);
             session.roots.push_back(path);
             session.versions.push_back(std::move(version));
         }
@@ -1174,7 +1626,7 @@ int main(int argc, char** argv) {
         ready.evidence_basis = ready_basis;
         ready.summary = session.tls
             ? "本地出口代理已监听。可选的 TLS 检查使用调用方提供的 CA，不写入登录钥匙串，不修改 MCP 配置。证书固定、QUIC 和直连仍然看不到。"
-            : "本地出口代理已监听。已经在运行的 Agent 如果没有自己连到这个代理，只能看到套接字，结论是看不到。不修改 MCP 配置。";
+            : "本地出口代理已监听。已经在运行的 Agent 不改道；能看全描述符和 TCP 发送字节数时按流量关联下结论，看不到只用于确实无法观察的情况。不修改 MCP 配置。";
         ready.metrics["listen_port"] = session.proxy_port;
         session.Emit(std::move(ready));
         std::cout << "egress_port=" << session.proxy_port << "\n" << std::flush;
@@ -1201,7 +1653,7 @@ int main(int argc, char** argv) {
                 if (!root) std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
             Require(static_cast<bool>(root), "launched process was not visible");
-            session.watched.push_back(Session::Root{root->identity, child.pid});
+            session.watched.push_back(Session::Root{root->identity, child.pid, true});
             session.launched = true;
             std::cerr << "egress child " << child.pid << "\n";
         }
@@ -1230,8 +1682,8 @@ int main(int argc, char** argv) {
             }
             store.Check();
         }
-        if (child.pid > 0) {
-            for (const auto& root : session.watched) if (root.pid == child.pid) session.SampleTree(child.pid, root.identity);
+            if (child.pid > 0) {
+            for (const auto& root : session.watched) if (root.pid == child.pid) session.SampleTree(child.pid, root.identity, root.launched);
         }
         if (child.pid > 0) child.Stop();
         session.CloseAccesses();

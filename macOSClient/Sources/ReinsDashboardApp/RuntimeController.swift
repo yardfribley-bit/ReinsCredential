@@ -10,12 +10,12 @@ enum RuntimeUIState: String {
     case stopped, starting, running, degraded, approvalRequired, failed
     var title: String {
         switch self {
-        case .stopped: return "监控已停止"
-        case .starting: return "正在启动采集"
-        case .running: return "监控中"
-        case .degraded: return "监控运行中 · 覆盖受限"
-        case .approvalRequired: return "需要允许后台运行"
-        case .failed: return "采集服务异常"
+        case .stopped: return L10n.tr("state.stopped")
+        case .starting: return L10n.tr("state.starting")
+        case .running: return L10n.tr("state.running")
+        case .degraded: return L10n.tr("state.degraded")
+        case .approvalRequired: return L10n.tr("state.approval")
+        case .failed: return L10n.tr("state.failed")
         }
     }
 }
@@ -66,7 +66,7 @@ private final class LocalBackgroundService: BackgroundServiceManaging {
 @MainActor
 final class RuntimeController: ObservableObject {
     @Published private(set) var state: RuntimeUIState = .stopped
-    @Published private(set) var statusMessage = "首次启动会注册本用户的后台采集服务。"
+    @Published private(set) var statusMessage = L10n.tr("status.firstRun")
     @Published private(set) var records: [EvidenceRecord] = []
     @Published private(set) var isBusy = false
     @Published var errorMessage: String?
@@ -132,20 +132,20 @@ final class RuntimeController: ObservableObject {
             do {
                 let helper = bundleURL.appendingPathComponent("Contents/MacOS/ReinsRuntime")
                 guard !requiresBundle || (bundleURL.pathExtension == "app" && FileManager.default.isExecutableFile(atPath: helper.path)) else {
-                    throw RuntimeFileError.invalidConfiguration("请运行完整安装的 ReinsCredential.app；开发命令行界面未包含后台服务。")
+                    throw RuntimeFileError.invalidConfiguration(L10n.tr("dev.noHelper"))
                 }
                 let paths = paths
                 watchedPaths = try await Task.detached { try Self.prepareConfiguration(paths).sensitivePaths }.value
                 defaults.set(false, forKey: "monitoringDisabledByUser")
                 state = .starting
                 awaitingStatusSince = Date()
-                statusMessage = "正在启动后台采集，等待独立健康记录。"
+                statusMessage = L10n.tr("status.startingWait")
                 try await service.register()
                 await refreshNow()
             } catch {
                 if service.registration == .requiresApproval {
                     state = .approvalRequired
-                    statusMessage = "请在系统设置的登录项与扩展中允许 ReinsCredential 后台运行。"
+                    statusMessage = L10n.tr("status.needApproval")
                 } else { fail(error) }
             }
         }
@@ -160,7 +160,7 @@ final class RuntimeController: ObservableObject {
                 try await service.unregister()
                 defaults.set(true, forKey: "monitoringDisabledByUser")
                 state = .stopped
-                statusMessage = "后台服务已停用；已有证据保留在本机。"
+                statusMessage = L10n.tr("status.stoppedKeep")
             } catch { fail(error) }
         }
     }
@@ -208,7 +208,7 @@ final class RuntimeController: ObservableObject {
                     try config.save(to: paths.configurationURL)
                     return try config.validated().sensitivePaths
                 }.value
-                statusMessage = "目录配置已保存；后台采集将在数秒内应用更新，重启期间存在采样间隙。"
+                statusMessage = L10n.tr("status.configSaved")
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -230,11 +230,11 @@ final class RuntimeController: ObservableObject {
             switch service.registration {
             case .requiresApproval:
                 state = .approvalRequired
-                statusMessage = "系统尚未允许后台运行，当前没有完整采集覆盖。"
+                statusMessage = L10n.tr("status.notAllowed")
                 return
             case .absent, .missing:
                 state = .stopped
-                statusMessage = "后台采集未启用。点击启动监控后会自动显示本机风险。"
+                statusMessage = L10n.tr("status.notEnabled")
                 return
             case .enabled: break
             }
@@ -243,12 +243,12 @@ final class RuntimeController: ObservableObject {
             awaitingStatusSince = nil
             guard status.isFresh(at: now) else {
                 state = .failed
-                statusMessage = "后台服务状态已过期，不能确认采集器仍在工作。"
+                statusMessage = L10n.tr("status.stale")
                 return
             }
             if status.state == .failed || status.state == .stopped {
                 state = .failed
-                statusMessage = status.message ?? "采集器已停止。"
+                statusMessage = status.message ?? L10n.tr("status.collectorStopped")
                 return
             }
             guard status.state == .running,
@@ -258,7 +258,7 @@ final class RuntimeController: ObservableObject {
                   now.timeIntervalSince(health.timestamp) < 15 else {
                 let expired = now.timeIntervalSince(status.monitorStartedAt ?? .distantPast) > 15
                 state = status.state == .backoff ? .degraded : (expired ? .failed : .starting)
-                statusMessage = status.message ?? (expired ? "采集器未产生及时的健康记录，检测可能已中断。" : "等待采集器健康记录；尚不能确认检测已就绪。")
+                statusMessage = status.message ?? (expired ? L10n.tr("status.healthInterrupted") : L10n.tr("status.waitingHealth"))
                 return
             }
             let partial = health.metrics["fd_scans_partial", default: 0]
@@ -268,16 +268,16 @@ final class RuntimeController: ObservableObject {
             state = loss || partial > 0 || validation > 0 || unavailable > 0 ? .degraded : .running
             let visible = health.metrics["visible", default: 0]
             let candidates = health.metrics["known_candidates", default: 0]
-            statusMessage = "可见进程 \(visible)，Agent 候选 \(candidates)。" +
-                (loss ? "存在采集丢失或解析异常。" : "") +
-                ((partial > 0 || validation > 0 || unavailable > 0) ? "部分进程或描述符不可见。" : "") +
-                (batch.hasBacklog ? "正在追赶日志。" : "") + "用户态采样可能漏过短暂活动。"
+            statusMessage = L10n.format("status.visible", visible, candidates) +
+                (loss ? L10n.tr("status.loss") : "") +
+                ((partial > 0 || validation > 0 || unavailable > 0) ? L10n.tr("status.partial") : "") +
+                (batch.hasBacklog ? L10n.tr("status.catchup") : "") + L10n.tr("status.samplingLimit")
         } catch {
             if service.registration == .enabled {
                 // A missing or invalid status must not look like endless startup.
                 if awaitingStatusSince == nil { awaitingStatusSince = now }
                 state = now.timeIntervalSince(awaitingStatusSince!) > 15 ? .failed : .starting
-                statusMessage = "无法确认后台状态：\(error.localizedDescription)"
+                statusMessage = L10n.format("status.unknown", error.localizedDescription)
             } else { state = .stopped }
         }
     }
@@ -287,7 +287,7 @@ final class RuntimeController: ObservableObject {
         selfTesting = true
         selfTestPassed = nil
         selfTestResource = ""
-        selfTestStatus = "正在创建合成测试文件与本机连接…"
+        selfTestStatus = L10n.tr("selfTest.running")
         Task {
             defer { selfTesting = false }
             var file: URL?
@@ -320,9 +320,8 @@ final class RuntimeController: ObservableObject {
                 if probe.isRunning { probe.terminate() }
                 selfTestPassed = found
                 if found { selfTestResource = target.path }
-                selfTestStatus = found ? "自检通过：合成文件会出现在证据链里。这是描述符和本机连接同时出现，不是上传。未读取真实凭据，未向外网发送。" :
-                    "自检未通过：采集器未在时限内发现完整关联，请检查后台权限与覆盖状态。"
-            } catch { selfTestPassed = false; selfTestStatus = "自检失败：\(error.localizedDescription)" }
+                selfTestStatus = found ? L10n.tr("selfTest.pass") : L10n.tr("selfTest.fail")
+            } catch { selfTestPassed = false; selfTestStatus = L10n.format("selfTest.error", error.localizedDescription) }
             if let file { try? FileManager.default.removeItem(at: file) }
         }
     }
@@ -340,8 +339,8 @@ final class RuntimeController: ObservableObject {
               let event = incoming.last(where: { $0.sourceType == "sensitive_network_cooccurrence" && now.timeIntervalSince($0.timestamp) < 10 }) else { return }
         lastNotification = now
         let content = UNMutableNotificationContent()
-        content.title = "发现敏感文件与网络连接共现"
-        content.body = "打开 ReinsCredential 查看进程链与目的地。这是一条风险线索，尚未证明内容上传。"
+        content.title = L10n.tr("notification.title")
+        content.body = L10n.tr("notification.body")
         content.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: event.id.uuidString, content: content, trigger: nil))
     }

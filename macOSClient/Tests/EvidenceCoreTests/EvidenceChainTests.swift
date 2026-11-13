@@ -149,6 +149,97 @@ final class EvidenceChainTests: XCTestCase {
         XCTAssertEqual(chain.verdictLabel, "没有出口结论")
     }
 
+    func testIncompleteScanDoesNotHideAMeasuredLoopbackClose() throws {
+        let loopback = event(id: 41, type: "sensitive_access_closed", path: "/synthetic/demo/loopback.env",
+                             tree: codexTree, agent: "Codex", bundle: "Codex.app", basis: "live_agent_observed",
+                             destination: "127.0.0.1:9",
+                             outcome: "live_agent_observed_loopback_not_off_host;tx_delta=80;file_bytes=44;slack=65536",
+                             verdict: "not_found", complete: true, status: "observed_chain_to_launchd",
+                             detail: "agent_seen;loopback_send_did_not_leave_host")
+        let gap = event(id: 42, type: "sensitive_access_closed", path: "/synthetic/demo/loopback.env",
+                        tree: codexTree, agent: "Codex", bundle: "Codex.app", basis: "observation_impossible",
+                        outcome: "descriptors_or_flows_incomplete", verdict: "not_visible",
+                        complete: true, status: "observed_chain_to_launchd",
+                        detail: "inspection_incomplete;not_a_clean_bill",
+                        at: loopback.timestamp.addingTimeInterval(1))
+        let chains = EvidenceChainBuilder.chains(from: [loopback, gap])
+        let chain = try XCTUnwrap(chains.first { $0.filePath == "/synthetic/demo/loopback.env" })
+        XCTAssertEqual(chains.filter { $0.filePath == "/synthetic/demo/loopback.env" }.count, 1)
+        XCTAssertEqual(chain.verdict, .notFound)
+        XCTAssertEqual(chain.verdictLabel, "未发现")
+        XCTAssertTrue(chain.transferOutcome.contains("loopback_not_off_host"))
+        XCTAssertNotEqual(chain.verdict, .notVisible)
+    }
+
+    func testLiveAgentFlowChainsKeepTheFourVerdicts() throws {
+        let open = event(id: 31, type: "sensitive_fd_observed", path: "/synthetic/demo/flow.env",
+                         tree: codexTree, agent: "Codex", bundle: "Codex.app", basis: "fd_observed",
+                         complete: true, status: "observed_chain_to_launchd",
+                         detail: "descriptor_observed;bytes_read_unproven;not_an_upload")
+        let uploaded = event(id: 32, type: "sensitive_access_closed", path: "/synthetic/demo/flow.env",
+                             tree: codexTree, agent: "Codex", bundle: "Codex.app", basis: "flow_txbytes",
+                             destination: "203.0.113.10:443",
+                             outcome: "flow_txbytes;left_host;tx_delta=48;file_bytes=48;slack=65536",
+                             verdict: "uploaded", hash: hash("ab"), complete: true,
+                             status: "observed_chain_to_launchd",
+                             detail: "match=flow_txbytes;plaintext_not_recovered;no_ca;no_system_proxy",
+                             related: [open.id])
+        let earlier = event(id: 33, type: "sensitive_access_closed", path: "/synthetic/demo/flow.env",
+                            tree: codexTree, agent: "Codex", bundle: "Codex.app", basis: "live_agent_observed",
+                            outcome: "live_agent_observed_no_upload", verdict: "not_found",
+                            complete: true, status: "observed_chain_to_launchd",
+                            detail: "agent_seen;file_open_observed;no_offhost_upload",
+                            at: open.timestamp.addingTimeInterval(-1))
+        let quiet = event(id: 34, type: "sensitive_access_closed", path: "/synthetic/demo/quiet.env",
+                          tree: cursorTree, agent: "Cursor", bundle: "Cursor.app", basis: "live_agent_observed",
+                          outcome: "live_agent_observed_no_upload", verdict: "not_found",
+                          complete: true, status: "observed_chain_to_launchd",
+                          detail: "agent_seen;file_open_observed;no_offhost_upload")
+        let attempt = event(id: 35, type: "sensitive_access_closed", path: "/synthetic/demo/attempt.env",
+                            tree: cursorTree, agent: "Cursor", bundle: "Cursor.app", basis: "flow_attempt",
+                            destination: "203.0.113.10:443",
+                            outcome: "flow_attempt;connect_not_completed;tx_delta=0;file_bytes=48",
+                            verdict: "attempted", complete: true, status: "observed_chain_to_launchd",
+                            detail: "match=flow_attempt;file_open_observed")
+        let blocked = event(id: 36, type: "sensitive_access_closed", path: "/synthetic/demo/blocked.env",
+                            tree: workbuddyTree, agent: "WorkBuddy", bundle: "WorkBuddy.app",
+                            basis: "observation_impossible",
+                            outcome: "descriptors_or_flows_incomplete", verdict: "not_visible",
+                            complete: true, status: "observed_chain_to_launchd",
+                            detail: "inspection_incomplete;not_a_clean_bill")
+        let chains = EvidenceChainBuilder.chains(from: [earlier, open, uploaded, quiet, attempt, blocked])
+        let flow = try XCTUnwrap(chains.first { $0.filePath == "/synthetic/demo/flow.env" })
+        XCTAssertEqual(chains.filter { $0.filePath == "/synthetic/demo/flow.env" }.count, 1)
+        XCTAssertEqual(flow.verdict, .uploaded)
+        XCTAssertEqual(flow.verdictLabel, "已上传")
+        XCTAssertEqual(flow.matchKind, "flow_txbytes")
+        XCTAssertEqual(flow.destination, "203.0.113.10:443")
+        XCTAssertEqual(flow.owningAgentName, "Codex")
+        XCTAssertTrue(flow.openObserved)
+        XCTAssertTrue(flow.memberIDs.contains(earlier.id))
+        XCTAssertTrue(flow.link(.verdict)?.note.contains("流量关联") == true)
+        XCTAssertNotEqual(flow.verdict, .notFound)
+        let noUpload = try XCTUnwrap(chains.first { $0.filePath == "/synthetic/demo/quiet.env" })
+        XCTAssertEqual(noUpload.verdict, .notFound)
+        XCTAssertEqual(noUpload.verdictLabel, "未发现")
+        XCTAssertNotEqual(noUpload.verdict, .notVisible)
+        XCTAssertTrue(noUpload.link(.verdict)?.note.contains("不是看不到") == true)
+        let failed = try XCTUnwrap(chains.first { $0.filePath == "/synthetic/demo/attempt.env" })
+        XCTAssertEqual(failed.verdict, .attempted)
+        XCTAssertEqual(failed.verdictLabel, "已尝试未成功")
+        XCTAssertEqual(failed.matchKind, "flow_attempt")
+        let unseen = try XCTUnwrap(chains.first { $0.filePath == "/synthetic/demo/blocked.env" })
+        XCTAssertEqual(unseen.verdict, .notVisible)
+        XCTAssertEqual(unseen.verdictLabel, "看不到")
+        XCTAssertNotEqual(unseen.verdict, .notFound)
+        let markdown = EvidenceChainExport.markdown([flow, noUpload, failed, unseen])
+        XCTAssertTrue(markdown.contains("出口结论：已上传"))
+        XCTAssertTrue(markdown.contains("出口结论：未发现"))
+        XCTAssertTrue(markdown.contains("出口结论：已尝试未成功"))
+        XCTAssertTrue(markdown.contains("出口结论：看不到"))
+        XCTAssertFalse(markdown.contains("SYNTHETIC_EGRESS_SECRET"))
+    }
+
     func testHiddenChannelsStayHiddenAcrossTheNewLabels() throws {
         let running = hidden(id: 11, basis: "live_agent_tree_not_attached",
                              outcome: "live_agent_tree_not_proxied;already_running;app_settings_not_modified;user_space_cannot_redirect",

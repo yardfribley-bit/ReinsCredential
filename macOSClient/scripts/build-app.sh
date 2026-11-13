@@ -19,9 +19,27 @@ mkdir -p "$client_dir/dist"
 staging="$(mktemp -d "$client_dir/dist/.build-app.XXXXXX")"
 trap 'rm -rf "$staging"' EXIT
 app_dir="$staging/ReinsCredential.app"
-mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Helpers" "$app_dir/Contents/Library/LaunchAgents"
+mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Helpers" "$app_dir/Contents/Resources" "$app_dir/Contents/Library/LaunchAgents"
+"$client_dir/scripts/make-icon.sh" "$app_dir/Contents/Resources/ReinsCredential.icns"
+[[ -s "$app_dir/Contents/Resources/ReinsCredential.icns" ]] || { echo "app icon is missing" >&2; exit 1; }
 cp "$bin_dir/ReinsDashboard" "$app_dir/Contents/MacOS/ReinsDashboard"
 cp "$bin_dir/ReinsRuntime" "$app_dir/Contents/MacOS/ReinsRuntime"
+resource_bundle="$bin_dir/ReinsCredentialDashboard_ReinsDashboardApp.bundle"
+[[ -d "$resource_bundle/en.lproj" && -d "$resource_bundle/zh-Hans.lproj" ]] || {
+  echo "dashboard localization bundle is missing: $resource_bundle" >&2
+  exit 1
+}
+cp -R "$resource_bundle" "$app_dir/Contents/Resources/"
+installed_bundle="$app_dir/Contents/Resources/ReinsCredentialDashboard_ReinsDashboardApp.bundle"
+cp "$client_dir/Sources/ReinsDashboardApp/Resources/ReinsCredential-Logo-rounded-512.png" "$installed_bundle/"
+[[ -s "$app_dir/Contents/Resources/ReinsCredentialDashboard_ReinsDashboardApp.bundle/en.lproj/Localizable.strings" ]] || {
+  echo "English catalog was not copied into the app" >&2
+  exit 1
+}
+[[ -s "$app_dir/Contents/Resources/ReinsCredentialDashboard_ReinsDashboardApp.bundle/zh-Hans.lproj/Localizable.strings" ]] || {
+  echo "Chinese catalog was not copied into the app" >&2
+  exit 1
+}
 core=(ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp EgressVerdict.cpp)
 monitor_sources=(main.cpp "${core[@]}")
 egress_sources=(EgressProxy.cpp TlsIntercept.cpp "${core[@]}")
@@ -40,6 +58,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>io.github.yardfribley-bit.ReinsCredential</string>
   <key>CFBundleExecutable</key><string>ReinsDashboard</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>ReinsCredential</string>
+  <key>CFBundleIconName</key><string>ReinsCredential</string>
   <key>CFBundleShortVersionString</key><string>0.2.0</string>
   <key>CFBundleVersion</key><string>5</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
@@ -47,7 +67,12 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>
 PLIST
-if [[ "${REINS_SIGNING_IDENTITY:--}" == - ]]; then
+# Empty or "-" is an ad-hoc local signature. A Developer ID string is used
+# only when the caller supplies REINS_SIGNING_IDENTITY. Missing credentials
+# never fail this script.
+signing_identity="${REINS_SIGNING_IDENTITY:--}"
+if [[ -z "$signing_identity" || "$signing_identity" == "-" ]]; then
+  signing_identity="-"
   /usr/libexec/PlistBuddy -c 'Add :ReinsLocalLaunchAgent bool true' "$app_dir/Contents/Info.plist"
 fi
 cat > "$app_dir/Contents/Library/LaunchAgents/io.github.yardfribley-bit.ReinsCredential.runtime.plist" <<'PLIST'
@@ -63,11 +88,10 @@ cat > "$app_dir/Contents/Library/LaunchAgents/io.github.yardfribley-bit.ReinsCre
   <key>ProcessType</key><string>Background</string>
 </dict></plist>
 PLIST
-identity="${REINS_SIGNING_IDENTITY:--}"
-/usr/bin/codesign --force --sign "$identity" "$app_dir/Contents/Helpers/agent-monitor"
-/usr/bin/codesign --force --sign "$identity" "$app_dir/Contents/Helpers/agent-egress"
-/usr/bin/codesign --force --sign "$identity" "$app_dir/Contents/MacOS/ReinsRuntime"
-/usr/bin/codesign --force --sign "$identity" "$app_dir"
+/usr/bin/codesign --force --sign "$signing_identity" "$app_dir/Contents/Helpers/agent-monitor"
+/usr/bin/codesign --force --sign "$signing_identity" "$app_dir/Contents/Helpers/agent-egress"
+/usr/bin/codesign --force --sign "$signing_identity" "$app_dir/Contents/MacOS/ReinsRuntime"
+/usr/bin/codesign --force --sign "$signing_identity" "$app_dir"
 /usr/bin/codesign --verify --deep --strict "$app_dir"
 rm -rf "$client_dir/dist/ReinsCredential.app"
 mv "$app_dir" "$client_dir/dist/ReinsCredential.app"

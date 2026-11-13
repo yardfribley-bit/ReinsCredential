@@ -4,9 +4,11 @@ import Foundation
 // Read finished collector JSONL and write the same evidence-chain JSON the
 // dashboard exports. This process does not start a collector or open a socket.
 
-let arguments = Array(CommandLine.arguments.dropFirst())
+var arguments = Array(CommandLine.arguments.dropFirst())
+let markdown = arguments.first == "--markdown"
+if markdown { arguments.removeFirst() }
 if arguments.isEmpty || arguments.contains("-h") || arguments.contains("--help") {
-    FileHandle.standardError.write(Data("usage: chain-export LOG.jsonl [LOG.jsonl ...]\n".utf8))
+    FileHandle.standardError.write(Data("usage: chain-export [--markdown] LOG.jsonl [LOG.jsonl ...]\n".utf8))
     exit(2)
 }
 
@@ -24,7 +26,8 @@ do {
     if rejected > 0 {
         FileHandle.standardError.write(Data("chain-export rejected \(rejected) lines\n".utf8))
     }
-    let text = EvidenceChainExport.json(EvidenceChainBuilder.chains(from: records))
+    let chains = EvidenceChainBuilder.chains(from: records)
+    let text = markdown ? EvidenceChainExport.markdown(chains) : EvidenceChainExport.json(chains)
     print(text)
 } catch {
     let message = "chain-export failed: \(error)\n"

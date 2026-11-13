@@ -51,11 +51,11 @@ CASES = [
         "action": "direct",
         "secret": "ssh",
         "launch": "already",
-        "verdict": "not_visible",
+        "verdict": "not_found",
         "agent": "Codex",
         "require_open": True,
-        "require_already_running": True,
-        "require_loopback": False,
+        "require_already_running": False,
+        "require_loopback": True,
     },
     {
         "id": "cursor_cli_upload",
@@ -77,11 +77,11 @@ CASES = [
         "action": "direct",
         "secret": "env",
         "launch": "manual",
-        "verdict": "not_visible",
+        "verdict": "not_found",
         "agent": "WorkBuddy",
         "require_open": True,
-        "require_already_running": True,
-        "require_loopback": False,
+        "require_already_running": False,
+        "require_loopback": True,
     },
     {
         "id": "negative_read_no_send",
@@ -646,7 +646,7 @@ def run_manual(case, tools):
             "WorkBuddy manual case. Do not change WorkBuddy settings.\n"
             "In the already-running WorkBuddy session, run only:\n  "
             + " ".join(command)
-            + "\nExpected verdict: 看不到. Press Enter here after it exits.\n"
+            + "\nExpected verdict: 未发现 (loopback send did not leave the host). Press Enter here after it exits.\n"
         )
         sys.stdin.readline()
         stop_process(egress, kill_group=True)
@@ -665,8 +665,8 @@ def run_manual(case, tools):
             "sha256": "",
             "sink_port": sink.port,
             "require_open": case["require_open"],
-            "require_already_running": True,
-            "require_loopback": False,
+            "require_already_running": case["require_already_running"],
+            "require_loopback": case["require_loopback"],
         }, markers)
         return result_row(case, "passed", "", observed, secret["sha256"] in sink.hashes, executed=True)
     except ChainCheckError as error:
@@ -686,8 +686,9 @@ def manual_instructions():
         "The command prints a temp directory and a 127.0.0.1 sink. In the already-running\n"
         "WorkBuddy session, run only the printed python3 command. It reads one fake file\n"
         "in that temp directory and POSTs it straight to the sink, not through the proxy.\n"
-        "Expected chain: owning agent WorkBuddy, verdict 看不到, with the already-running\n"
-        "reason. 未发现 would be a failure. Do not point WorkBuddy at ~/.ssh or ~/.aws."
+        "Expected chain: owning agent WorkBuddy, verdict 未发现, because the POST stays on\n"
+        "127.0.0.1. 看不到 is only when that process cannot be inspected. Do not point\n"
+        "WorkBuddy at ~/.ssh or ~/.aws."
     )
 
 

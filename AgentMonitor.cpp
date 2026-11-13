@@ -36,9 +36,9 @@ std::optional<std::string> BundleComponent(const std::string& path) {
     start = start == std::string::npos ? 0 : start + 1;
     return path.substr(start, pos + 4 - start);
 }
-bool IsCollectorImage(const ProcessNode& node) {
+bool CollectorPath(const ProcessNode& node) {
     const auto base = BaseName(node.executable);
-    if (base == "agent-monitor" || base == "ReinsRuntime" || base == "ReinsDashboard") return true;
+    if (base == "agent-monitor" || base == "agent-egress" || base == "agent-gateway" || base == "ReinsRuntime" || base == "ReinsDashboard") return true;
     return Lower(node.executable).find("/reinscredential.app/") != std::string::npos;
 }
 bool IsDirectAgentMatch(const std::string& reason) {
@@ -58,6 +58,8 @@ std::string FriendlyName(const ProcessNode& node, const std::string& reason) {
     if (base == "roo") return "Roo";
     if (base == "windsurf") return "Windsurf";
     if (base == "trae") return "Trae";
+    if (base == "kiro") return "Kiro";
+    if (base == "grok") return "Grok";
     auto from_bundle = [](const std::string& bundle) {
         auto stem = bundle.substr(0, bundle.size() - 4);
         const auto folded = Lower(stem);
@@ -68,6 +70,8 @@ std::string FriendlyName(const ProcessNode& node, const std::string& reason) {
         if (folded == "codex") return std::string("Codex");
         if (folded == "windsurf") return std::string("Windsurf");
         if (folded == "trae") return std::string("Trae");
+        if (folded == "kiro") return std::string("Kiro");
+        if (folded == "grok" || folded == "grok bot") return std::string("Grok");
         return stem;
     };
     if (auto bundle = BundleComponent(node.executable)) return from_bundle(*bundle);
@@ -111,6 +115,137 @@ std::pair<std::string, std::string> SubjectAndVia(const ActorProcess& actor, con
     return {name, via};
 }
 } // namespace
+bool IsCollectorProcess(const ProcessNode& node) noexcept { return CollectorPath(node); }
+bool IsAppleSystemDaemon(const ProcessNode& node) noexcept {
+    if (node.identity.pid == 1 || node.ppid == 0) return true;
+    const auto path = Lower(node.executable);
+    // Indexing and maintenance daemons open user files without acting for the user.
+    return path.rfind("/system/", 0) == 0 || path.rfind("/usr/libexec/", 0) == 0 || path.rfind("/usr/sbin/", 0) == 0;
+}
+std::optional<std::string> OutermostAppBundle(const std::string& executable) {
+    const auto lower = Lower(executable);
+    auto pos = lower.find(".app/");
+    if (pos == std::string::npos && lower.size() >= 4 && lower.compare(lower.size() - 4, 4, ".app") == 0)
+        pos = lower.size() - 4;
+    if (pos == std::string::npos || pos == 0) return std::nullopt;
+    auto start = executable.rfind('/', pos - 1);
+    start = start == std::string::npos ? 0 : start + 1;
+    if (start >= pos) return std::nullopt;
+    return executable.substr(start, pos + 4 - start);
+}
+std::string DisplayBundleName(const std::string& bundle) {
+    if (bundle.size() < 4) return bundle;
+    const auto stem = bundle.substr(0, bundle.size() - 4);
+    const auto folded = Lower(stem);
+    if (folded == "chatgpt") return "ChatGPT";
+    if (folded == "workbuddy ai" || folded == "workbuddy" || folded == "codebuddy") return "WorkBuddy";
+    if (folded == "cursor") return "Cursor";
+    if (folded == "claude") return "Claude";
+    if (folded == "codex") return "Codex";
+    if (folded == "windsurf") return "Windsurf";
+    if (folded == "trae") return "Trae";
+    if (folded == "kiro") return "Kiro";
+    if (folded == "grok" || folded == "grok bot") return "Grok";
+    return stem;
+}
+bool IsToolchainBundle(const std::string& bundle, const std::string& executable) {
+    const auto folded = Lower(bundle);
+    const auto path = Lower(executable);
+    // Xcode, including versioned Xcode_N.app, and the Python.app inside it are
+    // developer tools. They are not the desktop agent when one sits further up.
+    if (folded == "python.app" || folded == "xcode.app") return true;
+    if ((folded.rfind("xcode_", 0) == 0 || folded.rfind("xcode-", 0) == 0) && folded.size() > 10 &&
+        folded.compare(folded.size() - 4, 4, ".app") == 0)
+        return true;
+    return path.find("/contents/developer/") != std::string::npos;
+}
+void ApplyBehaviorOwner(ActorProcess& actor) {
+    // The collector and its launched children are not desktop agents. Do not
+    // replace that classification with a toolchain bundle such as Xcode.app.
+    if (IsCollectorProcess(actor.process.node) || actor.classification == "collector_self") {
+        actor.classification = "collector_self";
+        if (actor.classification_reason.empty()) actor.classification_reason = "self_process";
+        actor.owning_agent.reset();
+        return;
+    }
+    // Nearest parent first. A process already inside its own .app keeps that
+    // bundle, even when a shell above it belongs to another agent. Xcode and
+    // Python.app are toolchain hops: skip them when a desktop agent is further up.
+    std::vector<const ProcessNode*> upward{&actor.process.node};
+    for (const auto& parent : actor.ancestors) upward.push_back(&parent.node);
+    auto bundle_of = [](const ProcessNode* node) -> std::optional<std::string> {
+        if (IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) return std::nullopt;
+        return OutermostAppBundle(node->executable);
+    };
+    auto highest_in = [&](const std::string& wanted, bool toolchain_ok) -> const ProcessNode* {
+        const ProcessNode* found_node = nullptr;
+        for (const auto* node : upward) {
+            auto found = bundle_of(node);
+            if (!found || *found != wanted) continue;
+            if (!toolchain_ok && IsToolchainBundle(*found, node->executable)) continue;
+            found_node = node;
+        }
+        return found_node;
+    };
+    const ProcessNode* chosen = nullptr;
+    std::string bundle;
+    bool from_app = false;
+    if (auto self = bundle_of(&actor.process.node)) {
+        if (!IsToolchainBundle(*self, actor.process.node.executable)) {
+            bundle = *self;
+            from_app = true;
+            chosen = highest_in(bundle, false);
+            if (!chosen) chosen = &actor.process.node;
+        }
+    }
+    if (!from_app) {
+        const ProcessNode* toolchain = nullptr;
+        std::string toolchain_bundle;
+        for (const auto* node : upward) {
+            auto found = bundle_of(node);
+            if (!found) continue;
+            if (IsToolchainBundle(*found, node->executable)) {
+                if (!toolchain) { toolchain = node; toolchain_bundle = *found; }
+                continue;
+            }
+            bundle = *found;
+            from_app = true;
+            chosen = highest_in(bundle, false);
+            if (!chosen) chosen = node;
+            break;
+        }
+        if (!from_app && toolchain) {
+            from_app = true;
+            bundle = toolchain_bundle;
+            chosen = highest_in(bundle, true);
+            if (!chosen) chosen = toolchain;
+        } else if (!from_app) {
+            for (auto it = upward.rbegin(); it != upward.rend(); ++it) {
+                if (IsCollectorProcess(**it) || IsAppleSystemDaemon(**it)) continue;
+                chosen = *it;
+                break;
+            }
+        }
+    }
+    if (!chosen) return;
+    OwningAgent owner;
+    owner.root = chosen->identity;
+    owner.bundle = from_app ? bundle : "";
+    if (from_app) owner.name = DisplayBundleName(bundle);
+    else {
+        const auto hint = MatchAgent(*chosen, {});
+        owner.name = !hint.empty() && hint != "generic_runtime_candidate" ? FriendlyName(*chosen, hint)
+            : (chosen->name.empty() ? BaseName(chosen->executable) : chosen->name);
+    }
+    owner.match_reason = from_app ? "outermost_app_bundle" : "top_non_system_ancestor";
+    const auto hint = MatchAgent(*chosen, {});
+    if (!hint.empty() && hint != "generic_runtime_candidate") owner.match_reason += ";label:" + hint;
+    actor.owning_agent = owner;
+    if (actor.classification == "collector_self") return;
+    if (actor.classification.empty() || actor.classification == "unclassified_process")
+        actor.classification = hint.empty() || hint == "generic_runtime_candidate" ? "behavior_tracked" : "known_agent_candidate";
+    if (actor.classification_reason.empty()) actor.classification_reason = owner.match_reason;
+}
 std::string MatchAgent(const ProcessNode& node, const AgentRules& rules) {
     const auto base = Lower(BaseName(node.executable));
     const auto path = Lower(node.executable);
@@ -119,10 +254,14 @@ std::string MatchAgent(const ProcessNode& node, const AgentRules& rules) {
         const auto component = "/" + Lower(bundle) + "/";
         if (path.find(component) != std::string::npos) return "configured_bundle:" + bundle;
     }
-    for (const std::string name : {"claude", "codex", "cursor", "cursor-agent", "workbuddy", "workbuddy-ai", "codebuddy", "aider", "goose", "opencode", "gemini", "cline", "roo"})
+    for (const std::string name : {"claude", "codex", "cursor", "cursor-agent", "workbuddy", "workbuddy-ai", "codebuddy", "aider", "goose", "opencode", "gemini", "cline", "roo", "kiro", "grok"})
         if (base == name) return "known_name:" + name;
-    // ChatGPT.app is the desktop host for Codex. Grok Bot stays unmatched unless configured.
-    for (const std::string bundle : {"/cursor.app/", "/chatgpt.app/", "/workbuddy ai.app/", "/workbuddy.app/", "/codebuddy.app/", "/claude.app/", "/codex.app/", "/windsurf.app/", "/trae.app/"})
+    // ChatGPT.app is the desktop host for Codex. A codex executable still matches
+    // known_name first; AnnotateActor keeps the bundle as owning_agent.
+    // Kiro.app and Grok.app (including the older Grok Bot.app name) are desktop
+    // agents. This list is not every future app; --agent-bundle adds one without
+    // treating ordinary .app processes as agents.
+    for (const std::string bundle : {"/cursor.app/", "/chatgpt.app/", "/workbuddy ai.app/", "/workbuddy.app/", "/codebuddy.app/", "/claude.app/", "/codex.app/", "/windsurf.app/", "/trae.app/", "/kiro.app/", "/grok.app/", "/grok bot.app/"})
         if (path.find(bundle) != std::string::npos) return "application_bundle:" + bundle;
     const bool runtime = base == "node" || base == "bun" || base == "python" || base == "python3" || base.rfind("python3.", 0) == 0;
     if (runtime && path.find("/cursor-agent/versions/") != std::string::npos) return "cursor_agent_distribution";
@@ -137,8 +276,8 @@ std::string MatchAgent(const ProcessNode& node, const AgentRules& rules) {
     return runtime && rules.include_runtimes ? "generic_runtime_candidate" : "";
 }
 void AnnotateActor(ActorProcess& actor, const AgentRules& rules) {
-    const bool self = IsCollectorImage(actor.process.node) ||
-        std::any_of(actor.ancestors.begin(), actor.ancestors.end(), [](const ProcessEntry& entry) { return IsCollectorImage(entry.node); });
+    const bool self = IsCollectorProcess(actor.process.node) ||
+        std::any_of(actor.ancestors.begin(), actor.ancestors.end(), [](const ProcessEntry& entry) { return IsCollectorProcess(entry.node); });
     if (self) {
         actor.classification = "collector_self";
         actor.classification_reason = "self_process";
@@ -156,7 +295,7 @@ void AnnotateActor(ActorProcess& actor, const AgentRules& rules) {
     }
     std::optional<OwningAgent> bundle_owner, direct_owner;
     auto consider = [&](const ProcessNode& node) {
-        if (IsCollectorImage(node)) return;
+        if (IsCollectorProcess(node)) return;
         const auto match = MatchAgent(node, rules);
         if (!IsDirectAgentMatch(match)) return;
         OwningAgent owner;

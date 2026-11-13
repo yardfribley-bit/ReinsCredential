@@ -28,13 +28,13 @@ struct VerdictBadge: View {
     let verdict: UploadVerdictWord
 
     var body: some View {
-        Label(verdict.chineseLabel, systemImage: verdict.symbol)
+        Label(LanguageStore.shared.verdict(verdict), systemImage: verdict.symbol)
             .font(.caption.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .foregroundStyle(verdict.tint)
             .background(verdict.tint.opacity(0.12), in: Capsule())
-            .accessibilityLabel("出口结论：\(verdict.chineseLabel)")
+            .accessibilityLabel(L10n.format("verdict.a11y", LanguageStore.shared.verdict(verdict)))
     }
 }
 
@@ -76,7 +76,7 @@ struct EvidenceChainList: View {
             }
         }
         .listStyle(.inset)
-        .accessibilityLabel("证据链")
+        .accessibilityLabel(L10n.tr("chain.a11y"))
     }
 }
 
@@ -88,12 +88,12 @@ struct ChainRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 VerdictBadge(verdict: chain.verdict)
                 if chain.link(.process)?.presence == .incomplete {
-                    Text("进程链不完整")
+                    Text(L10n.tr("chain.incomplete"))
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.orange)
                 }
                 if chain.kind == .transferWithoutOpen {
-                    Text("没有看到打开")
+                    Text(L10n.tr("chain.noOpen"))
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.orange)
                 }
@@ -102,15 +102,15 @@ struct ChainRow: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Text(chain.filePath.isEmpty ? "没有对应文件" : chain.filePath)
+            Text(chain.filePath.isEmpty ? L10n.tr("chain.noFile") : chain.filePath)
                 .font(.body.weight(.medium))
                 .lineLimit(1)
                 .truncationMode(.middle)
             HStack(spacing: 8) {
-                Label(chain.link(.agent)?.presence == .missing ? "Agent 缺失" : (chain.owningAgentName.isEmpty ? "未归属" : chain.owningAgentName),
+                Label(chain.link(.agent)?.presence == .missing ? L10n.tr("chain.agentMissing") : (chain.owningAgentName.isEmpty ? L10n.tr("chain.unattributed") : chain.owningAgentName),
                       systemImage: "person.crop.rectangle")
                 if chain.destination.isEmpty {
-                    Label("目的地缺失", systemImage: "circle.dashed")
+                    Label(L10n.tr("chain.destinationMissing"), systemImage: "circle.dashed")
                 } else {
                     Text(chain.destination).lineLimit(1).truncationMode(.middle)
                 }
@@ -156,7 +156,7 @@ struct EvidenceChainDetailBody: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("证据链")
+                    Text(L10n.tr("chain.title"))
                         .font(.headline)
                     Text(chain.headline)
                         .font(.title3.weight(.semibold))
@@ -165,13 +165,13 @@ struct EvidenceChainDetailBody: View {
                 Spacer()
                 VerdictBadge(verdict: chain.verdict)
             }
-            Text(EvidenceChainExport.glossaryText)
+            Text(L10n.tr("glossary"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Button("导出 Markdown", action: exportMarkdown)
-                Button("导出 JSON", action: exportJSON)
+                Button(L10n.tr("chain.exportMarkdown"), action: exportMarkdown)
+                Button(L10n.tr("chain.exportJSON"), action: exportJSON)
             }
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(chain.links.enumerated()), id: \.element.kind) { index, link in
@@ -179,13 +179,13 @@ struct EvidenceChainDetailBody: View {
                 }
             }
             if chain.missingReferenceCount > 0 {
-                Label("有 \(chain.missingReferenceCount) 个关联事件不在当前快照里，没有补造。", systemImage: "link.badge.plus")
+                Label(L10n.format("chain.missingRefs", chain.missingReferenceCount), systemImage: "link.badge.plus")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
             if !chain.backendSummary.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("采集原句").font(.caption).foregroundStyle(.secondary)
+                    Text(L10n.tr("chain.backend")).font(.caption).foregroundStyle(.secondary)
                     Text(chain.backendSummary)
                         .font(.subheadline)
                         .fixedSize(horizontal: false, vertical: true)
@@ -204,9 +204,9 @@ struct EvidenceChainDetailBody: View {
 
     private var memberList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("相关事件").font(.subheadline.weight(.semibold))
+            Text(L10n.tr("chain.related")).font(.subheadline.weight(.semibold))
             if members.isEmpty {
-                Text("当前快照里没有展开这些事件。").font(.caption).foregroundStyle(.secondary)
+                Text(L10n.tr("chain.noEvents")).font(.caption).foregroundStyle(.secondary)
             }
             ForEach(members) { record in
                 VStack(alignment: .leading, spacing: 4) {
@@ -214,7 +214,7 @@ struct EvidenceChainDetailBody: View {
                         Text(record.findingTitle).font(.caption.weight(.medium))
                         Spacer()
                         if !record.uploadVerdict.isEmpty {
-                            Text(UploadVerdictWord.parse(record.uploadVerdict).chineseLabel)
+                            Text(LanguageStore.shared.verdict(UploadVerdictWord.parse(record.uploadVerdict)))
                                 .font(.caption2)
                                 .foregroundStyle(UploadVerdictWord.parse(record.uploadVerdict).tint)
                         }
@@ -259,8 +259,8 @@ private struct ChainStep: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(link.title).font(.subheadline.weight(.semibold))
-                    Text(link.presence.displayName)
+                    Text(L10n.tr(link.kind.localizationKey)).font(.subheadline.weight(.semibold))
+                    Text(L10n.tr(link.presence.localizationKey))
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
@@ -285,7 +285,7 @@ private struct ChainStep: View {
     }
 
     private var tint: Color {
-        if link.kind == .verdict, let verdict = UploadVerdictWord(rawValue: verdictCode(from: link.value)) {
+        if link.kind == .verdict, let verdict = UploadVerdictWord(rawValue: link.verdictCode(from: link.value)) {
             return verdict.tint
         }
         switch link.presence {
@@ -305,7 +305,35 @@ private struct ChainStep: View {
         }
     }
 
-    private func verdictCode(from label: String) -> String {
+}
+
+extension ChainLinkKind {
+    var localizationKey: String {
+        switch self {
+        case .agent: return "link.agent"
+        case .process: return "link.process"
+        case .file: return "link.file"
+        case .destination: return "link.destination"
+        case .payload: return "link.payload"
+        case .verdict: return "link.verdict"
+        }
+    }
+}
+
+extension ChainLinkPresence {
+    var localizationKey: String {
+        switch self {
+        case .present: return "presence.present"
+        case .incomplete: return "presence.incomplete"
+        case .unrecorded: return "presence.unrecorded"
+        case .missing: return "presence.missing"
+        case .unproven: return "presence.unproven"
+        }
+    }
+}
+
+private extension EvidenceChainLink {
+    func verdictCode(from label: String) -> String {
         switch label {
         case UploadVerdictWord.uploaded.chineseLabel: return UploadVerdictWord.uploaded.rawValue
         case UploadVerdictWord.attempted.chineseLabel: return UploadVerdictWord.attempted.rawValue

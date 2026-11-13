@@ -15,9 +15,22 @@ struct ProcessSample {
     size_t unavailable = 0;
     bool enumeration_complete = true;
 };
+// One socket observed on a process. tx_bytes is the kernel TCP send counter
+// when bytes_known is true. It is not a copy of the payload.
+struct SocketFlow {
+    std::string flow_id;
+    std::string destination;
+    bool loopback = false;
+    bool udp = false;
+    bool bytes_known = false;
+    uint64_t tx_bytes = 0;
+    int tcp_state = -1;
+    std::string sni;
+};
 struct ActivitySample {
     bool identity_validated = false, descriptors_complete = true;
     std::set<std::string> sensitive_files, socket_peers;
+    std::vector<SocketFlow> flows;
 };
 class IProcessSource {
 public:
@@ -31,6 +44,12 @@ public:
     virtual bool ConfirmParentPid(const ProcessNode& node, pid_t ppid) { (void)node; (void)ppid; return false; }
     virtual std::optional<ProcessNode> Lookup(pid_t pid) { (void)pid; return std::nullopt; }
     virtual ActivitySample Inspect(const ProcessNode& node, const std::vector<std::string>& roots, bool include_idle_peers) = 0;
+    // Flows this source saw for the pid, including sockets that have already closed.
+    virtual std::vector<SocketFlow> RetainedFlows(pid_t pid) const { (void)pid; return {}; }
+    // Pids that opened or closed a flow since the previous call.
+    virtual std::vector<pid_t> TakeHotPids() { return {}; }
+    // Egress asks for kernel flow notifications. The monitor does not.
+    virtual void WatchFlows(pid_t pid) { (void)pid; }
 };
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource();
 struct ProcessSnapshot {

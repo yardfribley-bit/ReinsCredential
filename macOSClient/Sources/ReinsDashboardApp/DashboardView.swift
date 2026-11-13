@@ -37,33 +37,33 @@ struct DashboardView: View {
             ToolbarItemGroup {
                 if store.mode != .live {
                     Button { store.returnToLive(records: runtime.records) } label: {
-                        Label("返回实时监控", systemImage: "waveform.path.ecg")
+                        Label(L10n.tr("nav.backLive"), systemImage: "waveform.path.ecg")
                     }
                     .disabled(store.isLoading)
                 }
                 Button { isConfigurationPresented = true } label: {
-                    Label("监控范围", systemImage: "folder.badge.gearshape")
+                    Label(L10n.tr("nav.scope"), systemImage: "folder.badge.gearshape")
                 }
-                .help("选择敏感文件所在的目录")
+                .help(L10n.tr("help.scope"))
                 Button(action: runtime.runSelfTest) {
-                    Label("检测自检", systemImage: "checkmark.shield")
+                    Label(L10n.tr("nav.selfTest"), systemImage: "checkmark.shield")
                 }
                 .disabled(runtime.isBusy || !runtime.state.canSelfTest)
-                .help("创建合成测试文件，验证采集与显示；不会读取真实凭据或上传内容")
+                .help(L10n.tr("help.selfTest"))
                 if store.isLoading {
                     ProgressView().controlSize(.small)
-                        .accessibilityLabel("正在导入证据日志")
+                        .accessibilityLabel(L10n.tr("nav.importing"))
                 }
                 Menu {
-                    Button("导出选中的链为 Markdown") { exportSelected(markdown: true) }
-                    Button("导出选中的链为 JSON") { exportSelected(markdown: false) }
+                    Button(L10n.tr("nav.exportMarkdown")) { exportSelected(markdown: true) }
+                    Button(L10n.tr("nav.exportJSON")) { exportSelected(markdown: false) }
                     Divider()
-                    Button("导出时间窗口…") { presentWindow() }
+                    Button(L10n.tr("nav.exportWindow")) { presentWindow() }
                     Divider()
-                    Button("导入日志快照…") { store.isImporterPresented = true }
-                    Button("查看合成演示") { store.showSamples() }
+                    Button(L10n.tr("nav.import")) { store.isImporterPresented = true }
+                    Button(L10n.tr("nav.demo")) { store.showSamples() }
                 } label: {
-                    Label("更多", systemImage: "ellipsis.circle")
+                    Label(L10n.tr("nav.more"), systemImage: "ellipsis.circle")
                 }
                 .disabled(store.isLoading)
             }
@@ -82,19 +82,19 @@ struct DashboardView: View {
                 }
             }
         }
-        .alert("无法导入日志", isPresented: Binding(
+        .alert(L10n.tr("alert.importFailed"), isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
         )) {
-            Button("好", role: .cancel) { store.errorMessage = nil }
+            Button(L10n.tr("alert.ok"), role: .cancel) { store.errorMessage = nil }
         } message: {
             Text(store.errorMessage ?? "")
         }
-        .alert("监控服务", isPresented: Binding(
+        .alert(L10n.tr("alert.monitorService"), isPresented: Binding(
             get: { runtime.errorMessage != nil },
             set: { if !$0 { runtime.errorMessage = nil } }
         )) {
-            Button("好", role: .cancel) { runtime.errorMessage = nil }
+            Button(L10n.tr("alert.ok"), role: .cancel) { runtime.errorMessage = nil }
         } message: { Text(runtime.errorMessage ?? "") }
         .onChange(of: store.searchText) { _ in store.reconcileSelection() }
         .onChange(of: store.riskFilter) { _ in store.reconcileSelection() }
@@ -117,31 +117,31 @@ struct DashboardView: View {
                                         exportMarkdown: { exportSelected(markdown: true) },
                                         exportJSON: { exportSelected(markdown: false) })
             } else {
-                EmptyEvidenceView(symbol: "link", title: "选择一条证据链",
-                                  message: "一条链对应一次敏感文件访问，或一条没有看到打开的传输。缺失的环节会标出来。")
+                EmptyEvidenceView(symbol: "link", title: L10n.tr("empty.selectChain"),
+                                  message: L10n.tr("empty.selectChainBody"))
             }
         case .events:
             if let record = store.selectedRecord {
                 EvidenceDetailView(record: record)
             } else {
-                EmptyEvidenceView(symbol: "doc.text.magnifyingglass", title: "选择一条证据",
-                                  message: "查看资源、进程链与后端记录的关联依据。")
+                EmptyEvidenceView(symbol: "doc.text.magnifyingglass", title: L10n.tr("empty.selectRecord"),
+                                  message: L10n.tr("empty.selectRecordBody"))
             }
         }
     }
 
     private var windowExportSheet: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("导出时间窗口").font(.title3.weight(.semibold))
-            Text("导出当前筛选结果里、落在这个时间范围内的证据链。看不到仍写成看不到。原始密钥字节不会写入文件。")
+            Text(L10n.tr("window.exportTitle")).font(.title3.weight(.semibold))
+            Text(L10n.tr("window.exportBody"))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            DatePicker("开始", selection: $windowStart)
-            DatePicker("结束", selection: $windowEnd)
+            DatePicker(L10n.tr("window.start"), selection: $windowStart)
+            DatePicker(L10n.tr("window.end"), selection: $windowEnd)
             HStack {
-                Button("导出 Markdown") { exportWindow(markdown: true) }
-                Button("导出 JSON") { exportWindow(markdown: false) }
+                Button(L10n.tr("window.exportMarkdown")) { exportWindow(markdown: true) }
+                Button(L10n.tr("window.exportJSON")) { exportWindow(markdown: false) }
                 Spacer()
-                Button("取消", role: .cancel) { windowSheet = false }
+                Button(L10n.tr("window.cancel"), role: .cancel) { windowSheet = false }
             }
         }
         .padding(20)
@@ -191,8 +191,8 @@ struct DashboardView: View {
                     .font(.title2)
                     .foregroundStyle(Color.accentColor)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("运行时安全").font(.headline)
-                    Text("本机 Agent 监控").font(.caption).foregroundStyle(.secondary)
+                    Text(L10n.tr("sidebar.runtimeSecurity")).font(.headline)
+                    Text(L10n.tr("sidebar.localMonitor")).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -200,8 +200,8 @@ struct DashboardView: View {
             .fixedSize(horizontal: false, vertical: true)
 
             List(selection: $store.agentFilter) {
-                Section("所属 Agent") {
-                        agentRow(title: "全部证据链", count: store.chainsMatchingRiskAndSearch.count, symbol: "square.stack.3d.up")
+                Section(L10n.tr("sidebar.agents")) {
+                        agentRow(title: L10n.tr("sidebar.allChains"), count: store.chainsMatchingRiskAndSearch.count, symbol: "square.stack.3d.up")
                             .tag(AgentFilter.all)
                     ForEach(store.agentChoices) { choice in
                         agentRow(title: choice.title, count: choice.count,
@@ -216,12 +216,12 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 7) {
                 Label(store.mode.title, systemImage: store.mode == .live ? "waveform.path.ecg" : "doc.text")
                     .font(.caption.weight(.semibold))
-                Text(store.mode == .live ? "\(runtime.watchedPaths.count) 个监控目录 · 按 Agent 分组" : "当前显示独立数据集。后台监控状态见主面板。")
+                Text(store.mode == .live ? L10n.format("mode.liveDetail", runtime.watchedPaths.count) : L10n.tr("mode.otherDetail"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if store.mode == .live, let date = runtime.lastUpdate {
-                    Text("最近更新 \(date.formatted(date: .omitted, time: .standard))")
+                    Text(L10n.format("mode.updated", date.formatted(date: .omitted, time: .standard)))
                         .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }
@@ -237,15 +237,15 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 12) {
                 RuntimeStatusPanel(runtime: runtime)
                 HStack(alignment: .firstTextBaseline) {
-                    Text(boardMode == .chains ? "证据链" : store.riskFilter.title).font(.title2.bold())
+                    Text(boardMode == .chains ? L10n.tr("board.chains") : store.riskFilter.title).font(.title2.bold())
                     Spacer()
-                    Text(boardMode == .chains ? "\(store.visibleChains.count) 条证据链" : "\(store.visibleRecords.count) 条记录")
+                    Text(boardMode == .chains ? L10n.format("board.chainCount", store.visibleChains.count) : L10n.format("board.recordCount", store.visibleRecords.count))
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Picker("视图", selection: $boardMode) {
-                    Text("证据链").tag(BoardMode.chains)
-                    Text("事件").tag(BoardMode.events)
+                Picker(L10n.tr("board.view"), selection: $boardMode) {
+                    Text(L10n.tr("board.chains")).tag(BoardMode.chains)
+                    Text(L10n.tr("board.events")).tag(BoardMode.events)
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 240)
@@ -261,7 +261,7 @@ struct DashboardView: View {
                 }
                 datasetNotice
                 if store.hasSensorGap {
-                    Label("这一时段的采集有缺口，证据链可能少了事件。", systemImage: "exclamationmark.triangle")
+                    Label(L10n.tr("gap.banner"), systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
@@ -283,7 +283,7 @@ struct DashboardView: View {
                 } else {
                     VStack(spacing: 0) {
                         EvidenceChainList(sections: store.chainSections, selection: $store.selectedChainID)
-                        Text(EvidenceChainExport.glossaryText)
+                        Text(L10n.tr("glossary"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -300,7 +300,7 @@ struct DashboardView: View {
             }
         }
         .searchable(text: $store.searchText, placement: .toolbar,
-                    prompt: "搜索 Agent、文件、目的地或结论")
+                    prompt: L10n.tr("search.prompt"))
     }
 
     private func agentRow(title: String, count: Int, symbol: String) -> some View {
@@ -332,17 +332,17 @@ struct DashboardView: View {
 
     private var datasetTitle: String {
         switch store.mode {
-        case .live: return "本机采集结果"
-        case .imported: return store.importedURL?.lastPathComponent ?? "已导入日志"
-        case .demo: return "演示数据 · 合成示例"
+        case .live: return L10n.tr("dataset.liveTitle")
+        case .imported: return store.importedURL?.lastPathComponent ?? L10n.tr("dataset.importedFallback")
+        case .demo: return L10n.tr("dataset.demoTitle")
         }
     }
 
     private var datasetDescription: String {
         switch store.mode {
-        case .live: return "持续显示采集服务的实际记录。高风险表示需要核查的证据，不等同于已确认泄露。"
-        case .imported: return "导入时的本地快照；实时监控仍独立运行。点击“返回实时监控”查看新增记录。"
-        case .demo: return "合成演示，不是本机检测结果。四条出口结论和看不到的几种原因都在这里。点击“返回实时监控”查看真实采集。"
+        case .live: return L10n.tr("dataset.liveBody")
+        case .imported: return L10n.tr("dataset.importedBody")
+        case .demo: return L10n.tr("dataset.demoBody")
         }
     }
 
@@ -350,30 +350,30 @@ struct DashboardView: View {
     private var emptyDataset: some View {
         if boardMode == .chains && store.visibleChains.isEmpty && !store.records.isEmpty
             && store.searchText.isEmpty && store.riskFilter == .all && store.agentFilter == .all {
-            EmptyEvidenceView(symbol: "link", title: "还没有证据链",
-                              message: "敏感文件访问会按所属 Agent 收在这里。进程发现和健康记录留在「事件」里，不会被编成一次访问。")
+            EmptyEvidenceView(symbol: "link", title: L10n.tr("empty.noChains"),
+                              message: L10n.tr("empty.noChainsBody"))
         } else if !store.records.isEmpty || (boardMode == .chains && !store.chains.isEmpty) {
-            EmptyEvidenceView(symbol: "line.3.horizontal.decrease.circle", title: "没有匹配的证据",
-                              message: "调整 Agent、风险或搜索条件。")
+            EmptyEvidenceView(symbol: "line.3.horizontal.decrease.circle", title: L10n.tr("empty.noMatch"),
+                              message: L10n.tr("empty.noMatchBody"))
         } else if store.mode == .live {
             VStack(spacing: 14) {
                 Image(systemName: "shield.lefthalf.filled").font(.system(size: 38)).foregroundStyle(Color.accentColor)
-                Text(runtime.state.canStop ? "等待本机检测记录" : "开始监控本机 Agent")
+                Text(runtime.state.canStop ? L10n.tr("empty.waitingTitle") : L10n.tr("empty.startTitle"))
                     .font(.title3.bold())
-                Text(runtime.state.canStop ? "可执行检测自检。合成文件会出现成一条证据链；那是描述符和本机连接同时出现，不是上传。" : "启动服务、选择敏感目录。敏感文件访问会按所属 Agent 收成证据链。关闭窗口后，后台服务可继续运行。")
+                Text(runtime.state.canStop ? L10n.tr("empty.waitingBody") : L10n.tr("empty.startBody"))
                     .font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).frame(maxWidth: 420)
                 HStack {
-                    Button("选择监控目录…") { isConfigurationPresented = true }
+                    Button(L10n.tr("empty.chooseFolder")) { isConfigurationPresented = true }
                     if runtime.state.canSelfTest {
-                        Button("运行检测自检", action: runtime.runSelfTest).buttonStyle(.borderedProminent)
+                        Button(L10n.tr("empty.runSelfTest"), action: runtime.runSelfTest).buttonStyle(.borderedProminent)
                             .disabled(runtime.isBusy)
                     }
                 }
             }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            EmptyEvidenceView(symbol: "doc.text", title: "此快照没有证据记录",
-                              message: "可导入其他日志，或返回实时监控查看本机采集结果。")
+            EmptyEvidenceView(symbol: "doc.text", title: L10n.tr("empty.snapshotTitle"),
+                              message: L10n.tr("empty.snapshotBody"))
         }
     }
 
@@ -382,14 +382,14 @@ struct DashboardView: View {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 3) {
                 if !store.rejectedLines.isEmpty {
-                    Text("跳过 \(store.rejectedLines.count) 行无效或重复记录")
-                    Text("行号：" + store.rejectedLines.prefix(20).map(String.init).joined(separator: ", ") +
+                    Text(L10n.format("rejected.skip", store.rejectedLines.count))
+                    Text(L10n.format("rejected.lines", store.rejectedLines.prefix(20).map(String.init).joined(separator: ", ")) +
                          (store.rejectedLines.count > 20 ? "…" : ""))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
                 if store.incompleteTail {
-                    Text("文件末尾有未完成记录，已忽略；可在写入完成后重新导入。")
+                    Text(L10n.tr("rejected.tail"))
                 }
             }
             .font(.caption)
@@ -407,15 +407,15 @@ private struct EvidenceTable: View {
 
     var body: some View {
         Table(records, selection: $selection) {
-            TableColumn("风险") { record in
+            TableColumn(L10n.tr("column.risk")) { record in
                 RiskBadge(level: record.riskLevel, isSelected: selection == record.id)
             }.width(62)
-            TableColumn("时间") { record in
+            TableColumn(L10n.tr("column.time")) { record in
                 Text(record.timestamp, format: .dateTime.hour().minute().second())
                     .monospacedDigit()
                     .help(record.timestamp.formatted(date: .complete, time: .complete))
             }.width(82)
-            TableColumn("检测项") { record in
+            TableColumn(L10n.tr("column.finding")) { record in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(record.findingTitle).font(.caption).lineLimit(2)
                     if !record.uploadVerdict.isEmpty {
@@ -424,12 +424,12 @@ private struct EvidenceTable: View {
                 }
                 .help(record.sourceType.isEmpty ? record.actionType : record.sourceType)
             }.width(min: 120, ideal: 170)
-            TableColumn("进程 / 资源") { record in
+            TableColumn(L10n.tr("column.process")) { record in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(record.summary.isEmpty ? (record.processTree.first?.name ?? "未归因") : record.summary)
+                    Text(record.summary.isEmpty ? (record.processTree.first?.name ?? L10n.tr("row.unattributed")) : record.summary)
                         .font(.body.weight(.medium))
                         .lineLimit(record.summary.isEmpty ? 1 : 3)
-                    Text(record.targetResource.isEmpty ? "无文件资源" : record.targetResource)
+                    Text(record.targetResource.isEmpty ? L10n.tr("row.noFile") : record.targetResource)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -440,7 +440,7 @@ private struct EvidenceTable: View {
             }.width(min: 160, ideal: 300)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
-        .accessibilityLabel("证据记录")
+        .accessibilityLabel(L10n.tr("row.a11y"))
     }
 }
 
@@ -457,7 +457,7 @@ struct RiskBadge: View {
             .padding(.vertical, 4)
             .foregroundStyle(isSelected ? Color.primary : filter.color)
             .background((isSelected ? Color.primary : filter.color).opacity(0.12), in: Capsule())
-            .accessibilityLabel("风险等级：\(filter.title)")
+            .accessibilityLabel(L10n.format("risk.a11y", filter.title))
     }
 }
 

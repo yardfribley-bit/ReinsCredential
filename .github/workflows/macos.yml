@@ -26,6 +26,33 @@ jobs:
           name: evidence-chain-snapshots
           path: chain-snapshots
           if-no-files-found: error
+      - name: Packaging and uninstall contracts
+        run: |
+          bash -n macOSClient/scripts/build-app.sh
+          test -s brand/ReinsCredential-AppIcon-1024.png
+          grep -q CFBundleIconFile macOSClient/scripts/build-app.sh
+          macOSClient/scripts/make-icon.sh /tmp/ReinsCredential.icns
+          test -s /tmp/ReinsCredential.icns
+          macOSClient/scripts/build-app.sh
+          app="macOSClient/dist/ReinsCredential.app"
+          require() { [[ -s "$1" ]] || { echo "missing $1" >&2; find "$(dirname "$1")" -maxdepth 3 -print >&2; exit 1; }; }
+          require "$app/Contents/Resources/ReinsCredential.icns"
+          bundle="$app/Contents/Resources/ReinsCredentialDashboard_ReinsDashboardApp.bundle"
+          require "$bundle/en.lproj/Localizable.strings"
+          require "$bundle/zh-Hans.lproj/Localizable.strings"
+          require "$bundle/ReinsCredential-Logo-rounded-512.png"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" = 5
+          bash -n macOSClient/scripts/package-local.sh
+          bash -n macOSClient/scripts/notarize-local.sh
+          bash -n macOSClient/scripts/uninstall-local.sh
+          macOSClient/scripts/uninstall-local.sh --dry-run > /tmp/uninstall-keep.txt
+          grep -q 'kept evidence directory' /tmp/uninstall-keep.txt
+          if grep -q 'Application Support/ReinsCredential' /tmp/uninstall-keep.txt; then
+            echo 'default uninstall would delete evidence' >&2
+            exit 1
+          fi
+          macOSClient/scripts/uninstall-local.sh --dry-run --delete-evidence > /tmp/uninstall-drop.txt
+          grep -q 'Application Support/ReinsCredential' /tmp/uninstall-drop.txt
       - name: Fake-secret acceptance harness
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

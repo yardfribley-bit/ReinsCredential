@@ -8,7 +8,7 @@ struct EvidenceDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack {
-                    Label("证据详情", systemImage: "doc.text.magnifyingglass")
+                    Label(L10n.tr("detail.title"), systemImage: "doc.text.magnifyingglass")
                         .font(.headline)
                     Spacer()
                     if !record.uploadVerdict.isEmpty {
@@ -25,53 +25,53 @@ struct EvidenceDetailView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                detailSection("事件") {
-                    DetailValue(title: "事件 ID", value: record.id.uuidString, monospaced: true)
-                    DetailValue(title: "记录时间（本地）", value: Self.timestampFormatter.string(from: record.timestamp), monospaced: true)
-                    DetailValue(title: "动作", value: record.actionType, monospaced: true)
+                detailSection(L10n.tr("detail.event")) {
+                    DetailValue(title: L10n.tr("detail.eventId"), value: record.id.uuidString, monospaced: true)
+                    DetailValue(title: L10n.tr("detail.localTime"), value: Self.timestampFormatter.string(from: record.timestamp), monospaced: true)
+                    DetailValue(title: L10n.tr("detail.action"), value: record.actionType, monospaced: true)
                     if !record.sourceType.isEmpty {
-                        DetailValue(title: "后端事件类型", value: record.sourceType, monospaced: true)
+                        DetailValue(title: L10n.tr("detail.backendType"), value: record.sourceType, monospaced: true)
                     }
-                    DetailValue(title: "目标资源", value: record.targetResource.isEmpty ? "未记录" : record.targetResource, monospaced: true)
+                    DetailValue(title: L10n.tr("detail.target"), value: record.targetResource.isEmpty ? L10n.tr("detail.unrecorded") : record.targetResource, monospaced: true)
                     if !record.destination.isEmpty {
-                        DetailValue(title: "发送目的地", value: EvidenceRedaction.display(record.destination), monospaced: true)
+                        DetailValue(title: L10n.tr("detail.destination"), value: EvidenceRedaction.display(record.destination), monospaced: true)
                     }
                     if !record.contentSHA256.isEmpty {
-                        DetailValue(title: "内容摘要 SHA-256", value: record.contentSHA256, monospaced: true)
+                        DetailValue(title: L10n.tr("detail.sha"), value: record.contentSHA256, monospaced: true)
                     }
                 }
 
-                detailSection("关联依据") {
-                    DetailValue(title: "归因状态", value: record.attribution.isEmpty ? "未记录" : record.attribution)
+                detailSection(L10n.tr("detail.basisSection")) {
+                    DetailValue(title: L10n.tr("detail.attribution"), value: record.attribution.isEmpty ? L10n.tr("detail.unrecorded") : record.attribution)
                     if !record.owningAgentName.isEmpty {
-                        DetailValue(title: "AI agent", value: record.owningAgentBundle.isEmpty
+                        DetailValue(title: L10n.tr("link.agent"), value: record.owningAgentBundle.isEmpty
                             ? record.owningAgentName
                             : "\(record.owningAgentName) (\(record.owningAgentBundle))")
                     }
                     if !record.classification.isEmpty {
-                        DetailValue(title: "进程分类", value: record.classification)
+                        DetailValue(title: L10n.tr("detail.classification"), value: record.classification)
                     }
                     if !record.evidenceBasis.isEmpty {
-                        DetailValue(title: "证据来源", value: record.evidenceBasis)
+                        DetailValue(title: L10n.tr("detail.evidence"), value: record.evidenceBasis)
                     }
                     if !record.transferOutcome.isEmpty {
-                        DetailValue(title: "传输结果", value: record.transferOutcome)
+                        DetailValue(title: L10n.tr("detail.transfer"), value: record.transferOutcome)
                     }
                     if !record.detail.isEmpty {
-                        DetailValue(title: "说明", value: EvidenceRedaction.display(record.detail))
+                        DetailValue(title: L10n.tr("detail.note"), value: EvidenceRedaction.display(record.detail))
                     }
-                    Text("仅展示后端记录的结论。文件变化或打开的描述符本身不能证明读取或上传。")
+                    Text(L10n.tr("detail.limit"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                detailSection("进程链") {
-                    Text("行为进程 → 父进程 → 上层祖先")
+                detailSection(L10n.tr("detail.processChain")) {
+                    Text(L10n.tr("detail.tree"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if record.processTree.isEmpty {
-                        Label("没有可归因的进程", systemImage: "person.crop.circle.badge.questionmark")
+                        Label(L10n.tr("detail.noProcess"), systemImage: "person.crop.circle.badge.questionmark")
                             .font(.subheadline)
                     } else {
                         ForEach(Array(record.processTree.enumerated()), id: \.offset) { index, process in
@@ -154,22 +154,22 @@ private struct ProcessNodeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
-                Text(process.name.isEmpty ? "未知进程" : process.name)
+                Text(process.name.isEmpty ? L10n.tr("detail.unknownProcess") : process.name)
                     .font(.subheadline.weight(.medium))
                 Spacer()
                 if isActor {
-                    Text("行为进程").font(.caption2).foregroundStyle(.secondary)
+                    Text(L10n.tr("detail.actor")).font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            Text("PID \(String(process.pid))  ·  PPID \(String(process.ppid))")
+            Text(L10n.format("detail.pid", String(process.pid), String(process.ppid)))
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
             if let seconds = process.startSeconds, let microseconds = process.startMicroseconds {
-                Text("启动世代 \(seconds).\(String(format: "%06llu", microseconds))")
+                Text(L10n.format("detail.start", seconds, String(format: "%06llu", microseconds)))
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
             }
-            Text(process.path.isEmpty ? "可执行路径未记录" : process.path)
+            Text(process.path.isEmpty ? L10n.tr("detail.noPath") : process.path)
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

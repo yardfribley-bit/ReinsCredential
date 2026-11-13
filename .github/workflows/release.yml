@@ -1,0 +1,50 @@
+name: Release
+
+# Runs only when a person pushes a version tag. Pull requests and branch
+# pushes do not build or attach release artifacts.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the app
+        env:
+          REINS_SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_APP }}
+        run: macOSClient/scripts/build-app.sh
+      - name: Package dmg and zip
+        run: macOSClient/scripts/package-local.sh
+      - name: Notarize when credentials exist
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: macOSClient/scripts/notarize-local.sh
+      - name: Attach the package to the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="RELEASE_NOTES_0.2.0.md"
+          if [[ ! -f "$notes" ]]; then notes=""; fi
+          if [[ -n "$notes" ]]; then
+            gh release create "${GITHUB_REF_NAME}" \
+              macOSClient/dist/ReinsCredential-0.2.0-local.dmg \
+              macOSClient/dist/ReinsCredential-0.2.0-local.zip \
+              macOSClient/dist/SHA256SUMS.txt \
+              --title "${GITHUB_REF_NAME}" \
+              --notes-file "$notes"
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              macOSClient/dist/ReinsCredential-0.2.0-local.dmg \
+              macOSClient/dist/ReinsCredential-0.2.0-local.zip \
+              macOSClient/dist/SHA256SUMS.txt \
+              --title "${GITHUB_REF_NAME}" \
+              --notes "ReinsCredential ${GITHUB_REF_NAME}"
+          fi

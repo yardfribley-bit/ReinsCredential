@@ -4,7 +4,7 @@ LDLIBS := -framework CoreServices -lz
 CORE := ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp EgressVerdict.cpp
 HEADERS := $(wildcard *.h)
 
-.PHONY: all check audit-check audit-native shutdown-probe integration acceptance clean
+.PHONY: all check audit-check audit-native shutdown-probe integration acceptance clean live-flow-verdict
 all: agent-monitor agent-gateway agent-egress
 agent-gateway: ContentGateway.cpp $(CORE) $(HEADERS)
 	$(CXX) $(CXXFLAGS) ContentGateway.cpp $(CORE) $(LDLIBS) -lcurl -lbsm -o $@
@@ -24,8 +24,11 @@ agent-store-tests: tests/store_durability.cpp EvidenceStore.cpp $(HEADERS)
 	$(CXX) $(CXXFLAGS) -I. $< EvidenceStore.cpp $(LDLIBS) -o $@
 agent-shutdown-probe: tests/file_shutdown.cpp $(CORE) $(HEADERS)
 	$(CXX) $(CXXFLAGS) -I. $< $(CORE) $(LDLIBS) -o $@
-check: agent-unit audit-check
+check: agent-unit audit-check live-flow-verdict
 	./agent-unit
+	./live-flow-verdict
+live-flow-verdict: tests/live_flow_verdict.cpp EgressVerdict.cpp EgressVerdict.h
+	$(CXX) -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror -I. tests/live_flow_verdict.cpp EgressVerdict.cpp -o $@
 audit-check: agent-generations agent-callback-tests agent-store-tests
 	./agent-generations
 	./agent-callback-tests
@@ -47,4 +50,4 @@ agent-short-read: tests/short_read_fixture.cpp
 acceptance: all
 	/usr/bin/python3 tests/acceptance_matrix.py --require-full-acceptance
 clean:
-	rm -f agent-monitor agent-gateway agent-egress agent-unit agent-probe agent-short-read agent-generations agent-callback-tests agent-store-tests agent-shutdown-probe live-agent
+	rm -f agent-monitor agent-gateway agent-egress agent-unit agent-probe agent-short-read agent-generations agent-callback-tests agent-store-tests agent-shutdown-probe live-agent live-flow-verdict
