@@ -39,7 +39,7 @@ jobs:
           bundle="$app/Contents/Resources/ReinsCredentialDashboard_ReinsDashboardApp.bundle"
           test -s "$bundle/en.lproj/Localizable.strings"
           test -s "$bundle/zh-Hans.lproj/Localizable.strings"
-          find "$bundle" -name 'ReinsCredential-Logo-rounded-512.png' | grep -q .
+          test -s "$bundle/ReinsCredential-Logo-rounded-512.png"
           grep -q '<key>CFBundleVersion</key><string>5</string>' "$app/Contents/Info.plist"
           bash -n macOSClient/scripts/package-local.sh
           bash -n macOSClient/scripts/notarize-local.sh

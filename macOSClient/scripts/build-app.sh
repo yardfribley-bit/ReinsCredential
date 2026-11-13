@@ -30,6 +30,8 @@ resource_bundle="$bin_dir/ReinsCredentialDashboard_ReinsDashboardApp.bundle"
   exit 1
 }
 cp -R "$resource_bundle" "$app_dir/Contents/Resources/"
+installed_bundle="$app_dir/Contents/Resources/ReinsCredentialDashboard_ReinsDashboardApp.bundle"
+cp "$client_dir/Sources/ReinsDashboardApp/Resources/ReinsCredential-Logo-rounded-512.png" "$installed_bundle/"
 [[ -s "$app_dir/Contents/Resources/ReinsCredentialDashboard_ReinsDashboardApp.bundle/en.lproj/Localizable.strings" ]] || {
   echo "English catalog was not copied into the app" >&2
   exit 1
