@@ -13,4 +13,8 @@ cp "$client_dir/INSTALL.md" "$staging/INSTALL.md"
 cp "$client_dir/INSTALL.zh-CN.md" "$staging/安装说明.md"
 /usr/bin/hdiutil create -volname ReinsCredential -srcfolder "$staging" -ov -format UDZO "$client_dir/dist/ReinsCredential-0.2.0-local.dmg"
 /usr/bin/ditto -c -k --keepParent "$app" "$client_dir/dist/ReinsCredential-0.2.0-local.zip"
-/usr/bin/shasum -a 256 "$client_dir/dist/ReinsCredential-0.2.0-local.dmg" "$client_dir/dist/ReinsCredential-0.2.0-local.zip" > "$client_dir/dist/SHA256SUMS.txt"
+# File names only, so `shasum -a 256 -c SHA256SUMS.txt` works in the download folder.
+(
+  cd "$client_dir/dist"
+  /usr/bin/shasum -a 256 ReinsCredential-0.2.0-local.dmg ReinsCredential-0.2.0-local.zip > SHA256SUMS.txt
+)
