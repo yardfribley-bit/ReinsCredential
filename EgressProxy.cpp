@@ -480,6 +480,7 @@ struct StoredObservation {
     std::string match_kind;
     std::string event_id;
     std::optional<ProcessIdentity> actor_identity;
+    std::optional<ActorProcess> actor;
     bool launched_tree = false;
 };
 struct Access {
@@ -577,6 +578,7 @@ struct Session {
     std::map<pid_t, MonoClock::time_point> inspected_at;
     MonoClock::time_point last_slow_inspect{};
     MonoClock::time_point last_launched_sample{};
+    MonoClock::time_point started_at = MonoClock::now();
     size_t rescan_cursor = 0;
     uint16_t proxy_port = 0;
     bool tree_truncated = false;
@@ -1142,7 +1144,10 @@ struct Session {
     void SampleWatched() {
         DiscoverHolders();
         const auto now = MonoClock::now();
-        const bool sample_launched = last_launched_sample.time_since_epoch().count() == 0 ||
+        // The launched canary opens its file immediately. Follow it closely for
+        // a few seconds, then once a second so an idle canary is not a full
+        // descriptor walk on every sample.
+        const bool sample_launched = now - started_at < std::chrono::seconds(5) ||
             now - last_launched_sample >= std::chrono::seconds(1);
         if (sample_launched) last_launched_sample = now;
         for (const auto& root : watched) {
@@ -1216,12 +1221,12 @@ struct Session {
             else unseen = true;
         }
         const bool egress_watched = launched || (inspected_http && !unseen);
-        for (const auto& pair : accesses) {
-            const auto& access = pair.second;
+        std::set<std::pair<std::string, ProcessIdentity>> closed_proxy;
+        auto emit_proxy = [&](const Access& access) {
             // Already-running agents are closed from TCP send counters in FlushLive.
             // A body that actually entered this proxy is still an exact-bytes close.
             const bool launched_actor = LaunchedActor(access.actor);
-            if (!launched_actor && !AnyProxyMatch(access.path)) continue;
+            if (!launched_actor && !AnyProxyMatch(access.path)) return;
             std::vector<EgressObservation> view;
             std::vector<std::string> related{access.event_id};
             std::string match_kind, digest;
@@ -1239,7 +1244,9 @@ struct Session {
                 if (!stored.event_id.empty()) related.push_back(stored.event_id);
             }
             for (const auto& version : versions) if (version.path == access.path) digest = version.sha256;
-            if (!launched_actor && !covered_match) continue;
+            if (!launched_actor && !covered_match) return;
+            if (launched_actor && covered_match)
+                closed_proxy.emplace(access.path, access.actor.process.node.identity);
             const auto closed = CloseAccess(egress_watched, view);
             EvidenceRecord record;
             record.type = "sensitive_access_closed";
@@ -1265,6 +1272,16 @@ struct Session {
             record.attribution = "launched_tree_egress_proxy";
             Emit(std::move(record));
             std::cerr << "egress close " << record.upload_verdict << " outcome=" << closed.transfer_outcome << "\n";
+        };
+        for (const auto& pair : accesses) emit_proxy(pair.second);
+        // The file slot keeps one actor. A launched canary that posted the body
+        // still closes when a later process took that slot.
+        for (const auto& stored : observations) {
+            if (!stored.launched_tree || !stored.observation.content_match || !stored.actor || stored.matched_path.empty())
+                continue;
+            if (!stored.actor_identity) continue;
+            if (closed_proxy.count({stored.matched_path, *stored.actor_identity})) continue;
+            emit_proxy(Access{stored.event_id, stored.matched_path, *stored.actor});
         }
     }
 };
@@ -1280,6 +1297,7 @@ void RecordTransfer(Session& session, const ActorProcess& actor, HttpRequest& re
     stored.observation.transfer_succeeded = success;
     stored.event_id = NewUuid();
     stored.actor_identity = actor.process.node.identity;
+    stored.actor = actor;
     stored.launched_tree = session.LaunchedActor(actor);
     if (fingerprint) {
         stored.matched_path = fingerprint->path;
@@ -1537,6 +1555,7 @@ void HandleClient(UniqueFd client, Session& session) {
     stored.observation.transfer_succeeded = success;
     stored.event_id = NewUuid();
     stored.actor_identity = actor->process.node.identity;
+    stored.actor = *actor;
     stored.launched_tree = session.LaunchedActor(*actor);
     if (fingerprint) {
         stored.matched_path = fingerprint->path;
