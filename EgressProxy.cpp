@@ -1281,6 +1281,11 @@ struct Session {
                 continue;
             if (!stored.actor_identity) continue;
             if (closed_proxy.count({stored.matched_path, *stored.actor_identity})) continue;
+            // No descriptor was observed for this file. Do not invent a close
+            // from the proxy body alone.
+            auto noted = accesses.find(stored.matched_path);
+            if (noted == accesses.end()) continue;
+            if (noted->second.actor.process.node.identity == *stored.actor_identity) continue;
             emit_proxy(Access{stored.event_id, stored.matched_path, *stored.actor});
         }
     }
