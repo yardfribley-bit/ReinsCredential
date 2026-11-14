@@ -189,9 +189,9 @@ public enum ClosureExplanation {
     ]
 
     public static func key(basis: String, outcome: String) -> String {
+        if basis.hasPrefix("gzip:") || outcome.hasPrefix("gzip:") { return "basis.gzip" }
         let haystack = outcome + "\n" + basis
         for item in matchOrder where haystack.contains(item.token) { return item.key }
-        if basis.hasPrefix("gzip:") || outcome.hasPrefix("gzip:") { return "basis.gzip" }
         if let mapped = basisKeys[basis] { return mapped }
         return "basis.unknown"
     }
