@@ -42,6 +42,23 @@ final class LiveRecordWindowTests: XCTestCase {
         XCTAssertNotEqual(chain?.verdict, .notVisible)
     }
 
+    func testClosuresFromBeforeThisRunStayOutOfTheChain() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let stale = record("sensitive_access_closed", path: "/tmp/canary.txt", verdict: "uploaded",
+                           destination: "192.168.1.11:53431", basis: "flow_txbytes",
+                           outcome: "flow_txbytes;left_host;tx_sum=400",
+                           at: start.addingTimeInterval(-86_400), name: "RCQATLSHello")
+        let current = record("sensitive_access_closed", path: "/tmp/canary.txt", verdict: "attempted",
+                             destination: "192.168.1.11:54530", basis: "flow_attempt",
+                             outcome: "flow_attempt;connect_not_completed",
+                             at: start.addingTimeInterval(30), name: "RCQARefused")
+        let sets = LiveRecordWindow.merge(events: [], chain: [stale], incoming: [stale, current],
+                                           notBefore: start.addingTimeInterval(-2))
+        XCTAssertFalse(sets.chain.contains { $0.id == stale.id })
+        XCTAssertTrue(sets.chain.contains { $0.id == current.id })
+        XCTAssertEqual(sets.chain.filter { $0.sourceType == "sensitive_access_closed" }.count, 1)
+    }
+
     private func record(_ type: String, path: String, verdict: String = "", destination: String = "",
                         basis: String = "", outcome: String = "", at: Date = Date(timeIntervalSince1970: 1_700_000_000),
                         name: String = "RCQAUpload") -> EvidenceRecord {

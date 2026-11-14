@@ -222,12 +222,15 @@ final class RuntimeController: ObservableObject {
         do {
             let batch = try await reader.poll(url: paths.evidenceURL)
             let egressRecords = (try? await egressReader.poll(url: paths.egressEvidenceURL).records) ?? []
+            let statusURL = paths.statusURL
+            let status = try? await Task.detached { try RuntimeStatus.load(from: statusURL) }.value
+            let runStart = status?.monitorStartedAt?.addingTimeInterval(-2)
             let incoming = batch.records + egressRecords
-            if !incoming.isEmpty {
-                let merged = LiveRecordWindow.merge(events: records, chain: chainRecords, incoming: incoming)
+            if !incoming.isEmpty || runStart != nil {
+                let merged = LiveRecordWindow.merge(events: records, chain: chainRecords, incoming: incoming, notBefore: runStart)
                 if !sameIDs(records, merged.events) { records = merged.events }
                 if !sameIDs(chainRecords, merged.chain) { chainRecords = merged.chain }
-                notifyIfNeeded(incoming, now: now)
+                if !incoming.isEmpty { notifyIfNeeded(incoming, now: now) }
             }
             if rejectedCount != batch.rejectedCount { rejectedCount = batch.rejectedCount }
             if lastUpdate != batch.latestCoverage?.timestamp { lastUpdate = batch.latestCoverage?.timestamp }
@@ -240,8 +243,9 @@ final class RuntimeController: ObservableObject {
                 return
             case .enabled: break
             }
-            let statusURL = paths.statusURL
-            let status = try await Task.detached { try RuntimeStatus.load(from: statusURL) }.value
+            guard let status else {
+                throw RuntimeFileError.invalidConfiguration("status unavailable")
+            }
             awaitingStatusSince = nil
             guard status.isFresh(at: now) else {
                 publish(state: .failed, status: L10n.tr("status.stale"))

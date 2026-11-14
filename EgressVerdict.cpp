@@ -1,4 +1,5 @@
 #include "EgressVerdict.h"
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cctype>
 #include <cstring>
@@ -142,8 +143,11 @@ uint64_t ApplicationBytes(const LiveFlow& flow, uint64_t delta) {
 }
 bool HandshakeOnly(const LiveFlow& flow, uint64_t delta, uint64_t lower) {
     if (flow.plaintext_http) return false;
+    // Application data is a TLS record of type 23 (or a parsed length). Handshake
+    // records alone, however large, are not a body. The fixed 1024-byte slack is
+    // not what decides this.
+    if (flow.tls_handshake && !(flow.tls_app_data && flow.tls_app_bytes > 0)) return true;
     if (flow.tls_app_data && flow.tls_app_bytes > 0) return false;
-    if (flow.tls_handshake && !flow.tls_app_data) return true;
     return flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow) && delta > 0 &&
         ApplicationBytes(flow, delta) < lower;
 }
@@ -166,6 +170,66 @@ LiveClose Defer(UploadVerdict verdict) {
 }
 } // namespace
 
+TlsRecordView ClassifyTlsRecords(const uint8_t* data, size_t size) noexcept {
+    TlsRecordView view;
+    if (!data) return view;
+    size_t index = 0;
+    while (index + 5 <= size && data[index + 1] == 0x03) {
+        const uint8_t type = data[index];
+        const size_t length = (static_cast<size_t>(data[index + 3]) << 8) | data[index + 4];
+        const bool whole = index + 5 + length <= size;
+        const uint8_t* body = data + index + 5;
+        const size_t body_len = whole ? length : size - (index + 5);
+        const size_t step = whole ? 5 + length : size - index;
+        if (type == 20 || type == 21) {
+            if (!whole) break;
+            index += step;
+            continue;
+        }
+        if (type == 22) {
+            view.saw_handshake = true;
+            view.handshake_bytes += body_len;
+            if (view.sni.empty() && body_len > 38 && body[0] == 1) {
+                size_t cursor = 38;
+                if (cursor < body_len) {
+                    const size_t session = body[cursor];
+                    cursor += 1 + session;
+                    if (cursor + 2 <= body_len) {
+                        const size_t ciphers = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
+                        cursor += 2 + ciphers;
+                        if (cursor < body_len) {
+                            const size_t compression = body[cursor];
+                            cursor += 1 + compression;
+                            if (cursor + 2 <= body_len) {
+                                const size_t extensions = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
+                                cursor += 2;
+                                const size_t end = std::min(body_len, cursor + extensions);
+                                while (cursor + 4 <= end) {
+                                    const size_t kind = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
+                                    const size_t ext = (static_cast<size_t>(body[cursor + 2]) << 8) | body[cursor + 3];
+                                    cursor += 4;
+                                    if (cursor + ext > end) break;
+                                    if (kind == 0 && ext >= 5) {
+                                        const size_t name_len = (static_cast<size_t>(body[cursor + 3]) << 8) | body[cursor + 4];
+                                        if (name_len > 0 && name_len < 253 && cursor + 5 + name_len <= cursor + ext)
+                                            view.sni.assign(reinterpret_cast<const char*>(body + cursor + 5), name_len);
+                                    }
+                                    cursor += ext;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (type == 23) {
+            view.saw_app_data = true;
+            view.app_bytes += body_len;
+        } else break;
+        if (!whole) break;
+        index += step;
+    }
+    return view;
+}
 LiveClose CloseLiveAccess(const LiveAccessView& view) {
     LiveClose result;
     if (!view.agent_visible) {
@@ -347,6 +411,23 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
     result.detail = "agent_seen;file_open_observed;every_offhost_channel_measured;aggregate_below_lower_bound;" +
         SumText(sum, lower, view.file_bytes) + ";app_settings_not_modified";
     return result;
+}
+bool ShouldEmitCloseUpdate(int prior_rank, const std::string& prior_outcome, const LiveClose& next) noexcept {
+    int rank = 0;
+    switch (next.verdict) {
+    case UploadVerdict::Uploaded: rank = 4; break;
+    case UploadVerdict::Attempted: rank = 3; break;
+    case UploadVerdict::NotVisible: rank = 2; break;
+    case UploadVerdict::NotFound: rank = 1; break;
+    }
+    if (prior_rank <= 0) return true;
+    if (rank < prior_rank) return false;
+    // The same upload ticking upward (1615 then 1646) is one session.
+    if (rank == prior_rank && next.verdict == UploadVerdict::Uploaded) return false;
+    if (rank == prior_rank && prior_outcome == next.transfer_outcome) return false;
+    if (rank == prior_rank && prior_outcome.find("loopback_not_off_host") != std::string::npos &&
+        next.transfer_outcome.find("loopback_not_off_host") == std::string::npos) return false;
+    return true;
 }
 uint64_t InitialFlowBaseline(bool process_already_sampled, uint64_t tx_bytes, uint64_t window_upper) noexcept {
     if (process_already_sampled) return 0;

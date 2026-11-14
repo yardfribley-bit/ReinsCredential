@@ -1,7 +1,9 @@
 #include "EgressVerdict.h"
 #include <cassert>
+#include <cstdint>
 #include <iostream>
 #include <string>
+#include <vector>
 
 using namespace agentsec;
 
@@ -290,6 +292,66 @@ int main() {
     assert(measured_idle.verdict == UploadVerdict::NotFound);
     assert(measured_idle.destination == "192.168.1.11:53429");
     assert(measured_idle.transfer_outcome == "live_agent_observed_no_upload");
+
+    auto record = [](uint8_t type, size_t payload) {
+        std::vector<uint8_t> bytes(5 + payload);
+        bytes[0] = type;
+        bytes[1] = 0x03;
+        bytes[2] = 0x03;
+        bytes[3] = static_cast<uint8_t>((payload >> 8) & 0xff);
+        bytes[4] = static_cast<uint8_t>(payload & 0xff);
+        return bytes;
+    };
+    // Handshake records only, about 1646 bytes on the wire, no content type 23.
+    const auto hello_bytes = record(22, 1641);
+    assert(hello_bytes.size() == 1646);
+    const auto hello_records = ClassifyTlsRecords(hello_bytes.data(), hello_bytes.size());
+    assert(hello_records.saw_handshake);
+    assert(!hello_records.saw_app_data);
+    assert(hello_records.app_bytes == 0);
+    assert(hello_records.handshake_bytes == 1641);
+    LiveFlow handshake_only = Tcp("192.168.1.11:54531", 0, hello_bytes.size(), true);
+    handshake_only.tls_handshake = hello_records.saw_handshake;
+    handshake_only.tls_app_data = hello_records.saw_app_data;
+    handshake_only.tls_app_bytes = hello_records.app_bytes;
+    const auto hello_close = CloseLiveAccess(Seen(canary, {handshake_only}));
+    assert(hello_close.verdict == UploadVerdict::NotVisible);
+    assert(hello_close.verdict != UploadVerdict::Uploaded);
+    assert(hello_close.verdict != UploadVerdict::NotFound);
+    assert(hello_close.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(hello_close.destination == "192.168.1.11:54531");
+    assert(hello_close.match_basis != "flow_txbytes");
+    LiveClose second_upload;
+    second_upload.verdict = UploadVerdict::Uploaded;
+    second_upload.transfer_outcome = "flow_txbytes;left_host;tx_sum=1646";
+    assert(!ShouldEmitCloseUpdate(4, "flow_txbytes;left_host;tx_sum=1615", second_upload));
+    assert(ShouldEmitCloseUpdate(0, "", second_upload));
+    // A real application-data record still closes uploaded. 2085 is 1024+37+1024.
+    const auto app_record = record(23, 2085);
+    const auto app_records = ClassifyTlsRecords(app_record.data(), app_record.size());
+    assert(app_records.saw_app_data);
+    assert(app_records.app_bytes == 2085);
+    LiveFlow with_body = Tcp("192.168.1.11:54532", 0, 1646 + app_record.size(), true);
+    with_body.tls_handshake = true;
+    with_body.tls_app_data = true;
+    with_body.tls_app_bytes = app_records.app_bytes;
+    const auto body_close = CloseLiveAccess(Seen(canary, {with_body}));
+    assert(body_close.verdict == UploadVerdict::Uploaded);
+    assert(body_close.match_basis == "flow_txbytes");
+    assert(body_close.destination == "192.168.1.11:54532");
+    // Change-cipher-spec before application data must not hide the body.
+    auto prefixed = record(20, 1);
+    prefixed.insert(prefixed.end(), app_record.begin(), app_record.end());
+    const auto after_ccs = ClassifyTlsRecords(prefixed.data(), prefixed.size());
+    assert(after_ccs.saw_app_data && after_ccs.app_bytes == 2085);
+
+    assert(FastDiscoveryInspect(true, false, false, false));
+    assert(!FastDiscoveryInspect(false, false, false, false));
+    assert(!FastDiscoveryInspect(true, true, true, false));
+    assert(!FastDiscoveryInspect(false, true, false, true));
+    assert(SlowDiscoveryInspect(false, true, 0, 1));
+    assert(!SlowDiscoveryInspect(false, true, 1, 1));
+    assert(!SlowDiscoveryInspect(true, true, 0, 1));
 
     std::cout << "PASS: live-agent flow verdicts\n";
     return 0;

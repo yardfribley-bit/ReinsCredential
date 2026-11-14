@@ -490,11 +490,11 @@ void AgentMonitor::Scan() {
         for (size_t item = 0; item < processes.size(); ++item) {
             const auto& seen = processes[item];
             const auto identity = seen.actor.process.node.identity;
-            const bool known = seen.actor.classification == "known_agent_candidate";
             const auto previous = seen_.find(identity);
             const bool fresh = previous == seen_.end();
             const bool touched = previous != seen_.end() && previous->second.touched_sensitive;
-            const bool due = fresh || known || touched || (previous != seen_.end() && previous->second.idle_skips == 0);
+            // Known-agent name alone does not force a descriptor walk every pass.
+            const bool due = fresh || touched || (previous != seen_.end() && previous->second.idle_skips == 0);
             const auto& executable = seen.actor.process.node.executable;
             const bool system_path = executable.rfind("/System/", 0) == 0 || executable.rfind("/usr/libexec/", 0) == 0 ||
                 executable.rfind("/usr/sbin/", 0) == 0 || seen.actor.process.node.identity.pid == 1;
@@ -515,12 +515,16 @@ void AgentMonitor::Scan() {
                 const auto item = index.fetch_add(1);
                 if (item >= processes.size()) break;
                 if (skip[item]) continue;
-                const bool peers = processes[item].actor.classification == "known_agent_candidate";
+                // Sockets are expanded once a sensitive file is open. Idle known
+                // agents do not take a TCP byte-count dump on every pass.
+                const bool peers = false;
                 activities[item] = cache_.Inspect(processes[item].actor.process.node, roots_, peers);
             }
         }));
     for (auto& worker : workers) worker.get();
-    stats_ = {}; stats_.processes = processes.size();
+    uint64_t descriptor_scans = 0;
+    for (size_t item = 0; item < skip.size(); ++item) if (!skip[item]) ++descriptor_scans;
+    stats_ = {}; stats_.processes = processes.size(); stats_.descriptor_scans = descriptor_scans;
     std::map<ProcessIdentity, Seen> next;
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -538,6 +542,7 @@ void AgentMonitor::Scan() {
                     seen.idle_skips = previous->second.idle_skips > 0 ? static_cast<uint8_t>(previous->second.idle_skips - 1) : 0;
                     seen.retirement_attempts = previous->second.retirement_attempts;
                 }
+                stats_.candidates += known;
                 next.emplace(identity, std::move(seen));
                 continue;
             }
@@ -604,7 +609,7 @@ void AgentMonitor::Scan() {
                 }
             }
             seen.touched_sensitive = !activity.sensitive_files.empty() || (previous != seen_.end() && previous->second.touched_sensitive);
-            seen.idle_skips = known || seen.touched_sensitive ? 0 : 3;
+            seen.idle_skips = seen.touched_sensitive ? 0 : 3;
             next.emplace(identity, std::move(seen));
         }
         for (const auto& pair : seen_) if (!next.count(pair.first)) {

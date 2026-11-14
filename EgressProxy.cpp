@@ -575,6 +575,8 @@ struct Session {
     bool watch_live = false;
     std::unique_ptr<TlsIntercept> tls;
     std::map<pid_t, MonoClock::time_point> inspected_at;
+    MonoClock::time_point last_slow_inspect{};
+    MonoClock::time_point last_launched_sample{};
     size_t rescan_cursor = 0;
     uint16_t proxy_port = 0;
     bool tree_truncated = false;
@@ -752,33 +754,35 @@ struct Session {
     }
     void RememberFlow(LiveProc& proc, const SocketFlow& flow, bool process_already_sampled, uint64_t window_upper) {
         if (flow.flow_id.empty()) return;
-        auto& memory = proc.flows[flow.flow_id];
+        SocketFlow captured = flow;
+        AttachCapturedPayload(captured);
+        auto& memory = proc.flows[captured.flow_id];
         if (memory.destination.empty()) {
-            memory.destination = flow.destination;
-            memory.loopback = flow.loopback;
-            memory.udp = flow.udp;
-            memory.baseline = InitialFlowBaseline(process_already_sampled, flow.tx_bytes, window_upper);
+            memory.destination = captured.destination;
+            memory.loopback = captured.loopback;
+            memory.udp = captured.udp;
+            memory.baseline = InitialFlowBaseline(process_already_sampled, captured.tx_bytes, window_upper);
             memory.preexisting = !process_already_sampled && memory.baseline > 0;
         }
-        if (flow.bytes_known) memory.bytes_known = true;
-        if (flow.loopback) memory.loopback = true;
-        if (memory.sni.empty()) memory.sni = flow.sni;
-        if (flow.tls_handshake) memory.tls_handshake = true;
-        if (flow.tls_app_data) {
+        if (captured.bytes_known) memory.bytes_known = true;
+        if (captured.loopback) memory.loopback = true;
+        if (memory.sni.empty()) memory.sni = captured.sni;
+        if (captured.tls_handshake) memory.tls_handshake = true;
+        if (captured.tls_app_data) {
             memory.tls_app_data = true;
-            memory.tls_app_bytes = std::max(memory.tls_app_bytes, flow.tls_app_bytes);
+            memory.tls_app_bytes = std::max(memory.tls_app_bytes, captured.tls_app_bytes);
         }
-        if (flow.plaintext_http) memory.plaintext_http = true;
-        memory.latest = std::max(memory.latest, flow.tx_bytes);
-        (void)PeerName(flow.destination);
+        if (captured.plaintext_http) memory.plaintext_http = true;
+        memory.latest = std::max(memory.latest, captured.tx_bytes);
+        (void)PeerName(captured.destination);
         memory.seen_now = true;
         memory.closed = false;
         // BSD TCP states: ESTABLISHED is 4, TIME_WAIT is 10. SYN_SENT is 2.
         // State 0 is a refused or reset TCP socket that never got a PCB.
-        if (flow.tcp_state >= 4 && flow.tcp_state <= 10) {
+        if (captured.tcp_state >= 4 && captured.tcp_state <= 10) {
             memory.established = true;
             memory.failed = false;
-        } else if (flow.bytes_known && !flow.loopback && flow.tcp_state == 0) {
+        } else if (captured.bytes_known && !captured.loopback && captured.tcp_state == 0) {
             memory.failed = true;
         }
     }
@@ -831,10 +835,7 @@ struct Session {
         auto& prior_outcome = proc.emitted_outcome[key];
         // Same-rank updates still matter: a file can be open before the send
         // starts, and the first close is then "no upload" until the flow appears.
-        if (rank < prior) return;
-        if (rank == prior && prior_outcome == closed.transfer_outcome) return;
-        if (rank == prior && prior_outcome.find("loopback_not_off_host") != std::string::npos &&
-            closed.transfer_outcome.find("loopback_not_off_host") == std::string::npos) return;
+        if (!ShouldEmitCloseUpdate(prior, prior_outcome, closed)) return;
         EvidenceRecord record;
         record.type = "sensitive_access_closed";
         record.actor_process = proc.actor;
@@ -1078,15 +1079,20 @@ struct Session {
     void DiscoverHolders() {
         if (!watch_live) return;
         source.StartFlowWatch();
+        const auto now = MonoClock::now();
         auto hot = source.TakeHotPids();
         std::sort(hot.begin(), hot.end(), [](pid_t left, pid_t right) { return left > right; });
         std::vector<pid_t> later;
-        size_t hot_budget = 6;
+        bool took_hot = false;
         for (const auto pid : hot) {
-            if (WatchingPid(pid)) continue;
-            if (!hot_budget) { later.push_back(pid); continue; }
-            --hot_budget;
-            ConsiderPid(pid);
+            const auto seen = inspected_at.find(pid);
+            const bool recent = seen != inspected_at.end() && now - seen->second < std::chrono::seconds(1);
+            if (!took_hot && FastDiscoveryInspect(false, true, WatchingPid(pid), recent)) {
+                ConsiderPid(pid);
+                took_hot = true;
+            } else if (!WatchingPid(pid)) {
+                later.push_back(pid);
+            }
         }
         if (!later.empty()) source.RestoreHotPids(later);
         int estimate = proc_listallpids(nullptr, 0);
@@ -1103,10 +1109,11 @@ struct Session {
             fresh.push_back(pid);
         }
         std::sort(fresh.begin(), fresh.end(), [](pid_t left, pid_t right) { return left > right; });
-        size_t budget = 12;
+        size_t fresh_budget = 4;
         for (const auto pid : fresh) {
-            if (!budget || watched.size() >= 64) break;
-            --budget;
+            if (!fresh_budget || watched.size() >= 64) break;
+            if (!FastDiscoveryInspect(true, false, WatchingPid(pid), false)) continue;
+            --fresh_budget;
             ConsiderPid(pid);
         }
         if (inspected_at.size() > 8192) {
@@ -1119,20 +1126,29 @@ struct Session {
         std::vector<pid_t> rotation;
         rotation.reserve(inspected_at.size());
         for (const auto& item : inspected_at) if (!WatchingPid(item.first)) rotation.push_back(item.first);
-        const auto now = MonoClock::now();
-        size_t rotated = 0;
-        for (size_t n = 0; n < rotation.size() && rotated < 4 && budget && watched.size() < 64; ++n) {
+        const bool slow_due = last_slow_inspect.time_since_epoch().count() == 0 ||
+            now - last_slow_inspect >= std::chrono::milliseconds(500);
+        if (slow_due && !rotation.empty() && watched.size() < 64) {
             const auto pid = rotation[rescan_cursor % rotation.size()];
             ++rescan_cursor;
             const auto seen = inspected_at.find(pid);
-            if (seen == inspected_at.end() || now - seen->second < std::chrono::seconds(5)) continue;
-            ConsiderPid(pid);
-            ++rotated;
+            const bool quiet = seen == inspected_at.end() || now - seen->second >= std::chrono::seconds(5);
+            if (SlowDiscoveryInspect(WatchingPid(pid), quiet, 0, 1)) {
+                ConsiderPid(pid);
+                last_slow_inspect = now;
+            }
         }
     }
     void SampleWatched() {
         DiscoverHolders();
-        for (const auto& root : watched) SampleTree(root.pid, root.identity, root.launched);
+        const auto now = MonoClock::now();
+        const bool sample_launched = last_launched_sample.time_since_epoch().count() == 0 ||
+            now - last_launched_sample >= std::chrono::seconds(1);
+        if (sample_launched) last_launched_sample = now;
+        for (const auto& root : watched) {
+            if (root.launched && !sample_launched) continue;
+            SampleTree(root.pid, root.identity, root.launched);
+        }
         FlushLive();
     }
     std::optional<ActorProcess> AttributeOne(uint16_t client_port, pid_t root, const ProcessIdentity& identity) {
@@ -1204,18 +1220,26 @@ struct Session {
             const auto& access = pair.second;
             // Already-running agents are closed from TCP send counters in FlushLive.
             // A body that actually entered this proxy is still an exact-bytes close.
-            if (!LaunchedActor(access.actor) && !AnyProxyMatch(access.path)) continue;
+            const bool launched_actor = LaunchedActor(access.actor);
+            if (!launched_actor && !AnyProxyMatch(access.path)) continue;
             std::vector<EgressObservation> view;
             std::vector<std::string> related{access.event_id};
             std::string match_kind, digest;
+            bool covered_match = false;
             for (const auto& stored : observations) {
                 auto item = stored.observation;
-                item.content_match = !stored.matched_path.empty() && stored.matched_path == access.path;
-                if (item.content_match) { match_kind = stored.match_kind; digest = ""; }
+                const bool same_file = !stored.matched_path.empty() && stored.matched_path == access.path;
+                const bool this_actor = !stored.actor_identity || ProxyBodyCoversLiveActor(
+                    *stored.actor_identity, stored.launched_tree, access.actor.process.node.identity, launched_actor);
+                // The startup canary's body match must not close a different process
+                // that later opens the same file (a refused connect is not that upload).
+                item.content_match = same_file && stored.observation.content_match && this_actor;
+                if (item.content_match) { match_kind = stored.match_kind; digest = ""; covered_match = true; }
                 view.push_back(item);
                 if (!stored.event_id.empty()) related.push_back(stored.event_id);
             }
             for (const auto& version : versions) if (version.path == access.path) digest = version.sha256;
+            if (!launched_actor && !covered_match) continue;
             const auto closed = CloseAccess(egress_watched, view);
             EvidenceRecord record;
             record.type = "sensitive_access_closed";

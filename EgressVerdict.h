@@ -110,9 +110,21 @@ struct LiveClose {
 // Sent-byte slack above the registered file size. Request framing fits; a
 // multi-megabyte unrelated stream does not match a small file.
 constexpr uint64_t kFlowTxSlack = 65536;
-// Client TLS flight with no application data. Observed handshake-only sends
-// were 206 and 299 bytes. Bytes at or below this allowance do not prove a body.
+// Kept only so a finished send that raced the first sample is not erased.
+// It is not a body detector: handshake records are classified by content type.
 constexpr uint64_t kTlsHandshakeAllowance = 1024;
+
+// TLS records on the wire. Type 22 is a handshake. Type 23 is application data.
+// Change-cipher-spec and alerts are skipped. A handshake with no type 23 has
+// no body, however many bytes the records add up to.
+struct TlsRecordView {
+    bool saw_handshake = false;
+    bool saw_app_data = false;
+    uint64_t handshake_bytes = 0;
+    uint64_t app_bytes = 0;
+    std::string sni;
+};
+TlsRecordView ClassifyTlsRecords(const uint8_t* data, size_t size) noexcept;
 
 // Verdict for an agent that was already running.
 // 已上传 requires the tree's measured off-host send, summed across TCP and
@@ -126,6 +138,22 @@ constexpr uint64_t kTlsHandshakeAllowance = 1024;
 // pick a different verdict.
 LiveClose CloseLiveAccess(const LiveAccessView& view);
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path);
+
+// The fast discovery pass does not re-inspect a process it already saw.
+// A new pid or a newly hot pid is the only fast-path inspect. Already-watched
+// trees are sampled on their own cadence, not by this pass.
+inline bool FastDiscoveryInspect(bool is_new, bool is_hot, bool already_watched, bool inspected_recently) noexcept {
+    if (already_watched || inspected_recently) return false;
+    return is_new || is_hot;
+}
+// At most `cap` previously seen pids are re-inspected, and only after a quiet gap.
+inline bool SlowDiscoveryInspect(bool already_watched, bool quiet_long_enough, uint32_t taken, uint32_t cap) noexcept {
+    return !already_watched && quiet_long_enough && taken < cap;
+}
+
+// A second close of the same upload is not a new session. A stronger verdict
+// may still replace a weaker one.
+bool ShouldEmitCloseUpdate(int prior_rank, const std::string& prior_outcome, const LiveClose& next) noexcept;
 
 // Baseline for a flow the first time this process sample sees it.
 // A flow that appears after we were already sampling counts from zero.

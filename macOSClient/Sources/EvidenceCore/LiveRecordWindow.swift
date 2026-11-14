@@ -35,7 +35,8 @@ public enum LiveRecordWindow {
 
     /// `events` and `chain` are newest-first. `incoming` is oldest-first, as the reader returns it.
     public static func merge(events: [EvidenceRecord], chain: [EvidenceRecord], incoming: [EvidenceRecord],
-                             eventCapacity: Int = eventCapacity, chainCapacity: Int = chainCapacity) -> LiveRecordSets {
+                             eventCapacity: Int = eventCapacity, chainCapacity: Int = chainCapacity,
+                             notBefore: Date? = nil) -> LiveRecordSets {
         let eventLimit = max(1, eventCapacity)
         let chainLimit = max(1, chainCapacity)
         var seen = Set<UUID>()
@@ -50,13 +51,19 @@ public enum LiveRecordWindow {
         var chainSeen = Set<UUID>()
         var chainCombined: [EvidenceRecord] = []
         chainCombined.reserveCapacity(chain.count + incoming.count)
-        for record in incoming.reversed() where protectsChain(record) && chainSeen.insert(record.id).inserted {
+        for record in incoming.reversed() where protectsChain(record) && inCurrentRun(record, notBefore: notBefore) && chainSeen.insert(record.id).inserted {
             chainCombined.append(record)
         }
-        for record in chain where protectsChain(record) && chainSeen.insert(record.id).inserted {
+        for record in chain where protectsChain(record) && inCurrentRun(record, notBefore: notBefore) && chainSeen.insert(record.id).inserted {
             chainCombined.append(record)
         }
         return LiveRecordSets(events: Array(combined.prefix(eventLimit)),
                               chain: Array(chainCombined.prefix(chainLimit)))
+    }
+
+    /// Closures from before this monitor run are not current-session results.
+    static func inCurrentRun(_ record: EvidenceRecord, notBefore: Date?) -> Bool {
+        guard let notBefore else { return true }
+        return record.timestamp >= notBefore
     }
 }

@@ -34,6 +34,8 @@ struct ActivityScanStats {
     uint64_t retirement_pending = 0, retirement_retry_exhausted = 0;
     uint64_t cooccurrence_pairs_truncated = 0;
     uint64_t fast_fd_hits = 0, access_time_events = 0, inferred_accesses = 0;
+    // Descriptor walks actually performed by this Scan. An idle repeat stays at 0.
+    uint64_t descriptor_scans = 0;
 };
 class AgentMonitor {
 public:

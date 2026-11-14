@@ -83,7 +83,7 @@ std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
     static Cache cache;
     std::lock_guard<std::mutex> lock(cache.mu);
     const auto now = MonoClock::now();
-        if (cache.at.time_since_epoch().count() == 0 || now - cache.at > std::chrono::milliseconds(25)) {
+        if (cache.at.time_since_epoch().count() == 0 || now - cache.at > std::chrono::milliseconds(50)) {
         cache.at = now;
         cache.bytes.clear();
         size_t size = 0;
@@ -190,6 +190,9 @@ public:
         const auto colon = split == std::string::npos ? std::string::npos : key.rfind(':', split);
         if (colon == std::string::npos || split == std::string::npos) return {};
         found = hints_.find("*:" + key.substr(colon + 1));
+        if (found != hints_.end()) return found->second;
+        const auto remote = key.substr(split);
+        found = hints_.find(std::string("*") + remote);
         return found == hints_.end() ? Hint{} : found->second;
     }
 private:
@@ -204,53 +207,12 @@ private:
         if (hints_.size() > 4096) hints_.erase(hints_.begin());
     }
     static void ParseTls(const uint8_t* data, size_t size, Hint& hint) {
-        size_t index = 0;
-        while (index + 5 <= size && data[index + 1] == 0x03) {
-            const uint8_t type = data[index];
-            const size_t length = (static_cast<size_t>(data[index + 3]) << 8) | data[index + 4];
-            const bool whole = index + 5 + length <= size;
-            const uint8_t* body = data + index + 5;
-            const size_t body_len = whole ? length : size - (index + 5);
-            if (type == 22) {
-                hint.tls_handshake = true;
-                if (body_len > 38 && body[0] == 1) {
-                    size_t cursor = 38;
-                    if (cursor < body_len) {
-                        const size_t session = body[cursor];
-                        cursor += 1 + session;
-                        if (cursor + 2 <= body_len) {
-                            const size_t ciphers = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
-                            cursor += 2 + ciphers;
-                            if (cursor < body_len) {
-                                const size_t compression = body[cursor];
-                                cursor += 1 + compression;
-                                if (cursor + 2 <= body_len) {
-                                    const size_t extensions = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
-                                    cursor += 2;
-                                    const size_t end = std::min(body_len, cursor + extensions);
-                                    while (cursor + 4 <= end) {
-                                        const size_t kind = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
-                                        const size_t ext = (static_cast<size_t>(body[cursor + 2]) << 8) | body[cursor + 3];
-                                        cursor += 4;
-                                        if (cursor + ext > end) break;
-                                        if (kind == 0 && ext >= 5) {
-                                            const size_t name_len = (static_cast<size_t>(body[cursor + 3]) << 8) | body[cursor + 4];
-                                            if (name_len > 0 && name_len < 253 && cursor + 5 + name_len <= cursor + ext)
-                                                hint.sni.assign(reinterpret_cast<const char*>(body + cursor + 5), name_len);
-                                        }
-                                        cursor += ext;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if (type == 23) {
-                hint.tls_app_data = true;
-                hint.app_bytes += whole ? length : body_len;
-            } else break;
-            if (!whole) break;
-            index += 5 + length;
+        const auto view = ClassifyTlsRecords(data, size);
+        if (hint.sni.empty()) hint.sni = view.sni;
+        hint.tls_handshake = hint.tls_handshake || view.saw_handshake;
+        if (view.saw_app_data) {
+            hint.tls_app_data = true;
+            hint.app_bytes += view.app_bytes;
         }
     }
     void Ingest(const uint8_t* frame, size_t size, int dlt) {
@@ -295,6 +257,7 @@ private:
         std::lock_guard<std::mutex> lock(mu_);
         Remember(local + "|" + remote, hint);
         Remember("*:" + std::to_string(source_port) + "|" + remote, hint);
+        Remember(std::string("*|") + remote, hint);
     }
     int OpenInterface(const std::string& name, int& dlt) {
         int fd = -1;
@@ -315,7 +278,7 @@ private:
                 BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, 0x0800, 0, 3),
                 BPF_STMT(BPF_LD + BPF_B + BPF_ABS, 23),
                 BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, IPPROTO_TCP, 0, 1),
-                BPF_STMT(BPF_RET + BPF_K, 512),
+                BPF_STMT(BPF_RET + BPF_K, 2048),
                 BPF_STMT(BPF_RET + BPF_K, 0),
             };
             bpf_program filter{static_cast<u_int>(sizeof(program) / sizeof(program[0])), program};
@@ -329,7 +292,7 @@ private:
         ifaddrs* interfaces = nullptr;
         if (getifaddrs(&interfaces) == 0) {
             std::set<std::string> used;
-            for (auto* item = interfaces; item && devices.size() < 2; item = item->ifa_next) {
+            for (auto* item = interfaces; item && devices.size() < 4; item = item->ifa_next) {
                 if (!item->ifa_name || !item->ifa_addr || item->ifa_addr->sa_family != AF_INET) continue;
                 const std::string name = item->ifa_name;
                 if (!used.insert(name).second) continue;
@@ -340,9 +303,13 @@ private:
             }
             freeifaddrs(interfaces);
         }
+        if (devices.empty()) {
+            std::cerr << "egress payload capture unavailable\n";
+            return;
+        }
         std::vector<uint8_t> buffer(1 << 16);
         while (!stop_.load() && !devices.empty()) {
-            pollfd waits[2]{};
+            pollfd waits[4]{};
             for (size_t index = 0; index < devices.size(); ++index) {
                 waits[index].fd = devices[index].fd;
                 waits[index].events = POLLIN;
@@ -607,9 +574,13 @@ private:
             const auto provider = Read32(data, size, 24);
             if (srcref == 0 || sources_.count(srcref)) return;
             sources_[srcref].provider = provider;
-            pending_.push_front(srcref);
-            Request(1005, srcref);
-            Request(1004, srcref);
+            // Asking for every system flow in the same drain feeds the socket
+            // as fast as we read it. Describe a bounded batch; the rest wait.
+            if (query_budget_ > 0) {
+                --query_budget_;
+                Request(1005, srcref);
+                Request(1004, srcref);
+            } else if (pending_.size() < 128) pending_.push_back(srcref);
         } else if (type == 10002) {
             const auto srcref = Read64(data, size, 16);
             auto found = sources_.find(srcref);
@@ -675,7 +646,7 @@ private:
         if (source.have_tx) Publish(source.flow_id, source.tx);
         if (!source.sni.empty() && slot.sni.empty()) slot.sni = source.sni;
         ApplyPayloadHint(slot);
-        if (changed) hot_.insert(source.pid);
+        if (changed && (watch_.count(source.pid) || hot_.size() < 64)) hot_.insert(source.pid);
         if (retained_[source.pid].size() > 64) retained_[source.pid].erase(retained_[source.pid].begin());
     }
     void Drain(int budget_ms) {
@@ -722,6 +693,7 @@ private:
     void DrainNonblock() {
         if (fd_ < 0) return;
         std::array<uint8_t, 65536> buffer{};
+        int applied = 0;
         for (;;) {
             const auto count = ::recv(fd_, buffer.data(), buffer.size(), 0);
             if (count < 0) {
@@ -736,6 +708,7 @@ private:
                 if (length < 16 || offset + length > static_cast<size_t>(count)) break;
                 Apply(buffer.data() + offset, length);
                 offset += length;
+                if (++applied >= 64) return;
             }
         }
     }
@@ -817,14 +790,15 @@ private:
                 pollfd wait{};
                 wait.fd = fd;
                 wait.events = POLLIN;
-                ::poll(&wait, 1, 50);
+                ::poll(&wait, 1, 200);
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
             if (stop_.load()) break;
             std::lock_guard<std::mutex> lock(mu_);
+            query_budget_ = 32;
             DrainNonblock();
-            Pump(32);
+            Pump(16);
         }
     }
     void Refresh() {
@@ -848,6 +822,7 @@ private:
     std::thread thread_;
     MonoClock::time_point refreshed_{};
     std::set<pid_t> watch_;
+    int query_budget_ = 0;
     std::map<uint64_t, Source> sources_;
     std::deque<uint64_t> pending_;
     std::map<std::string, uint64_t> bytes_;
@@ -919,10 +894,36 @@ public:
         }
         ProcessSample sample;
         sample.enumeration_complete = static_cast<size_t>(count) < pids.size();
+        ++sample_generation_;
+        std::set<pid_t> live;
         for (size_t i = 0; i < std::min(pids.size(), static_cast<size_t>(count)); ++i) {
-            if (pids[i] <= 0) continue;
-            if (auto node = ReadNode(pids[i])) sample.processes.push_back(std::move(*node));
-            else ++sample.unavailable;
+            const auto pid = pids[i];
+            if (pid <= 0) continue;
+            live.insert(pid);
+            auto info = BsdInfo(pid);
+            if (!info) { ++sample.unavailable; continue; }
+            const auto identity = Identity(*info);
+            auto cached = idle_nodes_.find(pid);
+            const bool same = cached != idle_nodes_.end() && cached->second.node.identity == identity;
+            // New processes are read in full. A stable process re-reads its
+            // path on one pass out of eight, not on every 500 ms sample.
+            const bool refresh_path = !same || (sample_generation_ % 8) == (static_cast<uint32_t>(pid) % 8);
+            if (same && !refresh_path) {
+                cached->second.node.ppid = static_cast<pid_t>(info->pbi_ppid);
+                cached->second.confirmed = sample_generation_;
+                sample.processes.push_back(cached->second.node);
+                continue;
+            }
+            if (auto node = ReadNode(pid)) {
+                idle_nodes_[pid] = IdleNode{*node, sample_generation_};
+                sample.processes.push_back(std::move(*node));
+            } else ++sample.unavailable;
+        }
+        if ((sample_generation_ % 8) == 0) {
+            for (auto it = idle_nodes_.begin(); it != idle_nodes_.end(); ) {
+                if (!live.count(it->first)) it = idle_nodes_.erase(it);
+                else ++it;
+            }
         }
         return sample;
     }
@@ -935,6 +936,11 @@ public:
         return after && Same(node, *after) && static_cast<pid_t>(after->pbi_ppid) == ppid;
     }
     bool Validate(const ProcessNode& node) override {
+        auto cached = idle_nodes_.find(node.identity.pid);
+        if (cached != idle_nodes_.end() && cached->second.confirmed == sample_generation_ &&
+            cached->second.node.identity == node.identity && cached->second.node.executable == node.executable &&
+            cached->second.node.arguments == node.arguments)
+            return true;
         auto before = BsdInfo(node.identity.pid);
         if (!before || !Same(node, *before) || Executable(node.identity.pid) != node.executable) return false;
         auto after = BsdInfo(node.identity.pid);
@@ -1055,14 +1061,24 @@ public:
         }
         return result;
     }
+    struct IdleNode {
+        ProcessNode node;
+        uint32_t confirmed = 0;
+    };
+    std::map<pid_t, IdleNode> idle_nodes_;
+    uint32_t sample_generation_ = 0;
     std::vector<SocketFlow> RetainedFlows(pid_t pid) const override { return Ntstat().FlowsFor(pid); }
     std::vector<pid_t> TakeHotPids() override { return Ntstat().TakeHot(); }
     void RestoreHotPids(const std::vector<pid_t>& pids) override { Ntstat().RestoreHot(pids); }
     void WatchFlows(pid_t pid) override { Ntstat().Watch(pid); }
-    void StartFlowWatch() override { Ntstat().Start(); }
+    void StartFlowWatch() override {
+        Ntstat().Start();
+        PayloadHints::Shared().Arm();
+    }
 };
 } // namespace
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource() { return std::make_shared<DarwinProcessSource>(); }
+void AttachCapturedPayload(SocketFlow& flow) { ApplyPayloadHint(flow); }
 bool IsWithin(const std::string& path, const std::string& root) noexcept {
     return path == root || (path.size() > root.size() && path.compare(0, root.size(), root) == 0 && (root == "/" || path[root.size()] == '/'));
 }

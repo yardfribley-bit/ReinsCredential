@@ -31,6 +31,8 @@ struct SocketFlow {
     bool plaintext_http = false;
     uint64_t tls_app_bytes = 0;
 };
+// Re-read the capture cache. A handshake record can arrive after the first socket sample.
+void AttachCapturedPayload(SocketFlow& flow);
 struct ActivitySample {
     bool identity_validated = false, descriptors_complete = true;
     std::set<std::string> sensitive_files, socket_peers;
