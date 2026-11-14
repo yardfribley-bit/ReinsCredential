@@ -24,6 +24,9 @@ struct SocketFlow {
     bool udp = false;
     bool bytes_known = false;
     uint64_t tx_bytes = 0;
+    // The last smaller counter seen for this flow. A later reading can be
+    // handshake plus body; this keeps the earlier flight.
+    uint64_t tx_prior = 0;
     int tcp_state = -1;
     std::string sni;
     bool tls_handshake = false;

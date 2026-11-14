@@ -74,7 +74,7 @@ std::string PeerText(bool v4, const std::string& address, uint16_t port) {
 }
 // tcp_sockinfo has no cumulative send counter in the public SDK. The pcb list
 // does: snd_max - iss is the sequence span for that connection (SYN plus data).
-std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
+std::optional<uint64_t> TcpDataBytes(const std::string& flow_id, int max_age_ms = 50) {
     struct Cache {
         std::mutex mu;
         MonoClock::time_point at{};
@@ -83,7 +83,7 @@ std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
     static Cache cache;
     std::lock_guard<std::mutex> lock(cache.mu);
     const auto now = MonoClock::now();
-        if (cache.at.time_since_epoch().count() == 0 || now - cache.at > std::chrono::milliseconds(50)) {
+        if (cache.at.time_since_epoch().count() == 0 || now - cache.at > std::chrono::milliseconds(max_age_ms)) {
         cache.at = now;
         cache.bytes.clear();
         size_t size = 0;
@@ -174,11 +174,13 @@ public:
     };
     static PayloadHints& Shared() { static PayloadHints hints; return hints; }
     void Arm() {
+        active_.store(true);
         std::lock_guard<std::mutex> lock(mu_);
         if (started_) return;
         started_ = true;
         std::thread([this] { Loop(); }).detach();
     }
+    void Quiesce() { active_.store(false); }
     Hint Lookup(const std::string& flow_id) const {
         const auto bar = flow_id.find('|');
         if (bar == std::string::npos) return {};
@@ -216,6 +218,19 @@ private:
         }
     }
     void Ingest(const uint8_t* frame, size_t size, int dlt) {
+        // macOS attaches en0 as DLT_PKTAP. The ethernet parser never saw those
+        // frames, so a TLS body stayed invisible and the kernel sum was reported.
+        if (dlt == 149) {
+            if (size < 12) return;
+            uint32_t header = 0;
+            uint32_t next = 0;
+            std::memcpy(&header, frame, 4);
+            std::memcpy(&next, frame + 8, 4);
+            if (header < 12 || header >= size) return;
+            const int inner = next == DLT_EN10MB || next == DLT_NULL || next == DLT_RAW ? static_cast<int>(next) : DLT_RAW;
+            Ingest(frame + header, size - header, inner);
+            return;
+        }
         size_t offset = 0;
         if (dlt == DLT_EN10MB) {
             if (size < 14) return;
@@ -286,38 +301,50 @@ private:
         }
         return fd;
     }
-    void Loop() {
-        struct Device { int fd; int dlt; };
-        std::vector<Device> devices;
+    void OpenDevices(std::vector<std::pair<int, int>>& devices, bool& logged) {
         ifaddrs* interfaces = nullptr;
-        if (getifaddrs(&interfaces) == 0) {
-            std::set<std::string> used;
-            for (auto* item = interfaces; item && devices.size() < 4; item = item->ifa_next) {
-                if (!item->ifa_name || !item->ifa_addr || item->ifa_addr->sa_family != AF_INET) continue;
-                const std::string name = item->ifa_name;
-                if (!used.insert(name).second) continue;
-                if (name == "lo0" || name.rfind("awdl", 0) == 0 || name.rfind("llw", 0) == 0 || name.rfind("utun", 0) == 0) continue;
-                int dlt = 0;
-                const int fd = OpenInterface(name, dlt);
-                if (fd >= 0) devices.push_back({fd, dlt});
-            }
-            freeifaddrs(interfaces);
+        if (getifaddrs(&interfaces) != 0) return;
+        std::set<std::string> used;
+        for (auto* item = interfaces; item && devices.size() < 4; item = item->ifa_next) {
+            if (!item->ifa_name || !item->ifa_addr || item->ifa_addr->sa_family != AF_INET) continue;
+            const std::string name = item->ifa_name;
+            if (!used.insert(name).second) continue;
+            if (name == "lo0" || name.rfind("awdl", 0) == 0 || name.rfind("llw", 0) == 0 || name.rfind("utun", 0) == 0) continue;
+            int dlt = 0;
+            const int fd = OpenInterface(name, dlt);
+            if (fd >= 0) devices.push_back({fd, dlt});
         }
-        if (devices.empty()) {
+        freeifaddrs(interfaces);
+        if (devices.empty() && !logged) {
+            logged = true;
             std::cerr << "egress payload capture unavailable\n";
-            return;
         }
+    }
+    void Loop() {
+        std::vector<std::pair<int, int>> devices;
+        bool logged = false;
         std::vector<uint8_t> buffer(1 << 16);
-        while (!stop_.load() && !devices.empty()) {
+        while (!stop_.load()) {
+            if (!active_.load()) {
+                for (const auto& device : devices) if (device.first >= 0) ::close(device.first);
+                devices.clear();
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
+            if (devices.empty()) OpenDevices(devices, logged);
+            if (devices.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
             pollfd waits[4]{};
             for (size_t index = 0; index < devices.size(); ++index) {
-                waits[index].fd = devices[index].fd;
+                waits[index].fd = devices[index].first;
                 waits[index].events = POLLIN;
             }
             if (::poll(waits, static_cast<nfds_t>(devices.size()), 200) <= 0) continue;
             for (size_t index = 0; index < devices.size(); ++index) {
                 if (!(waits[index].revents & POLLIN)) continue;
-                const auto count = ::read(devices[index].fd, buffer.data(), buffer.size());
+                const auto count = ::read(devices[index].first, buffer.data(), buffer.size());
                 if (count <= 0) continue;
                 size_t offset = 0;
                 while (offset + sizeof(bpf_hdr) <= static_cast<size_t>(count)) {
@@ -325,17 +352,18 @@ private:
                     if (header->bh_hdrlen < sizeof(bpf_hdr) || offset + header->bh_hdrlen > static_cast<size_t>(count)) break;
                     const auto cap = static_cast<size_t>(header->bh_caplen);
                     if (offset + header->bh_hdrlen + cap > static_cast<size_t>(count)) break;
-                    Ingest(buffer.data() + offset + header->bh_hdrlen, cap, devices[index].dlt);
+                    Ingest(buffer.data() + offset + header->bh_hdrlen, cap, devices[index].second);
                     const auto step = BPF_WORDALIGN(header->bh_hdrlen + header->bh_caplen);
                     if (!step) break;
                     offset += step;
                 }
             }
         }
-        for (const auto& device : devices) ::close(device.fd);
+        for (const auto& device : devices) if (device.first >= 0) ::close(device.first);
     }
     mutable std::mutex mu_;
     bool started_ = false;
+    std::atomic<bool> active_{false};
     std::atomic<bool> stop_{false};
     std::map<std::string, Hint> hints_;
 };
@@ -409,12 +437,16 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         watch_.erase(pid);
         subscribed_.erase(pid);
-        if (watch_.empty()) ReleaseSocketLocked();
+        if (watch_.empty()) {
+            ReleaseSocketLocked();
+            PayloadHints::Shared().Quiesce();
+        }
     }
     void ReleaseIdle() {
         std::lock_guard<std::mutex> lock(mu_);
         watch_.clear();
         ReleaseSocketLocked();
+        PayloadHints::Shared().Quiesce();
     }
     void Watch(pid_t pid) {
         if (pid <= 0) return;
@@ -689,6 +721,7 @@ private:
         else {
             if (flow.bytes_known) {
                 slot.bytes_known = true;
+                if (flow.tx_bytes > slot.tx_bytes && slot.tx_bytes > 0) slot.tx_prior = slot.tx_bytes;
                 slot.tx_bytes = std::max(slot.tx_bytes, flow.tx_bytes);
             }
             if (flow.tcp_state >= 4) slot.tcp_state = flow.tcp_state;
@@ -1085,7 +1118,7 @@ public:
                     const auto& tcp = s.soi_proto.pri_tcp;
                     flow.udp = false;
                     flow.tcp_state = tcp.tcpsi_state;
-                    if (auto sent = TcpDataBytes(flow.flow_id)) {
+                    if (auto sent = TcpDataBytes(flow.flow_id, include_idle_peers ? 0 : 50)) {
                         flow.bytes_known = true;
                         flow.tx_bytes = *sent;
                     } else if (tcp.tcpsi_state < 4) {
@@ -1140,7 +1173,6 @@ public:
     void PollFlowCounts() override { Ntstat().PollWatched(); }
     void StartFlowWatch() override {
         Ntstat().Start();
-        PayloadHints::Shared().Arm();
     }
 };
 } // namespace

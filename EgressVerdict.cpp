@@ -330,6 +330,16 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
             if (!handshake) handshake = &flow;
             continue;
         }
+        // One kernel reading above the handshake ceiling still contains the
+        // handshake. Do not publish that sum as the body while the watch is
+        // open: a later sample can name the application bytes, or a prior
+        // reading can name the handshake flight.
+        if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && !flow.plaintext_http &&
+            !(flow.tls_app_data && flow.tls_app_bytes > 0) && !flow.preexisting &&
+            delta > view.file_bytes + kUnparsedHandshakeAboveFile && delta <= upper &&
+            !InUnparsedHandshakeBand(view.file_bytes, flow.tx_previous)) {
+            if (!view.window_settled) { defer_unparsed_handshake = true; continue; }
+        }
         if (flow.kind == LiveFlowKind::UdpOrQuic) {
             udp_sum += delta;
             if (!upload_peer && delta > 0) upload_peer = &flow;

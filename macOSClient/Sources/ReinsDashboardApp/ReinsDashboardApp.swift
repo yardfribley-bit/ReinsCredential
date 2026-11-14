@@ -108,23 +108,24 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        Self.clampAndFront()
+        Self.clampAndFront(activate: false)
     }
 
     static func restoreWindows(createIfMissing: Bool = false) {
         NSApp.unhide(nil)
-        NSApp.activate(ignoringOtherApps: true)
         let mains = NSApp.windows.filter { $0.canBecomeMain && $0.frame.width > 1 }
         if mains.isEmpty && createIfMissing {
             MainWindowOpener.shared.open?()
-            DispatchQueue.main.async { clampAndFront() }
+            DispatchQueue.main.async { clampAndFront(activate: true) }
             return
         }
-        clampAndFront()
+        clampAndFront(activate: true)
     }
 
-    static func clampAndFront() {
-        NSApp.activate(ignoringOtherApps: true)
+    static func clampAndFront(activate: Bool = true) {
+        if activate {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         for window in NSApp.windows where window.canBecomeMain {
             let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
                 ?? CGRect(x: 0, y: 0, width: WindowPlacement.preferred.width, height: WindowPlacement.preferred.height)

@@ -787,6 +787,9 @@ struct Session {
         if (memory.have_sample) memory.previous_tx = memory.latest;
         memory.have_sample = true;
         memory.latest = std::max(memory.latest, captured.tx_bytes);
+        if (captured.tx_prior > 0 && captured.tx_prior < memory.latest &&
+            (memory.previous_tx == 0 || memory.previous_tx >= memory.latest))
+            memory.previous_tx = captured.tx_prior;
         (void)PeerName(captured.destination);
         memory.seen_now = true;
         memory.closed = false;
@@ -974,7 +977,10 @@ struct Session {
         auto actor = Describe(source, node);
         // Subscribe before the descriptor walk so a UDP counter is already requested.
         if (!launched_tree) source.WatchFlows(node.identity.pid);
-        if (include_idle_peers) source.PollFlowCounts();
+        // The launched canary is closed from its proxied body. Re-opening the
+        // kernel subscription for it would keep egress awake after the last
+        // live tree has been dropped.
+        if (include_idle_peers && !launched_tree) source.PollFlowCounts();
         // Idle peers are expanded only while a sensitive file is open, or in
         // the short tail after it closes. Otherwise this is a vnode walk.
         auto activity = source.Inspect(node, roots, include_idle_peers);
@@ -1100,7 +1106,9 @@ struct Session {
         auto actor = Describe(source, *node);
         std::string label = node->name.empty() ? node->executable : node->name;
         if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
-        watched.push_back(Root{node->identity, node->identity.pid, false});
+        Root root{node->identity, node->identity.pid, false};
+        root.last_file = MonoClock::now();
+        watched.push_back(root);
         std::cerr << "egress live " << node->identity.pid << " " << label << "\n";
         return true;
     }
@@ -1196,6 +1204,7 @@ struct Session {
                 continue;
             }
             const bool file_open = FileOpenNow(root.identity);
+            if (!file_open && root.last_file.time_since_epoch().count() == 0) root.last_file = now;
             const bool have_close = root.last_file.time_since_epoch().count() != 0;
             const auto since_close = have_close
                 ? std::chrono::duration_cast<std::chrono::milliseconds>(now - root.last_file).count()

@@ -387,6 +387,25 @@ int main() {
     assert(grown_close.detail.find("body_after_handshake=2085") != std::string::npos);
     assert(grown_close.detail.find("tx_sum=2085") != std::string::npos);
 
+    // One sample that already includes the handshake and the body must not be
+    // published as that sum while the file is still open. Application bytes,
+    // once visible, are the upload size, and the handshake is named beside them.
+    LiveFlow lumped = Tcp("192.168.1.11:54832", 0, 3729, true);
+    auto lumped_open = Seen(canary, {lumped});
+    lumped_open.window_settled = false;
+    const auto lumped_wait = CloseLiveAccess(lumped_open);
+    assert(lumped_wait.defer);
+    assert(lumped_wait.verdict != UploadVerdict::Uploaded);
+    LiveFlow lumped_body = lumped;
+    lumped_body.tls_handshake = true;
+    lumped_body.tls_app_data = true;
+    lumped_body.tls_app_bytes = 2085;
+    const auto lumped_split = CloseLiveAccess(Seen(canary, {lumped_body}));
+    assert(lumped_split.verdict == UploadVerdict::Uploaded);
+    assert(lumped_split.detail.find("tx_sum=2085") != std::string::npos);
+    assert(lumped_split.detail.find("tls_app_bytes=2085") != std::string::npos);
+    assert(lumped_split.detail.find("handshake_tx=1644") != std::string::npos);
+    assert(lumped_split.detail.find("tx_sum=3729") == std::string::npos);
     // A handshake whose counter never reached the 1615-byte flight must still
     // not be called 未发现.
     LiveFlow short_handshake = Tcp("192.168.1.11:54831", 0, 20, true);
