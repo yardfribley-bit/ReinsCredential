@@ -971,6 +971,9 @@ struct Session {
     }
     void NoteFilesAndSockets(const ProcessNode& node, bool launched_tree, const ProcessIdentity& root, bool include_idle_peers) {
         auto actor = Describe(source, node);
+        // Subscribe before the descriptor walk so a UDP counter is already requested.
+        if (!launched_tree) source.WatchFlows(node.identity.pid);
+        if (include_idle_peers) source.PollFlowCounts();
         // Idle peers are expanded only while a sensitive file is open, or in
         // the short tail after it closes. Otherwise this is a vnode walk.
         auto activity = source.Inspect(node, roots, include_idle_peers);
@@ -980,7 +983,6 @@ struct Session {
         activity.identity_validated = true;
         for (const auto& path : activity.sensitive_files) NoteAccess(actor, path);
         if (!launched_tree) {
-            source.WatchFlows(node.identity.pid);
             ObserveLive(node, actor, activity, root);
             return;
         }

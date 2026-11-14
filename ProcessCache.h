@@ -58,6 +58,8 @@ public:
     virtual void RestoreHotPids(const std::vector<pid_t>& pids) { (void)pids; }
     // Egress asks for kernel flow notifications. The monitor does not.
     virtual void WatchFlows(pid_t pid) { (void)pid; }
+    // Read kernel counters for processes already being watched. UDP has no pcb byte count.
+    virtual void PollFlowCounts() {}
     // Start flow retention before the first sensitive file is seen.
     virtual void StartFlowWatch() {}
 };

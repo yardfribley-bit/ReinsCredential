@@ -387,6 +387,13 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         for (const auto pid : pids) if (pid > 0) hot_.insert(pid);
     }
+    void PollWatched() {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!Open()) return;
+        Pump(32);
+        Request(1004, ~uint64_t{0});
+        Drain(15);
+    }
     void Watch(pid_t pid) {
         if (pid <= 0) return;
         {
@@ -1090,6 +1097,7 @@ public:
     std::vector<pid_t> TakeHotPids() override { return Ntstat().TakeHot(); }
     void RestoreHotPids(const std::vector<pid_t>& pids) override { Ntstat().RestoreHot(pids); }
     void WatchFlows(pid_t pid) override { Ntstat().Watch(pid); }
+    void PollFlowCounts() override { Ntstat().PollWatched(); }
     void StartFlowWatch() override {
         Ntstat().Start();
         PayloadHints::Shared().Arm();
