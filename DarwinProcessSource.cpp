@@ -550,14 +550,33 @@ private:
         ::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &buffer, sizeof(buffer));
         const int flags = ::fcntl(fd_, F_GETFL, 0);
         if (flags >= 0) ::fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
+        EnsureUdpSubscription();
         return true;
+    }
+    void EnsureUdpSubscription() {
+        if (udp_subscribed_) return;
+        udp_subscribed_ = true;
+        constexpr uint64_t kFilter = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20 | 0x40 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 |
+            0x200000;
+        // UDP has no pcb send counter. Subscribing to UDP only, not every TCP flow.
+        for (const uint32_t provider : {4u, 5u}) {
+            AddAll message{};
+            message.context = 0x1000 + provider;
+            message.type = 1002;
+            message.length = sizeof(message);
+            message.flags = 1;
+            message.filter = kFilter;
+            message.provider = provider;
+            message.target_pid = -1;
+            if (!Send(&message, sizeof(message))) { ::close(fd_); fd_ = -1; failed_ = true; udp_subscribed_ = false; std::cerr << "egress ntstat unavailable\n"; return; }
+        }
     }
     void SubscribeLocked(pid_t pid) {
         if (pid <= 0 || !Open() || !subscribed_.insert(pid).second) return;
         if (SubscribeEveryProcessFlow()) pid = -1;
         constexpr uint64_t kFilter = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20 | 0x40 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 |
             0x200000;
-        for (const uint32_t provider : {2u, 3u, 4u, 5u, 8u}) {
+        for (const uint32_t provider : {2u, 3u, 8u}) {
             AddAll message{};
             message.context = 0x1000 + provider + static_cast<uint32_t>(pid);
             message.type = 1002;
@@ -841,6 +860,7 @@ private:
     MonoClock::time_point refreshed_{};
     std::set<pid_t> watch_;
     std::set<pid_t> subscribed_;
+    bool udp_subscribed_ = false;
     int query_budget_ = 0;
     std::map<uint64_t, Source> sources_;
     std::deque<uint64_t> pending_;
