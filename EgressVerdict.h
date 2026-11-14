@@ -65,8 +65,16 @@ struct LiveFlow {
     bool established = false;
     // Connect never completed, or the flow closed before a full off-host send.
     bool failed = false;
-    // Hostname from the socket or the network-statistics domain, when one was visible.
+    // Hostname from the socket, a TLS ClientHello, or a network-statistics domain.
     std::string sni;
+    // True when a captured send began with a TLS handshake record.
+    bool tls_handshake = false;
+    // True when a captured send contained a TLS application-data record.
+    bool tls_app_data = false;
+    // Sum of captured TLS application-data record lengths. Zero when unknown.
+    uint64_t tls_app_bytes = 0;
+    // True when a captured send began with an HTTP request line.
+    bool plaintext_http = false;
 };
 
 // What was visible for one already-running agent, or for one file it opened.
@@ -118,6 +126,13 @@ constexpr uint64_t kTlsHandshakeAllowance = 1024;
 // pick a different verdict.
 LiveClose CloseLiveAccess(const LiveAccessView& view);
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path);
+
+// Baseline for a flow the first time this process sample sees it.
+// A flow that appears after we were already sampling counts from zero.
+// On the first sample, a counter that still fits the file window counts from
+// zero so a send that completed before that sample is not erased. A larger
+// counter is preexisting bulk traffic and stays as the baseline.
+uint64_t InitialFlowBaseline(bool process_already_sampled, uint64_t tx_bytes, uint64_t window_upper) noexcept;
 
 // A proxy body match closes the process that sent it, and the launched tree
 // that sent it. A later process that opens the same file is not covered.

@@ -101,7 +101,11 @@ struct DashboardView: View {
         .onChange(of: store.agentFilter) { _ in store.reconcileSelection() }
         .onChange(of: runtime.selfTestResource) { _ in focusSelfTestIfNeeded() }
         .onReceive(runtime.$records) { records in
-            store.applyLive(records: records)
+            store.applyLive(records: records, chainRecords: runtime.chainRecords)
+            focusSelfTestIfNeeded()
+        }
+        .onReceive(runtime.$chainRecords) { chainRecords in
+            store.applyLive(records: runtime.records, chainRecords: chainRecords)
             focusSelfTestIfNeeded()
         }
         .fileExporter(isPresented: $exportPresented, document: exportDocument, contentType: exportType, defaultFilename: exportName) { _ in }
@@ -113,7 +117,7 @@ struct DashboardView: View {
         switch boardMode {
         case .chains:
             if let chain = store.selectedChain {
-                EvidenceChainDetailView(chain: chain, records: store.records,
+                EvidenceChainDetailView(chain: chain, records: store.recordsForChains,
                                         exportMarkdown: { exportSelected(markdown: true) },
                                         exportJSON: { exportSelected(markdown: false) })
             } else {

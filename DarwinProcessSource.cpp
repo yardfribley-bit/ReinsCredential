@@ -6,6 +6,9 @@
 #include <sys/kern_control.h>
 #include <sys/sys_domain.h>
 #include <sys/ioctl.h>
+#include <net/bpf.h>
+#include <net/if.h>
+#include <ifaddrs.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
@@ -31,6 +34,7 @@
 #include <array>
 #include <cstring>
 #include <filesystem>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -79,7 +83,7 @@ std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
     static Cache cache;
     std::lock_guard<std::mutex> lock(cache.mu);
     const auto now = MonoClock::now();
-        if (cache.at.time_since_epoch().count() == 0 || now - cache.at > std::chrono::milliseconds(8)) {
+        if (cache.at.time_since_epoch().count() == 0 || now - cache.at > std::chrono::milliseconds(25)) {
         cache.at = now;
         cache.bytes.clear();
         size_t size = 0;
@@ -142,6 +146,243 @@ std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
 // Per-flow UDP/QUIC (and userland TCP) send counters from the same kernel
 // control nettop uses. Private, version-sensitive, and optional: if the
 // control socket cannot be opened, callers keep the previous unmeasured path.
+std::string ProviderHostname(const uint8_t* data, size_t size) {
+    std::string best;
+    size_t index = 0;
+    while (index < size) {
+        const auto byte = data[index];
+        if (byte < 0x21 || byte > 0x7e) { ++index; continue; }
+        size_t end = index;
+        while (end < size && data[end] >= 0x21 && data[end] <= 0x7e) ++end;
+        if (end - index >= 4 && end - index <= 253 && std::memchr(data + index, '.', end - index)) {
+            std::string token(reinterpret_cast<const char*>(data + index), end - index);
+            while (!token.empty() && (token.back() == '.' || token.back() == ',')) token.pop_back();
+            if (IsProviderOrRelay(token) && token.size() > best.size()) best = std::move(token);
+        }
+        index = end;
+    }
+    return best;
+}
+class PayloadHints {
+public:
+    struct Hint {
+        std::string sni;
+        bool tls_handshake = false;
+        bool tls_app_data = false;
+        bool http = false;
+        uint64_t app_bytes = 0;
+    };
+    static PayloadHints& Shared() { static PayloadHints hints; return hints; }
+    void Arm() {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (started_) return;
+        started_ = true;
+        std::thread([this] { Loop(); }).detach();
+    }
+    Hint Lookup(const std::string& flow_id) const {
+        const auto bar = flow_id.find('|');
+        if (bar == std::string::npos) return {};
+        const auto key = flow_id.substr(bar + 1);
+        std::lock_guard<std::mutex> lock(mu_);
+        auto found = hints_.find(key);
+        if (found != hints_.end()) return found->second;
+        const auto split = key.find('|');
+        const auto colon = split == std::string::npos ? std::string::npos : key.rfind(':', split);
+        if (colon == std::string::npos || split == std::string::npos) return {};
+        found = hints_.find("*:" + key.substr(colon + 1));
+        return found == hints_.end() ? Hint{} : found->second;
+    }
+private:
+    void Remember(const std::string& key, const Hint& hint) {
+        if (key.empty()) return;
+        auto& slot = hints_[key];
+        if (slot.sni.empty()) slot.sni = hint.sni;
+        slot.tls_handshake = slot.tls_handshake || hint.tls_handshake;
+        slot.tls_app_data = slot.tls_app_data || hint.tls_app_data;
+        slot.http = slot.http || hint.http;
+        slot.app_bytes = std::max(slot.app_bytes, hint.app_bytes);
+        if (hints_.size() > 4096) hints_.erase(hints_.begin());
+    }
+    static void ParseTls(const uint8_t* data, size_t size, Hint& hint) {
+        size_t index = 0;
+        while (index + 5 <= size && data[index + 1] == 0x03) {
+            const uint8_t type = data[index];
+            const size_t length = (static_cast<size_t>(data[index + 3]) << 8) | data[index + 4];
+            const bool whole = index + 5 + length <= size;
+            const uint8_t* body = data + index + 5;
+            const size_t body_len = whole ? length : size - (index + 5);
+            if (type == 22) {
+                hint.tls_handshake = true;
+                if (body_len > 38 && body[0] == 1) {
+                    size_t cursor = 38;
+                    if (cursor < body_len) {
+                        const size_t session = body[cursor];
+                        cursor += 1 + session;
+                        if (cursor + 2 <= body_len) {
+                            const size_t ciphers = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
+                            cursor += 2 + ciphers;
+                            if (cursor < body_len) {
+                                const size_t compression = body[cursor];
+                                cursor += 1 + compression;
+                                if (cursor + 2 <= body_len) {
+                                    const size_t extensions = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
+                                    cursor += 2;
+                                    const size_t end = std::min(body_len, cursor + extensions);
+                                    while (cursor + 4 <= end) {
+                                        const size_t kind = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
+                                        const size_t ext = (static_cast<size_t>(body[cursor + 2]) << 8) | body[cursor + 3];
+                                        cursor += 4;
+                                        if (cursor + ext > end) break;
+                                        if (kind == 0 && ext >= 5) {
+                                            const size_t name_len = (static_cast<size_t>(body[cursor + 3]) << 8) | body[cursor + 4];
+                                            if (name_len > 0 && name_len < 253 && cursor + 5 + name_len <= cursor + ext)
+                                                hint.sni.assign(reinterpret_cast<const char*>(body + cursor + 5), name_len);
+                                        }
+                                        cursor += ext;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (type == 23) {
+                hint.tls_app_data = true;
+                hint.app_bytes += whole ? length : body_len;
+            } else break;
+            if (!whole) break;
+            index += 5 + length;
+        }
+    }
+    void Ingest(const uint8_t* frame, size_t size, int dlt) {
+        size_t offset = 0;
+        if (dlt == DLT_EN10MB) {
+            if (size < 14) return;
+            unsigned eth = (static_cast<unsigned>(frame[12]) << 8) | frame[13];
+            offset = 14;
+            if (eth == 0x8100 && size >= 18) {
+                eth = (static_cast<unsigned>(frame[16]) << 8) | frame[17];
+                offset = 18;
+            }
+            if (eth != 0x0800) return;
+        } else if (dlt != DLT_RAW && dlt != DLT_NULL) return;
+        if (dlt == DLT_NULL) {
+            if (size < 4) return;
+            offset = 4;
+        }
+        if (offset + 20 > size) return;
+        const auto header = static_cast<size_t>(frame[offset] & 0x0f) * 4;
+        if (header < 20 || frame[offset + 9] != IPPROTO_TCP || offset + header + 20 > size) return;
+        const uint8_t* tcp = frame + offset + header;
+        const unsigned data_off = (static_cast<unsigned>(tcp[12] >> 4) & 0x0fu) * 4u;
+        if (data_off < 20 || offset + header + data_off >= size) return;
+        const uint8_t* payload = tcp + data_off;
+        const size_t length = size - static_cast<size_t>(payload - frame);
+        if (!length) return;
+        Hint hint;
+        if (length >= 5 && (std::memcmp(payload, "POST ", 5) == 0 || std::memcmp(payload, "HEAD ", 5) == 0)) hint.http = true;
+        else if (length >= 4 && (std::memcmp(payload, "GET ", 4) == 0 || std::memcmp(payload, "PUT ", 4) == 0)) hint.http = true;
+        else if (length >= 6 && std::memcmp(payload, "PATCH ", 6) == 0) hint.http = true;
+        else if (payload[0] == 22 && payload[1] == 0x03) ParseTls(payload, length, hint);
+        else return;
+        char source_text[INET_ADDRSTRLEN];
+        char dest_text[INET_ADDRSTRLEN];
+        if (!inet_ntop(AF_INET, frame + offset + 12, source_text, sizeof(source_text))) return;
+        if (!inet_ntop(AF_INET, frame + offset + 16, dest_text, sizeof(dest_text))) return;
+        const unsigned source_port = (static_cast<unsigned>(tcp[0]) << 8) | tcp[1];
+        const unsigned dest_port = (static_cast<unsigned>(tcp[2]) << 8) | tcp[3];
+        const auto local = std::string(source_text) + ":" + std::to_string(source_port);
+        const auto remote = std::string(dest_text) + ":" + std::to_string(dest_port);
+        std::lock_guard<std::mutex> lock(mu_);
+        Remember(local + "|" + remote, hint);
+        Remember("*:" + std::to_string(source_port) + "|" + remote, hint);
+    }
+    int OpenInterface(const std::string& name, int& dlt) {
+        int fd = -1;
+        for (int index = 0; index < 8 && fd < 0; ++index)
+            fd = ::open(("/dev/bpf" + std::to_string(index)).c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return -1;
+        int length = 1 << 16;
+        if (ioctl(fd, BIOCSBLEN, &length) < 0) { ::close(fd); return -1; }
+        ifreq request{};
+        std::strncpy(request.ifr_name, name.c_str(), IFNAMSIZ - 1);
+        if (ioctl(fd, BIOCSETIF, &request) < 0) { ::close(fd); return -1; }
+        u_int on = 1;
+        ioctl(fd, BIOCIMMEDIATE, &on);
+        ioctl(fd, BIOCGDLT, &dlt);
+        if (dlt == DLT_EN10MB) {
+            bpf_insn program[] = {
+                BPF_STMT(BPF_LD + BPF_H + BPF_ABS, 12),
+                BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, 0x0800, 0, 3),
+                BPF_STMT(BPF_LD + BPF_B + BPF_ABS, 23),
+                BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, IPPROTO_TCP, 0, 1),
+                BPF_STMT(BPF_RET + BPF_K, 512),
+                BPF_STMT(BPF_RET + BPF_K, 0),
+            };
+            bpf_program filter{static_cast<u_int>(sizeof(program) / sizeof(program[0])), program};
+            ioctl(fd, BIOCSETF, &filter);
+        }
+        return fd;
+    }
+    void Loop() {
+        struct Device { int fd; int dlt; };
+        std::vector<Device> devices;
+        ifaddrs* interfaces = nullptr;
+        if (getifaddrs(&interfaces) == 0) {
+            std::set<std::string> used;
+            for (auto* item = interfaces; item && devices.size() < 2; item = item->ifa_next) {
+                if (!item->ifa_name || !item->ifa_addr || item->ifa_addr->sa_family != AF_INET) continue;
+                const std::string name = item->ifa_name;
+                if (!used.insert(name).second) continue;
+                if (name == "lo0" || name.rfind("awdl", 0) == 0 || name.rfind("llw", 0) == 0 || name.rfind("utun", 0) == 0) continue;
+                int dlt = 0;
+                const int fd = OpenInterface(name, dlt);
+                if (fd >= 0) devices.push_back({fd, dlt});
+            }
+            freeifaddrs(interfaces);
+        }
+        std::vector<uint8_t> buffer(1 << 16);
+        while (!stop_.load() && !devices.empty()) {
+            pollfd waits[2]{};
+            for (size_t index = 0; index < devices.size(); ++index) {
+                waits[index].fd = devices[index].fd;
+                waits[index].events = POLLIN;
+            }
+            if (::poll(waits, static_cast<nfds_t>(devices.size()), 200) <= 0) continue;
+            for (size_t index = 0; index < devices.size(); ++index) {
+                if (!(waits[index].revents & POLLIN)) continue;
+                const auto count = ::read(devices[index].fd, buffer.data(), buffer.size());
+                if (count <= 0) continue;
+                size_t offset = 0;
+                while (offset + sizeof(bpf_hdr) <= static_cast<size_t>(count)) {
+                    const auto* header = reinterpret_cast<const bpf_hdr*>(buffer.data() + offset);
+                    if (header->bh_hdrlen < sizeof(bpf_hdr) || offset + header->bh_hdrlen > static_cast<size_t>(count)) break;
+                    const auto cap = static_cast<size_t>(header->bh_caplen);
+                    if (offset + header->bh_hdrlen + cap > static_cast<size_t>(count)) break;
+                    Ingest(buffer.data() + offset + header->bh_hdrlen, cap, devices[index].dlt);
+                    const auto step = BPF_WORDALIGN(header->bh_hdrlen + header->bh_caplen);
+                    if (!step) break;
+                    offset += step;
+                }
+            }
+        }
+        for (const auto& device : devices) ::close(device.fd);
+    }
+    mutable std::mutex mu_;
+    bool started_ = false;
+    std::atomic<bool> stop_{false};
+    std::map<std::string, Hint> hints_;
+};
+void ApplyPayloadHint(SocketFlow& flow) {
+    if (flow.flow_id.empty()) return;
+    const auto hint = PayloadHints::Shared().Lookup(flow.flow_id);
+    if (flow.sni.empty() && !hint.sni.empty()) flow.sni = hint.sni;
+    if (hint.tls_handshake) flow.tls_handshake = true;
+    if (hint.tls_app_data) {
+        flow.tls_app_data = true;
+        flow.tls_app_bytes = std::max(flow.tls_app_bytes, hint.app_bytes);
+    }
+    if (hint.http) flow.plaintext_http = true;
+}
 class NetworkStatistics {
 public:
     std::optional<uint64_t> Tx(const std::string& flow_id) {
@@ -172,13 +413,21 @@ public:
         hot_.clear();
         return out;
     }
+    void Start() {
+        std::call_once(start_, [this] { thread_ = std::thread([this] { Loop(); }); });
+    }
+    void RestoreHot(const std::vector<pid_t>& pids) {
+        std::lock_guard<std::mutex> lock(mu_);
+        for (const auto pid : pids) if (pid > 0) hot_.insert(pid);
+    }
     void Watch(pid_t pid) {
         if (pid <= 0) return;
         {
             std::lock_guard<std::mutex> lock(mu_);
             watch_.insert(pid);
         }
-        std::call_once(start_, [this] { thread_ = std::thread([this] { Loop(); }); });
+        Start();
+        PayloadHints::Shared().Arm();
     }
     ~NetworkStatistics() {
         stop_.store(true);
@@ -273,6 +522,7 @@ private:
         source.flow_id = std::to_string(source.udp ? IPPROTO_UDP : IPPROTO_TCP) + "|" + local + "|" + remote;
         source.described = true;
         source.provider = provider;
+        if (source.sni.empty()) source.sni = ProviderHostname(data, size);
         return true;
     }
     static std::string Wildcard(const std::string& flow_id) {
@@ -424,6 +674,7 @@ private:
         }
         if (source.have_tx) Publish(source.flow_id, source.tx);
         if (!source.sni.empty() && slot.sni.empty()) slot.sni = source.sni;
+        ApplyPayloadHint(slot);
         if (changed) hot_.insert(source.pid);
         if (retained_[source.pid].size() > 64) retained_[source.pid].erase(retained_[source.pid].begin());
     }
@@ -799,13 +1050,16 @@ public:
                         flow.bytes_known = false;
                     }
                 }
+                ApplyPayloadHint(flow);
                 result.flows.push_back(std::move(flow));
         }
         return result;
     }
     std::vector<SocketFlow> RetainedFlows(pid_t pid) const override { return Ntstat().FlowsFor(pid); }
     std::vector<pid_t> TakeHotPids() override { return Ntstat().TakeHot(); }
+    void RestoreHotPids(const std::vector<pid_t>& pids) override { Ntstat().RestoreHot(pids); }
     void WatchFlows(pid_t pid) override { Ntstat().Watch(pid); }
+    void StartFlowWatch() override { Ntstat().Start(); }
 };
 } // namespace
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource() { return std::make_shared<DarwinProcessSource>(); }

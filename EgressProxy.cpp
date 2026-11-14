@@ -575,6 +575,8 @@ struct Session {
     bool watch_live = false;
     std::unique_ptr<TlsIntercept> tls;
     MonoClock::time_point next_discover{};
+    std::map<pid_t, MonoClock::time_point> inspected_at;
+    size_t rescan_cursor = 0;
     uint16_t proxy_port = 0;
     bool tree_truncated = false;
     bool launched_tree_truncated = false;
@@ -664,6 +666,10 @@ struct Session {
         bool closed = false;
         bool seen_now = false;
         std::string sni;
+        bool tls_handshake = false;
+        bool tls_app_data = false;
+        bool plaintext_http = false;
+        uint64_t tls_app_bytes = 0;
     };
     struct LiveProc {
         ProcessIdentity identity;
@@ -722,32 +728,13 @@ struct Session {
             item.second.saw_close = true;
             item.second.closed_at = MonoClock::now();
         }
+        const auto window_upper = OpenWindowUpper(proc);
         std::set<std::string> seen;
         for (const auto& flow : activity.flows) {
             seen.insert(flow.flow_id);
-            auto& memory = proc.flows[flow.flow_id];
-            if (memory.destination.empty()) {
-                memory.destination = flow.destination;
-                memory.loopback = flow.loopback;
-                memory.udp = flow.udp;
-                memory.preexisting = first;
-                memory.baseline = first ? flow.tx_bytes : 0;
-            }
-            if (flow.bytes_known) memory.bytes_known = true;
-            if (flow.loopback) memory.loopback = true;
-            if (memory.sni.empty()) memory.sni = flow.sni;
-            memory.latest = std::max(memory.latest, flow.tx_bytes);
-            (void)PeerName(flow.destination);
-            memory.seen_now = true;
-            memory.closed = false;
-            // BSD TCP states: ESTABLISHED is 4, TIME_WAIT is 10. SYN_SENT is 2.
-            // State 0 is a refused or reset TCP socket that never got a PCB.
-            if (flow.tcp_state >= 4 && flow.tcp_state <= 10) memory.established = true;
-            // State 0 is already refused or reset. SYN_SENT can still complete.
-            if (flow.bytes_known && !flow.loopback && flow.tcp_state == 0)
-                memory.failed = true;
+            RememberFlow(proc, flow, proc.samples > 0, window_upper);
         }
-        MergeRetained(proc, seen);
+        MergeRetained(proc, seen, window_upper);
         for (auto& item : proc.flows) {
             if (seen.count(item.first) || item.second.destination.empty()) continue;
             item.second.closed = true;
@@ -756,31 +743,54 @@ struct Session {
         }
         ++proc.samples;
     }
-    void MergeRetained(LiveProc& proc, std::set<std::string>& seen) {
+    uint64_t OpenWindowUpper(const LiveProc& proc) const {
+        uint64_t upper = 0;
+        for (const auto& file : proc.files) {
+            const auto size = RegisteredSize(file.first);
+            if (!size) continue;
+            upper = std::max(upper, size + kFlowTxSlack + kTlsHandshakeAllowance);
+        }
+        return upper;
+    }
+    void RememberFlow(LiveProc& proc, const SocketFlow& flow, bool process_already_sampled, uint64_t window_upper) {
+        if (flow.flow_id.empty()) return;
+        auto& memory = proc.flows[flow.flow_id];
+        if (memory.destination.empty()) {
+            memory.destination = flow.destination;
+            memory.loopback = flow.loopback;
+            memory.udp = flow.udp;
+            memory.baseline = InitialFlowBaseline(process_already_sampled, flow.tx_bytes, window_upper);
+            memory.preexisting = !process_already_sampled && memory.baseline > 0;
+        }
+        if (flow.bytes_known) memory.bytes_known = true;
+        if (flow.loopback) memory.loopback = true;
+        if (memory.sni.empty()) memory.sni = flow.sni;
+        if (flow.tls_handshake) memory.tls_handshake = true;
+        if (flow.tls_app_data) {
+            memory.tls_app_data = true;
+            memory.tls_app_bytes = std::max(memory.tls_app_bytes, flow.tls_app_bytes);
+        }
+        if (flow.plaintext_http) memory.plaintext_http = true;
+        memory.latest = std::max(memory.latest, flow.tx_bytes);
+        (void)PeerName(flow.destination);
+        memory.seen_now = true;
+        memory.closed = false;
+        // BSD TCP states: ESTABLISHED is 4, TIME_WAIT is 10. SYN_SENT is 2.
+        // State 0 is a refused or reset TCP socket that never got a PCB.
+        if (flow.tcp_state >= 4 && flow.tcp_state <= 10) {
+            memory.established = true;
+            memory.failed = false;
+        } else if (flow.bytes_known && !flow.loopback && flow.tcp_state == 0) {
+            memory.failed = true;
+        }
+    }
+    void MergeRetained(LiveProc& proc, std::set<std::string>& seen, uint64_t window_upper) {
+        const bool already = proc.samples > 0;
         for (const auto& flow : source.RetainedFlows(proc.identity.pid)) {
             if (flow.flow_id.empty()) continue;
             seen.insert(flow.flow_id);
-            auto& memory = proc.flows[flow.flow_id];
-            if (memory.destination.empty()) {
-                memory.destination = flow.destination;
-                memory.loopback = flow.loopback;
-                memory.udp = flow.udp;
-                memory.preexisting = false;
-                memory.baseline = 0;
-            }
-            if (flow.bytes_known) {
-                memory.bytes_known = true;
-                memory.latest = std::max(memory.latest, flow.tx_bytes);
-            }
-            if (flow.loopback) memory.loopback = true;
-            if (memory.sni.empty()) memory.sni = flow.sni;
-            if (flow.tcp_state >= 4 && flow.tcp_state <= 10) {
-                memory.established = true;
-                memory.failed = false;
-            } else if (flow.bytes_known && !flow.loopback && flow.tcp_state == 0) {
-                memory.failed = true;
-            }
-            (void)PeerName(flow.destination);
+            const bool known_flow = proc.flows.count(flow.flow_id) && !proc.flows[flow.flow_id].destination.empty();
+            RememberFlow(proc, flow, known_flow ? true : already, window_upper);
         }
     }
     static int VerdictRank(UploadVerdict verdict) {
@@ -807,6 +817,10 @@ struct Session {
         flow.failed = (memory.failed || memory.closed) && !memory.established;
         flow.measured = memory.bytes_known;
         flow.sni = memory.sni;
+        flow.tls_handshake = memory.tls_handshake;
+        flow.tls_app_data = memory.tls_app_data;
+        flow.tls_app_bytes = memory.tls_app_bytes;
+        flow.plaintext_http = memory.plaintext_http;
         if (memory.udp) flow.kind = LiveFlowKind::UdpOrQuic;
         else if (!memory.bytes_known) flow.kind = LiveFlowKind::Unreadable;
         else flow.kind = LiveFlowKind::TcpMeasured;
@@ -860,7 +874,7 @@ struct Session {
             if (proc.samples < 1) continue;
             if (proc.files.empty()) continue;
             std::set<std::string> retained_seen;
-            MergeRetained(proc, retained_seen);
+            MergeRetained(proc, retained_seen, OpenWindowUpper(proc));
             roots_with_file.insert(proc.root);
             if (!proc.inspection_complete && proc.samples < 2 && !finishing) continue;
             LiveAccessView shared;
@@ -890,7 +904,9 @@ struct Session {
                 const auto closed = CloseLiveAccess(view);
                 if (closed.defer) continue;
                 const auto rank = VerdictRank(closed.verdict);
-                if (rank < 3 && proc.samples < 2 && !finishing && !proc.exited) continue;
+                const bool handshake_close = closed.transfer_outcome.find("tls_handshake") != std::string::npos ||
+                    closed.transfer_outcome.find("provider_or_relay_body_not_visible") != std::string::npos;
+                if (!handshake_close && rank < 3 && proc.samples < 2 && !finishing && !proc.exited) continue;
                 EmitLiveClose(proc, file.first, closed, proc.emitted_event[file.first]);
             }
         }
@@ -1042,52 +1058,82 @@ struct Session {
             }
         }
     }
-    void AdoptHotPids() {
+    bool WatchingPid(pid_t pid) const {
+        for (const auto& root : watched) if (root.pid == pid) return true;
+        return false;
+    }
+    bool ConsiderPid(pid_t pid) {
+        inspected_at[pid] = MonoClock::now();
+        if (watched.size() >= 64) { tree_truncated = true; return false; }
+        if (WatchingPid(pid)) return false;
+        auto node = source.Lookup(pid);
+        if (!node || IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) return false;
+        auto activity = source.Inspect(*node, roots, false);
+        if (activity.sensitive_files.empty()) return false;
+        auto actor = Describe(source, *node);
+        std::string label = node->name.empty() ? node->executable : node->name;
+        if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
+        watched.push_back(Root{node->identity, node->identity.pid, false});
+        std::cerr << "egress live " << node->identity.pid << " " << label << "\n";
+        return true;
+    }
+    void DiscoverHolders() {
         if (!watch_live) return;
-        for (const auto pid : source.TakeHotPids()) {
-            auto node = source.Lookup(pid);
-            if (!node || IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) continue;
-            auto activity = source.Inspect(*node, roots, false);
-            if (activity.sensitive_files.empty()) continue;
-            bool known = false;
-            for (const auto& root : watched) if (root.identity == node->identity) known = true;
-            if (known) continue;
-            if (watched.size() >= 64) { tree_truncated = true; break; }
-            auto actor = Describe(source, *node);
-            std::string label = node->name.empty() ? node->executable : node->name;
-            if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
-            watched.push_back(Root{node->identity, node->identity.pid, false});
-            std::cerr << "egress live " << node->identity.pid << " " << label << "\n";
+        source.StartFlowWatch();
+        auto hot = source.TakeHotPids();
+        std::sort(hot.begin(), hot.end(), [](pid_t left, pid_t right) { return left > right; });
+        std::vector<pid_t> later;
+        size_t hot_budget = 6;
+        for (const auto pid : hot) {
+            if (WatchingPid(pid)) continue;
+            if (!hot_budget) { later.push_back(pid); continue; }
+            --hot_budget;
+            ConsiderPid(pid);
+        }
+        if (!later.empty()) source.RestoreHotPids(later);
+        int estimate = proc_listallpids(nullptr, 0);
+        if (estimate <= 0) return;
+        std::vector<pid_t> pids(static_cast<size_t>(estimate) + 64);
+        const int count = proc_listallpids(pids.data(), static_cast<int>(pids.size() * sizeof(pid_t)));
+        if (count <= 0) return;
+        const auto listed = std::min(pids.size(), static_cast<size_t>(count));
+        std::vector<pid_t> fresh;
+        fresh.reserve(32);
+        for (size_t index = 0; index < listed; ++index) {
+            const auto pid = pids[index];
+            if (pid <= 1 || WatchingPid(pid) || inspected_at.count(pid)) continue;
+            fresh.push_back(pid);
+        }
+        std::sort(fresh.begin(), fresh.end(), [](pid_t left, pid_t right) { return left > right; });
+        size_t budget = 12;
+        for (const auto pid : fresh) {
+            if (!budget || watched.size() >= 64) break;
+            --budget;
+            ConsiderPid(pid);
+        }
+        if (inspected_at.size() > 8192) {
+            const auto cutoff = MonoClock::now() - std::chrono::seconds(30);
+            for (auto it = inspected_at.begin(); it != inspected_at.end(); ) {
+                if (it->second < cutoff && !WatchingPid(it->first)) it = inspected_at.erase(it);
+                else ++it;
+            }
+        }
+        std::vector<pid_t> rotation;
+        rotation.reserve(inspected_at.size());
+        for (const auto& item : inspected_at) if (!WatchingPid(item.first)) rotation.push_back(item.first);
+        const auto now = MonoClock::now();
+        size_t rotated = 0;
+        for (size_t n = 0; n < rotation.size() && rotated < 4 && budget && watched.size() < 64; ++n) {
+            const auto pid = rotation[rescan_cursor % rotation.size()];
+            ++rescan_cursor;
+            const auto seen = inspected_at.find(pid);
+            if (seen == inspected_at.end() || now - seen->second < std::chrono::seconds(5)) continue;
+            ConsiderPid(pid);
+            ++rotated;
         }
     }
     void SampleWatched() {
-        AdoptHotPids();
-        if (watch_live && MonoClock::now() >= next_discover) {
-            next_discover = MonoClock::now() + std::chrono::milliseconds(200);
-            try {
-                auto sample = source.Sample();
-                for (const auto& node : sample.processes) {
-                    // Name lists do not decide who is watched. A registered file open does.
-                    if (IsCollectorProcess(node) || IsAppleSystemDaemon(node)) continue;
-                    auto activity = source.Inspect(node, roots, false);
-                    if (activity.sensitive_files.empty()) continue;
-                    auto actor = Describe(source, node);
-                    std::string label = node.name.empty() ? node.executable : node.name;
-                    if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
-                    bool known = false;
-                    // Sample the process that holds the file, plus its descendants.
-                    // The owning bundle is stored on the actor. Sampling that ancestor
-                    // would walk an unrelated toolchain tree such as Xcode's make.
-                    for (const auto& root : watched) if (root.identity == node.identity) known = true;
-                    if (known) continue;
-                    if (watched.size() >= 64) { tree_truncated = true; break; }
-                    watched.push_back(Root{node.identity, node.identity.pid, false});
-                    std::cerr << "egress live " << node.identity.pid << " " << label << "\n";
-                }
-            } catch (const std::exception& error) {
-                std::cerr << "egress live scan failed: " << error.what() << "\n";
-            }
-        }
+        DiscoverHolders();
         for (const auto& root : watched) SampleTree(root.pid, root.identity, root.launched);
         FlushLive();
     }
@@ -1677,9 +1723,8 @@ int main(int argc, char** argv) {
                 catch (const std::exception& error) {
                     std::cerr << "egress request failed: " << error.what() << "\n";
                 }
-            } else {
-                session.SampleWatched();
             }
+            session.SampleWatched();
             store.Check();
         }
             if (child.pid > 0) {

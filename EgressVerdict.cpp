@@ -133,9 +133,19 @@ bool TlsShaped(const LiveFlow& flow) {
     return PeerPort(flow.destination) == 443;
 }
 uint64_t ApplicationBytes(const LiveFlow& flow, uint64_t delta) {
+    if (flow.plaintext_http) return delta;
+    if (flow.tls_handshake && !flow.tls_app_data) return 0;
+    if (flow.tls_app_data && flow.tls_app_bytes > 0) return flow.tls_app_bytes;
     if (flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow))
         return delta > kTlsHandshakeAllowance ? delta - kTlsHandshakeAllowance : 0;
     return delta;
+}
+bool HandshakeOnly(const LiveFlow& flow, uint64_t delta, uint64_t lower) {
+    if (flow.plaintext_http) return false;
+    if (flow.tls_app_data && flow.tls_app_bytes > 0) return false;
+    if (flow.tls_handshake && !flow.tls_app_data) return true;
+    return flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow) && delta > 0 &&
+        ApplicationBytes(flow, delta) < lower;
 }
 void NoteSni(LiveClose& result, const LiveFlow* flow) {
     if (!flow || flow->sni.empty() || result.detail.find("sni=") != std::string::npos) return;
@@ -195,16 +205,20 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
     const LiveFlow* unmeasured = nullptr;
     const LiveFlow* handshake = nullptr;
     const LiveFlow* loopback_send = nullptr;
+    const LiveFlow* loopback_peer = nullptr;
+    const LiveFlow* measured_offhost = nullptr;
     bool any_offhost = false;
     bool any_measured_offhost = false;
     bool saw_measured_flow = false;
+    bool saw_proxy = false;
     for (const auto& flow : view.flows) {
-        if (flow.to_local_proxy) continue;
+        if (flow.to_local_proxy) { saw_proxy = true; continue; }
         const auto delta = TxDelta(flow);
         const auto app = ApplicationBytes(flow, delta);
         const bool measured = Measured(flow);
         if (measured) saw_measured_flow = true;
         if (flow.loopback) {
+            if (measured && !loopback_peer) loopback_peer = &flow;
             if (measured && flow.kind == LiveFlowKind::TcpMeasured && flow.established && delta >= lower && !loopback_send)
                 loopback_send = &flow;
             // A datagram whose byte count never arrived is still unresolved,
@@ -218,6 +232,11 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
             continue;
         }
         any_measured_offhost = true;
+        if (!measured_offhost) measured_offhost = &flow;
+        if (HandshakeOnly(flow, delta, lower)) {
+            if (!handshake) handshake = &flow;
+            continue;
+        }
         if (flow.kind == LiveFlowKind::UdpOrQuic) {
             udp_sum += delta;
             if (!upload_peer && delta > 0) upload_peer = &flow;
@@ -226,7 +245,6 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         if (flow.established) {
             tcp_sum += app;
             if (app > 0 && !upload_peer) upload_peer = &flow;
-            else if (TlsShaped(flow) && delta > 0 && app < lower && !handshake) handshake = &flow;
         } else if (flow.failed && !attempt && delta < lower) {
             attempt = &flow;
         }
@@ -311,12 +329,29 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.detail = "process_exited;no_measured_offhost_send;not_rewritten_as_not_found;app_settings_not_modified";
         return result;
     }
+    if (view.file_open && sum == 0 && !handshake && !attempt && !unmeasured && !loopback_send &&
+        !loopback_peer && !measured_offhost && !saw_proxy) {
+        if (!view.window_settled) return Defer(UploadVerdict::NotVisible);
+        result.verdict = UploadVerdict::NotVisible;
+        result.match_basis = "observation_impossible";
+        result.transfer_outcome = "unseen_channel";
+        result.detail = "no_measured_peer;tx_sum=0;empty_destination;not_rewritten_as_not_found;"
+            "unresolved_not_a_clean_bill;app_settings_not_modified";
+        return result;
+    }
     result.verdict = UploadVerdict::NotFound;
     result.match_basis = "live_agent_observed";
     result.transfer_outcome = "live_agent_observed_no_upload";
+    if (measured_offhost) result.destination = measured_offhost->destination;
+    else if (loopback_peer) result.destination = loopback_peer->destination;
     result.detail = "agent_seen;file_open_observed;every_offhost_channel_measured;aggregate_below_lower_bound;" +
         SumText(sum, lower, view.file_bytes) + ";app_settings_not_modified";
     return result;
+}
+uint64_t InitialFlowBaseline(bool process_already_sampled, uint64_t tx_bytes, uint64_t window_upper) noexcept {
+    if (process_already_sampled) return 0;
+    if (window_upper > 0 && tx_bytes <= window_upper) return 0;
+    return tx_bytes;
 }
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path) {
     const std::string label = UploadVerdictLabel(close.verdict);

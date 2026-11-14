@@ -778,6 +778,9 @@ public enum EvidenceChainBuilder {
             if basis == "observation_impossible" || outcome.contains("descriptors_or_flows_incomplete") || outcome == "agent_not_visible" {
                 add("这个进程的描述符或流量没有看全，不能写成未发现。")
             }
+            if outcome.contains("unseen_channel") || outcome.contains("tls_handshake_body_not_visible") {
+                add("没有看到可核对的正文。不能把这次关闭写成未发现，也不能写成已上传。")
+            }
             if outcome == "egress_not_watched" {
                 add("这棵进程树的明文出口当时不在本地代理的查看范围内。")
             }

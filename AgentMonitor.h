@@ -57,6 +57,8 @@ private:
         std::set<std::string> activity; // Only successfully submitted observations.
         std::optional<ActorProcess> announced_actor;
         unsigned retirement_attempts = 0;
+        uint8_t idle_skips = 0;
+        bool touched_sensitive = false;
     };
     struct Span {
         ActorProcess actor;

@@ -26,6 +26,10 @@ struct SocketFlow {
     uint64_t tx_bytes = 0;
     int tcp_state = -1;
     std::string sni;
+    bool tls_handshake = false;
+    bool tls_app_data = false;
+    bool plaintext_http = false;
+    uint64_t tls_app_bytes = 0;
 };
 struct ActivitySample {
     bool identity_validated = false, descriptors_complete = true;
@@ -48,8 +52,12 @@ public:
     virtual std::vector<SocketFlow> RetainedFlows(pid_t pid) const { (void)pid; return {}; }
     // Pids that opened or closed a flow since the previous call.
     virtual std::vector<pid_t> TakeHotPids() { return {}; }
+    // Put back pids the caller did not have time to inspect.
+    virtual void RestoreHotPids(const std::vector<pid_t>& pids) { (void)pids; }
     // Egress asks for kernel flow notifications. The monitor does not.
     virtual void WatchFlows(pid_t pid) { (void)pid; }
+    // Start flow retention before the first sensitive file is seen.
+    virtual void StartFlowWatch() {}
 };
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource();
 struct ProcessSnapshot {
