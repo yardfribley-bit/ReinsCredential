@@ -13,6 +13,7 @@
 #include <spawn.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <unistd.h>
 #include <csignal>
 #include <array>
 #include <algorithm>
@@ -1826,6 +1827,14 @@ int main(int argc, char** argv) {
             session.watched.push_back(Session::Root{root->identity, child.pid, true});
             session.launched = true;
             std::cerr << "egress child " << child.pid << "\n";
+            // The child can open the file, send, and exit inside the first poll
+            // wait. Sample it before that wait, while the descriptor is still open.
+            for (int burst = 0; burst < 40 && session.accesses.empty(); ++burst) {
+                session.SampleWatched();
+                if (!session.accesses.empty()) break;
+                if (::kill(child.pid, 0) != 0) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
         }
         const auto started = MonoClock::now();
         // --watch-live and duration 0 keep the proxy up until SIGTERM even if a
