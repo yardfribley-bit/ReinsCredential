@@ -241,13 +241,7 @@ void ApplyBehaviorOwner(ActorProcess& actor) {
     const auto hint = MatchAgent(*chosen, {});
     if (!hint.empty() && hint != "generic_runtime_candidate") owner.match_reason += ";label:" + hint;
     actor.owning_agent = owner;
-    if (actor.classification == "collector_self") return;
-    // Only an app that contains the acting process becomes the owner label.
-    // A shell under another agent keeps the classification AnnotateActor already set.
-    if (from_app && (actor.classification.empty() || actor.classification == "unclassified_process")) {
-        actor.classification = hint.empty() || hint == "generic_runtime_candidate" ? "behavior_tracked" : "known_agent_candidate";
-        if (actor.classification_reason.empty()) actor.classification_reason = owner.match_reason;
-    }
+    if (actor.classification == "collector_self") actor.owning_agent.reset();
 }
 std::string MatchAgent(const ProcessNode& node, const AgentRules& rules) {
     const auto base = Lower(BaseName(node.executable));
@@ -554,7 +548,7 @@ void AgentMonitor::Scan() {
                 if (Emit(known ? "agent_discovered" : self ? "process_discovered" : "process_discovered", seen, "", detail, RiskLevel::Low, "process_snapshot_heuristic"))
                     seen.announced_actor = seen.actor;
             } else if (seen.announced_actor && (!SameImage(seen.announced_actor->process.node, seen.actor.process.node) ||
-                seen.announced_actor->classification_reason != seen.reason) {
+                seen.announced_actor->classification_reason != seen.reason)) {
                 if (Emit(known ? "agent_changed" : "process_changed", seen, "", "image_or_classification_changed_with_same_start_identity", RiskLevel::Low, "process_snapshot"))
                     seen.announced_actor = seen.actor;
             }

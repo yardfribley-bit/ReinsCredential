@@ -574,7 +574,6 @@ struct Session {
     bool launched = false;
     bool watch_live = false;
     std::unique_ptr<TlsIntercept> tls;
-    MonoClock::time_point next_discover{};
     std::map<pid_t, MonoClock::time_point> inspected_at;
     size_t rescan_cursor = 0;
     uint16_t proxy_port = 0;
