@@ -669,6 +669,8 @@ struct Session {
         bool bytes_known = false;
         uint64_t baseline = 0;
         uint64_t latest = 0;
+        uint64_t previous_tx = 0;
+        bool have_sample = false;
         bool preexisting = false;
         bool established = false;
         bool failed = false;
@@ -781,6 +783,8 @@ struct Session {
             memory.tls_app_bytes = std::max(memory.tls_app_bytes, captured.tls_app_bytes);
         }
         if (captured.plaintext_http) memory.plaintext_http = true;
+        if (memory.have_sample) memory.previous_tx = memory.latest;
+        memory.have_sample = true;
         memory.latest = std::max(memory.latest, captured.tx_bytes);
         (void)PeerName(captured.destination);
         memory.seen_now = true;
@@ -819,6 +823,7 @@ struct Session {
         flow.to_local_proxy = ToLocalProxy(memory.destination);
         flow.tx_baseline = memory.baseline;
         flow.tx_latest = memory.latest;
+        flow.tx_previous = memory.previous_tx;
         flow.preexisting = memory.preexisting;
         flow.established = memory.established;
         // Only a connect that never became established counts as a failed

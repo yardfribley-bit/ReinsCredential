@@ -2,6 +2,15 @@ import XCTest
 @testable import EvidenceCore
 
 final class ClosurePresentationTests: XCTestCase {
+    func testEmptyLaunchSummaryIsZero() {
+        let counts = ClosureListing.counts(of: [])
+        XCTAssertEqual(counts.uploaded, 0)
+        XCTAssertEqual(counts.attempted, 0)
+        XCTAssertEqual(counts.notFound, 0)
+        XCTAssertEqual(counts.notVisible, 0)
+        XCTAssertTrue(counts.notVisibleReasonKeys.isEmpty)
+    }
+
     func testWindowFrameIsClampedOntoTheVisibleScreen() {
         let visible = CGRect(x: 0, y: 0, width: 1_440, height: 900)
         let saved = CGRect(x: -228, y: 40, width: 164, height: 164)

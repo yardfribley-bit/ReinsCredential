@@ -20,9 +20,10 @@ struct DashboardView: View {
     @State private var windowStart = Date()
     @State private var windowEnd = Date()
     @State private var closureScope: ClosureScope = .currentRun
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
                 .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 260)
         } content: {
@@ -32,7 +33,9 @@ struct DashboardView: View {
             detailColumn
                 .navigationSplitViewColumnWidth(min: 300, ideal: 380)
         }
+        .navigationSplitViewStyle(.balanced)
         .navigationTitle("ReinsCredential")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .toolbar {
             ToolbarItemGroup {

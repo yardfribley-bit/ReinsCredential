@@ -912,15 +912,22 @@ public:
             const auto pid = pids[i];
             if (pid <= 0) continue;
             live.insert(pid);
+            auto cached = idle_nodes_.find(pid);
+            // New pids are read in full so a short-lived process is not missed.
+            // A stable pid is not queried on every 500 ms pass; one slice in
+            // sixteen re-reads it, which is enough to notice exec and PID reuse.
+            const bool refresh = cached == idle_nodes_.end() ||
+                (sample_generation_ % 16) == (static_cast<uint32_t>(pid) % 16);
+            if (!refresh) {
+                cached->second.confirmed = sample_generation_;
+                sample.processes.push_back(cached->second.node);
+                continue;
+            }
             auto info = BsdInfo(pid);
             if (!info) { ++sample.unavailable; continue; }
             const auto identity = Identity(*info);
-            auto cached = idle_nodes_.find(pid);
-            const bool same = cached != idle_nodes_.end() && cached->second.node.identity == identity;
-            // New processes are read in full. A stable process re-reads its
-            // path on one pass out of eight, not on every 500 ms sample.
-            const bool refresh_path = !same || (sample_generation_ % 8) == (static_cast<uint32_t>(pid) % 8);
-            if (same && !refresh_path) {
+            if (cached != idle_nodes_.end() && cached->second.node.identity == identity &&
+                (sample_generation_ % 8) != (static_cast<uint32_t>(pid) % 8)) {
                 cached->second.node.ppid = static_cast<pid_t>(info->pbi_ppid);
                 cached->second.confirmed = sample_generation_;
                 sample.processes.push_back(cached->second.node);

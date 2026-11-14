@@ -135,25 +135,23 @@ bool TlsShaped(const LiveFlow& flow) {
 }
 uint64_t ApplicationBytes(const LiveFlow& flow, uint64_t delta) {
     if (flow.plaintext_http) return delta;
-    if (flow.tls_handshake && !flow.tls_app_data) return 0;
     if (flow.tls_app_data && flow.tls_app_bytes > 0) return flow.tls_app_bytes;
-    if (flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow))
-        return delta > kTlsHandshakeAllowance ? delta - kTlsHandshakeAllowance : 0;
+    if (flow.tls_handshake || (flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow))) return 0;
     return delta;
 }
-bool HandshakeOnly(const LiveFlow& flow, uint64_t delta, uint64_t lower) {
+// Kernel counters do not name TLS records. A flight larger than HTTP framing
+// and no bigger than an unparsed ClientHello is not a body yet.
+bool InUnparsedHandshakeBand(uint64_t file_bytes, uint64_t delta) {
+    return delta > file_bytes + kHttpFraming && delta <= file_bytes + kUnparsedHandshakeAboveFile;
+}
+bool HandshakeOnly(const LiveFlow& flow, uint64_t delta) {
     if (flow.plaintext_http) return false;
     if (flow.tls_app_data && flow.tls_app_bytes > 0) return false;
-    // Type 22 with no type 23 is not a body, whatever the byte counter says.
     if (flow.tls_handshake) return true;
-    // An established off-host session whose send counter stayed at 0 is not a
-    // measured "no upload". The handshake bytes are often absent from that
-    // counter, and missing record flags must not turn the session into 未发现.
     if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && flow.measured &&
         !flow.loopback && !flow.preexisting && flow.tx_latest == 0 && delta == 0)
         return true;
-    return flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow) && delta > 0 &&
-        ApplicationBytes(flow, delta) < lower;
+    return flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow) && delta > 0;
 }
 void NoteSni(LiveClose& result, const LiveFlow* flow) {
     if (!flow || flow->sni.empty() || result.detail.find("sni=") != std::string::npos) return;
@@ -279,6 +277,8 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
     bool any_measured_offhost = false;
     bool saw_measured_flow = false;
     bool saw_proxy = false;
+    bool defer_unparsed_handshake = false;
+    std::string body_note;
     for (const auto& flow : view.flows) {
         if (flow.to_local_proxy) { saw_proxy = true; continue; }
         const auto delta = TxDelta(flow);
@@ -301,7 +301,29 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         }
         any_measured_offhost = true;
         if (!measured_offhost) measured_offhost = &flow;
-        if (HandshakeOnly(flow, delta, lower)) {
+        if (HandshakeOnly(flow, delta)) {
+            if (!handshake) handshake = &flow;
+            continue;
+        }
+        if (flow.tls_app_data && flow.tls_app_bytes > 0 && flow.kind == LiveFlowKind::TcpMeasured && flow.established) {
+            tcp_sum += flow.tls_app_bytes;
+            if (!upload_peer) upload_peer = &flow;
+            body_note = ";tls_app_bytes=" + std::to_string(flow.tls_app_bytes);
+            continue;
+        }
+        // Bytes sent after a handshake-sized flight are the body. The 1615-byte
+        // sample itself is not an upload.
+        if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && !flow.plaintext_http &&
+            InUnparsedHandshakeBand(view.file_bytes, flow.tx_previous) && flow.tx_latest > flow.tx_previous) {
+            const auto growth = flow.tx_latest - flow.tx_previous;
+            tcp_sum += growth;
+            if (growth > 0 && !upload_peer) upload_peer = &flow;
+            body_note = ";body_after_handshake=" + std::to_string(growth);
+            continue;
+        }
+        if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && !flow.plaintext_http &&
+            !(flow.tls_app_data && flow.tls_app_bytes > 0) && InUnparsedHandshakeBand(view.file_bytes, delta)) {
+            if (!view.window_settled) { defer_unparsed_handshake = true; continue; }
             if (!handshake) handshake = &flow;
             continue;
         }
@@ -313,12 +335,15 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         if (flow.established) {
             tcp_sum += app;
             if (app > 0 && !upload_peer) upload_peer = &flow;
+            if (flow.tls_app_data && flow.tls_app_bytes > 0)
+                body_note = ";tls_app_bytes=" + std::to_string(flow.tls_app_bytes);
         } else if (flow.failed && !attempt && delta < lower) {
             attempt = &flow;
         }
     }
     const auto sum = tcp_sum + udp_sum;
     const bool in_window = sum >= lower && sum <= upper && upload_peer;
+    if (!in_window && defer_unparsed_handshake && !handshake) return Defer(UploadVerdict::NotVisible);
     if (in_window) {
         const bool udp_carried = udp_sum > 0 && tcp_sum < lower;
         result.verdict = UploadVerdict::Uploaded;
@@ -326,7 +351,7 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.match_basis = udp_carried ? "flow_txbytes_udp" : "flow_txbytes";
         result.transfer_outcome = result.match_basis + ";left_host;" + SumText(sum, lower, view.file_bytes);
         result.detail = "match=" + result.match_basis + ";" + SumText(sum, lower, view.file_bytes) +
-            ";plaintext_not_recovered;no_ca;no_system_proxy;app_settings_not_modified";
+            body_note + ";plaintext_not_recovered;no_ca;no_system_proxy;app_settings_not_modified";
         NoteSni(result, upload_peer);
         return result;
     }

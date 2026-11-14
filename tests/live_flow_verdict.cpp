@@ -140,9 +140,12 @@ int main() {
     const auto named_hello = CloseLiveAccess(Seen(37, {named}));
     assert(named_hello.verdict == UploadVerdict::NotVisible);
     assert(named_hello.detail.find("sni=api.anthropic.com") != std::string::npos);
+    // Port 443 with no application-data record is a handshake, not a body,
+    // even when the raw counter is file size plus the old 1024-byte allowance.
     const auto provider_proven = CloseLiveAccess(Seen(file_bytes, {Tcp("api.anthropic.com:443", 0, file_bytes + kTlsHandshakeAllowance, true)}));
-    assert(provider_proven.verdict == UploadVerdict::Uploaded);
-    assert(provider_proven.match_basis == "flow_txbytes");
+    assert(provider_proven.verdict == UploadVerdict::NotVisible);
+    assert(provider_proven.verdict != UploadVerdict::Uploaded);
+    assert(provider_proven.transfer_outcome == "provider_or_relay_body_not_visible");
 
     LiveFlow syn = Tcp(off, 0, 0, false);
     syn.failed = true;
@@ -347,6 +350,43 @@ int main() {
     const auto refused_close = CloseLiveAccess(Seen(canary, {refused_zero}));
     assert(refused_close.verdict == UploadVerdict::Attempted);
     assert(refused_close.verdict != UploadVerdict::NotVisible);
+    // Handshake-only kernel counter: 1615 bytes, 37-byte file. Not an upload.
+    // The connection has ended (window settled). While it is still open the
+    // same counter is deferred so a later body can still be counted.
+    LiveFlow handshake_counter = Tcp("192.168.1.11:54731", 0, 1615, true);
+    const auto handshake_done = CloseLiveAccess(Seen(canary, {handshake_counter}));
+    assert(handshake_done.verdict == UploadVerdict::NotVisible);
+    assert(handshake_done.verdict != UploadVerdict::Uploaded);
+    assert(handshake_done.verdict != UploadVerdict::NotFound);
+    assert(handshake_done.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(handshake_done.destination == "192.168.1.11:54731");
+    assert(!ShouldEmitCloseUpdate(2, handshake_done.transfer_outcome, handshake_done));
+    auto handshake_holding = Seen(canary, {handshake_counter});
+    handshake_holding.window_settled = false;
+    assert(CloseLiveAccess(handshake_holding).defer);
+    // The acceptance POST is HTTP-sized and still uploads.
+    const auto short_post = CloseLiveAccess(Seen(canary, {Tcp("192.168.1.11:54629", 0, 167, true)}));
+    assert(short_post.verdict == UploadVerdict::Uploaded);
+    assert(short_post.match_basis == "flow_txbytes");
+    assert(short_post.detail.find("tx_sum=167") != std::string::npos);
+    // Handshake 1615, then 2085 bytes of application data. Not closed at 1615.
+    LiveFlow after_body = Tcp("192.168.1.11:54732", 0, 1615 + 2085, true);
+    after_body.tx_previous = 1615;
+    after_body.tls_app_data = true;
+    after_body.tls_app_bytes = 2085;
+    after_body.tls_handshake = true;
+    const auto body_later = CloseLiveAccess(Seen(canary, {after_body}));
+    assert(body_later.verdict == UploadVerdict::Uploaded);
+    assert(body_later.verdict != UploadVerdict::NotVisible);
+    assert(body_later.detail.find("tls_app_bytes=2085") != std::string::npos);
+    assert(body_later.detail.find("tx_sum=2085") != std::string::npos || body_later.detail.find("tls_app_bytes=2085") != std::string::npos);
+    LiveFlow grown = Tcp("192.168.1.11:54732", 0, 1615 + 2085, true);
+    grown.tx_previous = 1615;
+    const auto grown_close = CloseLiveAccess(Seen(canary, {grown}));
+    assert(grown_close.verdict == UploadVerdict::Uploaded);
+    assert(grown_close.detail.find("body_after_handshake=2085") != std::string::npos);
+    assert(grown_close.detail.find("tx_sum=2085") != std::string::npos);
+
     assert(FastTreeSampleDue(true, false, false));
     assert(FastTreeSampleDue(false, true, false));
     assert(!FastTreeSampleDue(false, false, false));

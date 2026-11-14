@@ -75,6 +75,9 @@ struct LiveFlow {
     uint64_t tls_app_bytes = 0;
     // True when a captured send began with an HTTP request line.
     bool plaintext_http = false;
+    // Previous sample's tx_latest. Zero on the first sample. Growth after a
+    // handshake-sized flight is the only kernel-counter evidence of a body.
+    uint64_t tx_previous = 0;
 };
 
 // What was visible for one already-running agent, or for one file it opened.
@@ -113,6 +116,13 @@ constexpr uint64_t kFlowTxSlack = 65536;
 // Kept only so a finished send that raced the first sample is not erased.
 // It is not a body detector: handshake records are classified by content type.
 constexpr uint64_t kTlsHandshakeAllowance = 1024;
+// Ordinary HTTP request framing above the file. The acceptance POST is about
+// 130 bytes over a 37-byte body. A TLS ClientHello is not framing.
+constexpr uint64_t kHttpFraming = 512;
+// Without a TLS record parse, a send this far above the file is still only a
+// handshake. The acceptance handshake is about 1615 bytes. Application data
+// in that test adds 2085 more and clears this ceiling.
+constexpr uint64_t kUnparsedHandshakeAboveFile = 3072;
 
 // TLS records on the wire. Type 22 is a handshake. Type 23 is application data.
 // Change-cipher-spec and alerts are skipped. A handshake with no type 23 has
