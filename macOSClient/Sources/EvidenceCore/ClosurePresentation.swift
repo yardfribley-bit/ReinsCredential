@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Where a saved window is allowed to sit. Coordinates match AppKit: origin is the bottom left.
@@ -8,18 +9,23 @@ public enum WindowPlacement {
     /// Pulls a restored frame onto `visible`. The result is at least `minimum` when the
     /// screen is large enough, and its origin is never outside `visible`.
     public static func clamped(saved: CGRect, visible: CGRect, minimum: CGSize = minimum) -> CGRect {
-        guard visible.width > 1, visible.height > 1 else {
-            return CGRect(origin: .zero, size: preferred)
+        guard visible.size.width > 1, visible.size.height > 1 else {
+            return CGRect(origin: CGPoint(x: 0, y: 0), size: preferred)
         }
-        let width = min(max(saved.width, min(minimum.width, visible.width)), visible.width)
-        let height = min(max(saved.height, min(minimum.height, visible.height)), visible.height)
+        let width = min(max(saved.size.width, min(minimum.width, visible.size.width)), visible.size.width)
+        let height = min(max(saved.size.height, min(minimum.height, visible.size.height)), visible.size.height)
+        let savedMaxX = saved.origin.x + saved.size.width
+        let savedMaxY = saved.origin.y + saved.size.height
+        let visibleMaxX = visible.origin.x + visible.size.width
+        let visibleMaxY = visible.origin.y + visible.size.height
+        let overlaps = saved.origin.x < visibleMaxX && savedMaxX > visible.origin.x && saved.origin.y < visibleMaxY && savedMaxY > visible.origin.y
         var x = saved.origin.x
         var y = saved.origin.y
-        if x < visible.minX || x + width > visible.maxX || y < visible.minY || y + height > visible.maxY || !saved.intersects(visible) {
-            x = min(max(x, visible.minX), visible.maxX - width)
-            y = min(max(y, visible.minY), visible.maxY - height)
+        if x < visible.origin.x || x + width > visibleMaxX || y < visible.origin.y || y + height > visibleMaxY || !overlaps {
+            x = min(max(x, visible.origin.x), visibleMaxX - width)
+            y = min(max(y, visible.origin.y), visibleMaxY - height)
         }
-        return CGRect(x: x, y: y, width: width, height: height)
+        return CGRect(origin: CGPoint(x: x, y: y), size: CGSize(width: width, height: height))
     }
 }
 
