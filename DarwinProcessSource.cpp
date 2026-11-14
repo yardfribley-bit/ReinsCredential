@@ -390,9 +390,10 @@ public:
     void PollWatched() {
         std::lock_guard<std::mutex> lock(mu_);
         if (!Open()) return;
-        Pump(32);
+        Drain(20);
+        Pump(64);
         Request(1004, ~uint64_t{0});
-        Drain(15);
+        Drain(20);
     }
     void Watch(pid_t pid) {
         if (pid <= 0) return;
@@ -607,8 +608,9 @@ private:
             sources_[srcref].provider = provider;
             // Asking for every system flow in the same drain feeds the socket
             // as fast as we read it. Describe a bounded batch; the rest wait.
-            if (query_budget_ > 0) {
-                --query_budget_;
+            const bool udp = provider == 4 || provider == 5;
+            if (udp || query_budget_ > 0) {
+                if (!udp && query_budget_ > 0) --query_budget_;
                 Request(1005, srcref);
                 Request(1004, srcref);
             } else if (pending_.size() < 128) pending_.push_back(srcref);
