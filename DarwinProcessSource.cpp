@@ -726,7 +726,6 @@ private:
     void DrainNonblock() {
         if (fd_ < 0) return;
         std::array<uint8_t, 65536> buffer{};
-        int applied = 0;
         for (;;) {
             const auto count = ::recv(fd_, buffer.data(), buffer.size(), 0);
             if (count < 0) {
@@ -741,7 +740,6 @@ private:
                 if (length < 16 || offset + length > static_cast<size_t>(count)) break;
                 Apply(buffer.data() + offset, length);
                 offset += length;
-                if (++applied >= 64) return;
             }
         }
     }
@@ -829,15 +827,12 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
             if (stop_.load()) break;
-            {
+            if (ready > 0) {
                 std::lock_guard<std::mutex> lock(mu_);
                 query_budget_ = 8;
                 DrainNonblock();
                 Pump(4);
             }
-            // A readable control socket must not be drained in a tight loop.
-            // Watched-pid counts still arrive on the next 200 ms wake.
-            if (ready > 0) std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
     }
     void Refresh() {
