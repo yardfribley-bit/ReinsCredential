@@ -60,6 +60,9 @@ public:
     virtual void WatchFlows(pid_t pid) { (void)pid; }
     // Read kernel counters for processes already being watched. UDP has no pcb byte count.
     virtual void PollFlowCounts() {}
+    // Drop kernel flow subscriptions once nothing is in the post-close grace window.
+    virtual void ReleaseIdleWatch() {}
+    virtual void UnwatchFlows(pid_t pid) { (void)pid; }
     // Start flow retention before the first sensitive file is seen.
     virtual void StartFlowWatch() {}
 };

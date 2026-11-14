@@ -308,7 +308,9 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         if (flow.tls_app_data && flow.tls_app_bytes > 0 && flow.kind == LiveFlowKind::TcpMeasured && flow.established) {
             tcp_sum += flow.tls_app_bytes;
             if (!upload_peer) upload_peer = &flow;
-            body_note = ";tls_app_bytes=" + std::to_string(flow.tls_app_bytes);
+            const auto handshake_tx = flow.tx_latest > flow.tls_app_bytes ? flow.tx_latest - flow.tls_app_bytes : flow.tx_previous;
+            body_note = ";handshake_tx=" + std::to_string(handshake_tx) +
+                ";tls_app_bytes=" + std::to_string(flow.tls_app_bytes);
             continue;
         }
         // Bytes sent after a handshake-sized flight are the body. The 1615-byte
@@ -318,7 +320,8 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
             const auto growth = flow.tx_latest - flow.tx_previous;
             tcp_sum += growth;
             if (growth > 0 && !upload_peer) upload_peer = &flow;
-            body_note = ";body_after_handshake=" + std::to_string(growth);
+            body_note = ";handshake_tx=" + std::to_string(flow.tx_previous) +
+                ";body_after_handshake=" + std::to_string(growth);
             continue;
         }
         if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && !flow.plaintext_http &&
@@ -335,8 +338,11 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         if (flow.established) {
             tcp_sum += app;
             if (app > 0 && !upload_peer) upload_peer = &flow;
-            if (flow.tls_app_data && flow.tls_app_bytes > 0)
-                body_note = ";tls_app_bytes=" + std::to_string(flow.tls_app_bytes);
+            if (flow.tls_app_data && flow.tls_app_bytes > 0) {
+                const auto handshake_tx = flow.tx_latest > flow.tls_app_bytes ? flow.tx_latest - flow.tls_app_bytes : flow.tx_previous;
+                body_note = ";handshake_tx=" + std::to_string(handshake_tx) +
+                    ";tls_app_bytes=" + std::to_string(flow.tls_app_bytes);
+            }
         } else if (flow.failed && !attempt && delta < lower) {
             attempt = &flow;
         }
@@ -349,7 +355,7 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.verdict = UploadVerdict::Uploaded;
         result.destination = upload_peer->destination;
         result.match_basis = udp_carried ? "flow_txbytes_udp" : "flow_txbytes";
-        result.transfer_outcome = result.match_basis + ";left_host;" + SumText(sum, lower, view.file_bytes);
+        result.transfer_outcome = result.match_basis + ";left_host;" + SumText(sum, lower, view.file_bytes) + body_note;
         result.detail = "match=" + result.match_basis + ";" + SumText(sum, lower, view.file_bytes) +
             body_note + ";plaintext_not_recovered;no_ca;no_system_proxy;app_settings_not_modified";
         NoteSni(result, upload_peer);
@@ -430,6 +436,22 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.transfer_outcome = "unseen_channel";
         result.detail = "no_measured_peer;tx_sum=0;empty_destination;not_rewritten_as_not_found;"
             "unresolved_not_a_clean_bill;app_settings_not_modified";
+        return result;
+    }
+    // A completed off-host TCP session with no HTTP body and no application
+    // data is a handshake we could not parse. It is not "no upload found".
+    if (measured_offhost && measured_offhost->kind == LiveFlowKind::TcpMeasured &&
+        !measured_offhost->plaintext_http &&
+        !(measured_offhost->tls_app_data && measured_offhost->tls_app_bytes > 0) &&
+        !(measured_offhost->preexisting && TxDelta(*measured_offhost) == 0)) {
+        result.verdict = UploadVerdict::NotVisible;
+        result.destination = measured_offhost->destination;
+        result.match_basis = "observation_impossible";
+        result.transfer_outcome = IsProviderOrRelay(measured_offhost->destination) || !measured_offhost->sni.empty()
+            ? "provider_or_relay_body_not_visible" : "tls_handshake_body_not_visible";
+        result.detail = "tls_handshake_bytes_are_not_a_body;unresolved_not_a_clean_bill;not_rewritten_as_not_found;" +
+            SumText(TxDelta(*measured_offhost), lower, view.file_bytes) + ";app_settings_not_modified";
+        NoteSni(result, measured_offhost);
         return result;
     }
     result.verdict = UploadVerdict::NotFound;

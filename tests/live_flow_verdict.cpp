@@ -387,6 +387,19 @@ int main() {
     assert(grown_close.detail.find("body_after_handshake=2085") != std::string::npos);
     assert(grown_close.detail.find("tx_sum=2085") != std::string::npos);
 
+    // A handshake whose counter never reached the 1615-byte flight must still
+    // not be called 未发现.
+    LiveFlow short_handshake = Tcp("192.168.1.11:54831", 0, 20, true);
+    const auto short_tls = CloseLiveAccess(Seen(canary, {short_handshake}));
+    assert(short_tls.verdict == UploadVerdict::NotVisible);
+    assert(short_tls.verdict != UploadVerdict::NotFound);
+    assert(short_tls.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(FlowGraceActive(true, false, 9000));
+    assert(FlowGraceActive(false, true, 1000));
+    assert(!FlowGraceActive(false, true, kFlowGraceMs));
+    assert(IdleWatchTeardownDue(false, true));
+    assert(!IdleWatchTeardownDue(true, true));
+
     assert(FastTreeSampleDue(true, false, false));
     assert(FastTreeSampleDue(false, true, false));
     assert(!FastTreeSampleDue(false, false, false));

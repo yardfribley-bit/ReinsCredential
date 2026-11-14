@@ -395,6 +395,27 @@ public:
         Request(1004, ~uint64_t{0});
         Drain(20);
     }
+    void ReleaseSocketLocked() {
+        if (fd_ >= 0) ::close(fd_);
+        fd_ = -1;
+        failed_ = false;
+        udp_subscribed_ = false;
+        subscribed_.clear();
+        sources_.clear();
+        pending_.clear();
+        hot_.clear();
+    }
+    void Unwatch(pid_t pid) {
+        std::lock_guard<std::mutex> lock(mu_);
+        watch_.erase(pid);
+        subscribed_.erase(pid);
+        if (watch_.empty()) ReleaseSocketLocked();
+    }
+    void ReleaseIdle() {
+        std::lock_guard<std::mutex> lock(mu_);
+        watch_.clear();
+        ReleaseSocketLocked();
+    }
     void Watch(pid_t pid) {
         if (pid <= 0) return;
         {
@@ -1114,6 +1135,8 @@ public:
     std::vector<pid_t> TakeHotPids() override { return Ntstat().TakeHot(); }
     void RestoreHotPids(const std::vector<pid_t>& pids) override { Ntstat().RestoreHot(pids); }
     void WatchFlows(pid_t pid) override { Ntstat().Watch(pid); }
+    void UnwatchFlows(pid_t pid) override { Ntstat().Unwatch(pid); }
+    void ReleaseIdleWatch() override { Ntstat().ReleaseIdle(); }
     void PollFlowCounts() override { Ntstat().PollWatched(); }
     void StartFlowWatch() override {
         Ntstat().Start();

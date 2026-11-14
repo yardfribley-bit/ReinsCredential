@@ -124,11 +124,13 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func clampAndFront() {
+        NSApp.activate(ignoringOtherApps: true)
         for window in NSApp.windows where window.canBecomeMain {
             let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
                 ?? CGRect(x: 0, y: 0, width: WindowPlacement.preferred.width, height: WindowPlacement.preferred.height)
             window.setFrame(WindowPlacement.clamped(saved: window.frame, visible: visible), display: true)
             window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
         }
     }
 }

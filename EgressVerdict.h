@@ -149,9 +149,18 @@ TlsRecordView ClassifyTlsRecords(const uint8_t* data, size_t size) noexcept;
 LiveClose CloseLiveAccess(const LiveAccessView& view);
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path);
 
-// A tree with a sensitive file open, or within a second after that file
-// closes, is sampled every pass so a short send is not missed. An idle tree
-// is sampled only when the slow period has elapsed.
+// A tree with a sensitive file open, or inside the grace window after it
+// closes, is sampled every pass. After that grace an idle tree is not a
+// reason to stay subscribed.
+inline constexpr int64_t kFlowGraceMs = 3000;
+inline bool FlowGraceActive(bool file_open, bool have_close_stamp, int64_t since_close_ms, int64_t grace_ms = kFlowGraceMs) noexcept {
+    if (file_open) return true;
+    if (!have_close_stamp || since_close_ms < 0) return false;
+    return since_close_ms < grace_ms;
+}
+inline bool IdleWatchTeardownDue(bool any_grace, bool any_subscription) noexcept {
+    return !any_grace && any_subscription;
+}
 inline bool FastTreeSampleDue(bool sensitive_file_open, bool within_close_tail, bool slow_period_elapsed) noexcept {
     if (sensitive_file_open || within_close_tail) return true;
     return slow_period_elapsed;

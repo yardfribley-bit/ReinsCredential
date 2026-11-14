@@ -582,6 +582,7 @@ struct Session {
     bool watch_live = false;
     std::unique_ptr<TlsIntercept> tls;
     std::map<pid_t, MonoClock::time_point> inspected_at;
+    std::map<pid_t, MonoClock::time_point> first_seen;
     MonoClock::time_point last_slow_inspect{};
     MonoClock::time_point last_launched_sample{};
     MonoClock::time_point started_at = MonoClock::now();
@@ -1092,6 +1093,10 @@ struct Session {
         if (!node || IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) return false;
         auto activity = source.Inspect(*node, roots, false);
         if (activity.sensitive_files.empty()) return false;
+        // The open was just observed. Subscribe and re-read sockets in this call.
+        source.WatchFlows(pid);
+        source.PollFlowCounts();
+        activity = source.Inspect(*node, roots, true);
         auto actor = Describe(source, *node);
         std::string label = node->name.empty() ? node->executable : node->name;
         if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
@@ -1125,16 +1130,23 @@ struct Session {
         if (count <= 0) return;
         const auto listed = std::min(pids.size(), static_cast<size_t>(count));
         std::vector<pid_t> fresh;
-        std::vector<pid_t> retry;
+        std::vector<pid_t> young;
         fresh.reserve(32);
         for (size_t index = 0; index < listed; ++index) {
             const auto pid = pids[index];
             if (pid <= 1 || WatchingPid(pid)) continue;
+            if (!first_seen.count(pid)) first_seen[pid] = now;
+            const bool newborn = now - first_seen[pid] < std::chrono::seconds(2);
             const auto seen = inspected_at.find(pid);
-            if (seen == inspected_at.end()) fresh.push_back(pid);
-            else if (now - seen->second >= std::chrono::milliseconds(200) &&
-                     now - seen->second < std::chrono::seconds(30))
-                retry.push_back(pid);
+            if (newborn) young.push_back(pid);
+            else if (seen == inspected_at.end()) fresh.push_back(pid);
+        }
+        std::sort(young.begin(), young.end(), [](pid_t left, pid_t right) { return left > right; });
+        size_t young_budget = 8;
+        for (const auto pid : young) {
+            if (!young_budget || watched.size() >= 64) break;
+            --young_budget;
+            ConsiderPid(pid);
         }
         std::sort(fresh.begin(), fresh.end(), [](pid_t left, pid_t right) { return left > right; });
         size_t fresh_budget = 4;
@@ -1144,36 +1156,25 @@ struct Session {
             --fresh_budget;
             ConsiderPid(pid);
         }
-        // A new process is often sampled before it opens the file. Recheck
-        // those recent pids, not the whole process table.
-        std::sort(retry.begin(), retry.end(), [](pid_t left, pid_t right) { return left > right; });
-        size_t retry_budget = 2;
-        for (const auto pid : retry) {
-            if (!retry_budget || watched.size() >= 64) break;
-            if (!FastDiscoveryInspect(true, false, WatchingPid(pid), false)) continue;
-            --retry_budget;
-            ConsiderPid(pid);
+        if (listed > 0 && watched.size() < 64) {
+            // Walk the live pid list, a few per sample, so a process that was
+            // idle and then opens a file is found while that file is still open.
+            size_t sweep_budget = 4;
+            for (size_t n = 0; n < listed && sweep_budget; ++n) {
+                const auto pid = pids[rescan_cursor % listed];
+                ++rescan_cursor;
+                if (pid <= 1 || WatchingPid(pid)) continue;
+                const auto born = first_seen.find(pid);
+                if (born != first_seen.end() && now - born->second < std::chrono::seconds(2)) continue;
+                ConsiderPid(pid);
+                --sweep_budget;
+            }
         }
         if (inspected_at.size() > 8192) {
             const auto cutoff = MonoClock::now() - std::chrono::seconds(30);
             for (auto it = inspected_at.begin(); it != inspected_at.end(); ) {
                 if (it->second < cutoff && !WatchingPid(it->first)) it = inspected_at.erase(it);
                 else ++it;
-            }
-        }
-        std::vector<pid_t> rotation;
-        rotation.reserve(inspected_at.size());
-        for (const auto& item : inspected_at) if (!WatchingPid(item.first)) rotation.push_back(item.first);
-        const bool slow_due = last_slow_inspect.time_since_epoch().count() == 0 ||
-            now - last_slow_inspect >= std::chrono::milliseconds(500);
-        if (slow_due && !rotation.empty() && watched.size() < 64) {
-            const auto pid = rotation[rescan_cursor % rotation.size()];
-            ++rescan_cursor;
-            const auto seen = inspected_at.find(pid);
-            const bool quiet = seen == inspected_at.end() || now - seen->second >= std::chrono::milliseconds(200);
-            if (SlowDiscoveryInspect(WatchingPid(pid), quiet, 0, 1)) {
-                ConsiderPid(pid);
-                last_slow_inspect = now;
             }
         }
     }
@@ -1189,13 +1190,26 @@ struct Session {
         std::vector<ProcessIdentity> finished;
         for (auto& root : watched) {
             if (root.launched && !sample_launched) continue;
+            if (!root.launched && !source.Lookup(root.pid)) {
+                source.UnwatchFlows(root.pid);
+                finished.push_back(root.identity);
+                continue;
+            }
             const bool file_open = FileOpenNow(root.identity);
-            const bool tail = root.last_file.time_since_epoch().count() != 0 &&
-                now - root.last_file < std::chrono::seconds(1);
+            const bool have_close = root.last_file.time_since_epoch().count() != 0;
+            const auto since_close = have_close
+                ? std::chrono::duration_cast<std::chrono::milliseconds>(now - root.last_file).count()
+                : int64_t{-1};
+            const bool grace = FlowGraceActive(file_open, have_close, since_close);
             const bool slow_elapsed = root.last_sample.time_since_epoch().count() == 0 ||
                 now - root.last_sample >= std::chrono::seconds(1);
-            if (!FastTreeSampleDue(file_open, tail, slow_elapsed)) continue;
-            const bool peers = file_open || tail;
+            if (!root.launched && !grace && have_close) {
+                source.UnwatchFlows(root.pid);
+                finished.push_back(root.identity);
+                continue;
+            }
+            if (!FastTreeSampleDue(file_open, grace, slow_elapsed)) continue;
+            const bool peers = file_open || grace;
             SampleTree(root.pid, root.identity, root.launched, peers);
             root.last_sample = now;
             if (FileOpenNow(root.identity)) root.last_file = now;
@@ -1205,6 +1219,9 @@ struct Session {
             watched.erase(std::remove_if(watched.begin(), watched.end(), [&](const Root& root) {
                 return std::find(finished.begin(), finished.end(), root.identity) != finished.end();
             }), watched.end());
+            bool any_live = false;
+            for (const auto& root : watched) if (!root.launched) any_live = true;
+            if (IdleWatchTeardownDue(any_live, true)) source.ReleaseIdleWatch();
         }
         FlushLive();
     }
