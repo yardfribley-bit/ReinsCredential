@@ -695,7 +695,6 @@ struct Session {
     std::set<ProcessIdentity> live_roots_closed_without_file;
     void ObserveLive(const ProcessNode& node, const ActorProcess& actor, const ActivitySample& activity, const ProcessIdentity& root) {
         auto& proc = live_procs[node.identity];
-        const bool first = !proc.known;
         proc.known = true;
         proc.identity = node.identity;
         proc.root = root;
