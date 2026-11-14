@@ -495,7 +495,10 @@ void AgentMonitor::Scan() {
             const bool fresh = previous == seen_.end();
             const bool touched = previous != seen_.end() && previous->second.touched_sensitive;
             const bool due = fresh || known || touched || (previous != seen_.end() && previous->second.idle_skips == 0);
-            if (IsAppleSystemDaemon(seen.actor.process.node) || !due) skip[item] = 1;
+            const auto& executable = seen.actor.process.node.executable;
+            const bool system_path = executable.rfind("/System/", 0) == 0 || executable.rfind("/usr/libexec/", 0) == 0 ||
+                executable.rfind("/usr/sbin/", 0) == 0 || seen.actor.process.node.identity.pid == 1;
+            if (system_path || !due) skip[item] = 1;
             if (seen.actor.owning_agent && seen.actor.owning_agent->root == identity &&
                 seen.actor.classification != "collector_self" && focus_.size() < 128)
                 focus_.push_back(identity);
