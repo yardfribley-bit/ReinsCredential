@@ -1104,11 +1104,16 @@ struct Session {
         if (count <= 0) return;
         const auto listed = std::min(pids.size(), static_cast<size_t>(count));
         std::vector<pid_t> fresh;
+        std::vector<pid_t> retry;
         fresh.reserve(32);
         for (size_t index = 0; index < listed; ++index) {
             const auto pid = pids[index];
-            if (pid <= 1 || WatchingPid(pid) || inspected_at.count(pid)) continue;
-            fresh.push_back(pid);
+            if (pid <= 1 || WatchingPid(pid)) continue;
+            const auto seen = inspected_at.find(pid);
+            if (seen == inspected_at.end()) fresh.push_back(pid);
+            else if (now - seen->second >= std::chrono::milliseconds(200) &&
+                     now - seen->second < std::chrono::seconds(30))
+                retry.push_back(pid);
         }
         std::sort(fresh.begin(), fresh.end(), [](pid_t left, pid_t right) { return left > right; });
         size_t fresh_budget = 4;
@@ -1116,6 +1121,16 @@ struct Session {
             if (!fresh_budget || watched.size() >= 64) break;
             if (!FastDiscoveryInspect(true, false, WatchingPid(pid), false)) continue;
             --fresh_budget;
+            ConsiderPid(pid);
+        }
+        // A new process is often sampled before it opens the file. Recheck
+        // those recent pids, not the whole process table.
+        std::sort(retry.begin(), retry.end(), [](pid_t left, pid_t right) { return left > right; });
+        size_t retry_budget = 2;
+        for (const auto pid : retry) {
+            if (!retry_budget || watched.size() >= 64) break;
+            if (!FastDiscoveryInspect(true, false, WatchingPid(pid), false)) continue;
+            --retry_budget;
             ConsiderPid(pid);
         }
         if (inspected_at.size() > 8192) {
@@ -1134,7 +1149,7 @@ struct Session {
             const auto pid = rotation[rescan_cursor % rotation.size()];
             ++rescan_cursor;
             const auto seen = inspected_at.find(pid);
-            const bool quiet = seen == inspected_at.end() || now - seen->second >= std::chrono::seconds(5);
+            const bool quiet = seen == inspected_at.end() || now - seen->second >= std::chrono::milliseconds(200);
             if (SlowDiscoveryInspect(WatchingPid(pid), quiet, 0, 1)) {
                 ConsiderPid(pid);
                 last_slow_inspect = now;
