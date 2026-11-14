@@ -1536,7 +1536,7 @@ void HandleClient(UniqueFd client, Session& session) {
         try { Respond(client->value, 403, "Peer Unattributed", "peer not in launched tree\n"); } catch (...) {}
         return;
     }
-    session.NoteFilesAndSockets(actor->process.node, session.LaunchedActor(*actor), actor->process.node.identity);
+    session.NoteFilesAndSockets(actor->process.node, session.LaunchedActor(*actor), actor->process.node.identity, true);
     if (request.method == "CONNECT") {
         ++session.opaque_tunnels;
         auto target = ParseHostPort(request.target);

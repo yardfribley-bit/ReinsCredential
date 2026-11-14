@@ -19,6 +19,7 @@ struct DashboardView: View {
     @State private var windowSheet = false
     @State private var windowStart = Date()
     @State private var windowEnd = Date()
+    @State private var closureScope: ClosureScope = .currentRun
 
     var body: some View {
         NavigationSplitView {
@@ -188,6 +189,70 @@ struct DashboardView: View {
         focusedSelfTest = path
     }
 
+    private var runSplit: (current: [EvidenceChain], history: [EvidenceChain]) {
+        ClosureListing.partition(store.visibleChains, runStartedAt: store.mode == .live ? runtime.monitorStartedAt : nil)
+    }
+
+    private var currentRealChains: [EvidenceChain] {
+        runSplit.current.filter { !ClosureListing.isSelfCheck($0) }
+    }
+
+    private var selfCheckChains: [EvidenceChain] {
+        guard closureScope == .currentRun else { return [] }
+        return runSplit.current.filter { ClosureListing.isSelfCheck($0) }
+    }
+
+    private var listedRealChains: [EvidenceChain] {
+        closureScope == .history ? runSplit.history : currentRealChains
+    }
+
+    private var currentCounts: ClosureCounts { ClosureListing.counts(of: runSplit.current) }
+
+    private var closureSections: [EvidenceChainSection] {
+        switch closureScope {
+        case .currentRun:
+            var sections: [EvidenceChainSection] = []
+            if !currentRealChains.isEmpty {
+                sections.append(EvidenceChainSection(id: "current", title: L10n.tr("closure.current"), subtitle: "", chains: currentRealChains))
+            }
+            if !selfCheckChains.isEmpty {
+                sections.append(EvidenceChainSection(id: "self-check", title: L10n.tr("closure.selfCheck"), subtitle: L10n.tr("closure.selfCheckNote"), chains: selfCheckChains))
+            }
+            return sections
+        case .history:
+            return ClosureListing.historyDays(runSplit.history).map { day in
+                EvidenceChainSection(id: "history-\(day.id)", title: L10n.format("closure.historyDay", day.id), subtitle: L10n.tr("closure.history"), chains: day.chains)
+            }
+        }
+    }
+
+    private var currentRunSummary: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                summaryChip("verdict.uploaded", currentCounts.uploaded, .red)
+                summaryChip("verdict.attempted", currentCounts.attempted, .orange)
+                summaryChip("verdict.notFound", currentCounts.notFound, .blue)
+                summaryChip("verdict.notVisible", currentCounts.notVisible, .purple)
+            }
+            if currentCounts.notVisible > 0 {
+                Text(L10n.format("closure.notVisibleCount", currentCounts.notVisible))
+                    .font(.caption.weight(.semibold))
+                ForEach(currentCounts.notVisibleReasonKeys, id: \.self) { key in
+                    Text(L10n.tr(key)).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func summaryChip(_ key: String, _ count: Int, _ color: Color) -> some View {
+        Text("\(L10n.tr(key)) \(count)")
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(color)
+            .background(color.opacity(0.12), in: Capsule())
+    }
+
     private var sidebar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -243,9 +308,18 @@ struct DashboardView: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(boardMode == .chains ? L10n.tr("board.chains") : store.riskFilter.title).font(.title2.bold())
                     Spacer()
-                    Text(boardMode == .chains ? L10n.format("board.chainCount", store.visibleChains.count) : L10n.format("board.recordCount", store.visibleRecords.count))
+                    Text(boardMode == .chains ? L10n.format("board.chainCount", listedRealChains.count) : L10n.format("board.recordCount", store.visibleRecords.count))
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
+                }
+                if boardMode == .chains {
+                    currentRunSummary
+                    Picker(L10n.tr("closure.scope"), selection: $closureScope) {
+                        Text(L10n.tr("closure.current")).tag(ClosureScope.currentRun)
+                        Text(L10n.tr("closure.history")).tag(ClosureScope.history)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 280)
                 }
                 Picker(L10n.tr("board.view"), selection: $boardMode) {
                     Text(L10n.tr("board.chains")).tag(BoardMode.chains)
@@ -282,11 +356,14 @@ struct DashboardView: View {
             Divider()
             switch boardMode {
             case .chains:
-                if store.visibleChains.isEmpty {
+                if closureScope == .history && runSplit.history.isEmpty {
+                    EmptyEvidenceView(symbol: "clock", title: L10n.tr("closure.historyEmpty"),
+                                      message: L10n.tr("closure.historyEmptyBody"))
+                } else if listedRealChains.isEmpty && selfCheckChains.isEmpty {
                     emptyDataset
                 } else {
                     VStack(spacing: 0) {
-                        EvidenceChainList(sections: store.chainSections, selection: $store.selectedChainID)
+                        EvidenceChainList(sections: closureSections, selection: $store.selectedChainID)
                         Text(L10n.tr("glossary"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)

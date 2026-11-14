@@ -87,6 +87,13 @@ struct ChainRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 VerdictBadge(verdict: chain.verdict)
+                if ClosureListing.isSelfCheck(chain) {
+                    Text(L10n.tr("closure.selfCheck"))
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.15), in: Capsule())
+                }
                 if chain.link(.process)?.presence == .incomplete {
                     Text(L10n.tr("chain.incomplete"))
                         .font(.caption2.weight(.semibold))
@@ -98,7 +105,7 @@ struct ChainRow: View {
                         .foregroundStyle(.orange)
                 }
                 Spacer(minLength: 4)
-                Text(chain.timestamp, format: .dateTime.hour().minute().second())
+                Text(chain.timestamp.formatted(date: .abbreviated, time: .standard))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -107,26 +114,55 @@ struct ChainRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             HStack(spacing: 8) {
-                Label(chain.link(.agent)?.presence == .missing ? L10n.tr("chain.agentMissing") : (chain.owningAgentName.isEmpty ? L10n.tr("chain.unattributed") : chain.owningAgentName),
-                      systemImage: "person.crop.rectangle")
-                if chain.destination.isEmpty {
+                Label(agentLabel, systemImage: "person.crop.rectangle")
+                if hostPort.isEmpty {
                     Label(L10n.tr("chain.destinationMissing"), systemImage: "circle.dashed")
                 } else {
-                    Text(chain.destination).lineLimit(1).truncationMode(.middle)
+                    Label(hostPort, systemImage: "network")
+                        .lineLimit(1)
                 }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-            if !chain.reasonLine.isEmpty {
-                Text(chain.reasonLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+            Text(L10n.tr(ClosureExplanation.key(basis: chain.evidenceBasis, outcome: chain.transferOutcome)))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            DisclosureGroup(L10n.tr("chain.rawDetails")) {
+                if !chain.evidenceBasis.isEmpty {
+                    labeledRaw(L10n.tr("detail.evidence"), chain.evidenceBasis)
+                }
+                if !chain.transferOutcome.isEmpty {
+                    labeledRaw(L10n.tr("chain.rawOutcome"), chain.transferOutcome)
+                }
+                if !chain.destination.isEmpty {
+                    labeledRaw(L10n.tr("chain.rawDestination"), chain.destination)
+                }
+                if !chain.backendSummary.isEmpty {
+                    Text(chain.backendSummary).font(.caption2).foregroundStyle(.secondary)
+                }
             }
+            .font(.caption2)
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(chain.headline)
+    }
+
+    private var agentLabel: String {
+        if chain.link(.agent)?.presence == .missing { return L10n.tr("chain.agentMissing") }
+        if !chain.owningAgentBundle.isEmpty { return chain.owningAgentBundle }
+        if !chain.owningAgentName.isEmpty { return chain.owningAgentName }
+        return L10n.tr("chain.unattributed")
+    }
+
+    private var hostPort: String { ClosureListing.hostPort(chain.destination) }
+
+    private func labeledRaw(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).foregroundStyle(.secondary)
+            Text(value).font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
+        }
     }
 }
 

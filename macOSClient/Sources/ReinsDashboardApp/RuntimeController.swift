@@ -70,6 +70,10 @@ final class RuntimeController: ObservableObject {
     @Published private(set) var records: [EvidenceRecord] = []
     /// Closures and chain inputs. Not trimmed by the events-window cap.
     @Published private(set) var chainRecords: [EvidenceRecord] = []
+    /// Start of the collector process that is running now. Older closures stay in `chainRecords` for History.
+    @Published private(set) var monitorStartedAt: Date?
+    /// Localization keys naming each coverage gap and what to do about it.
+    @Published private(set) var coverageKeys: [String] = []
     @Published private(set) var isBusy = false
     @Published var errorMessage: String?
     @Published private(set) var watchedPaths: [String] = []
@@ -224,10 +228,10 @@ final class RuntimeController: ObservableObject {
             let egressRecords = (try? await egressReader.poll(url: paths.egressEvidenceURL).records) ?? []
             let statusURL = paths.statusURL
             let status = try? await Task.detached { try RuntimeStatus.load(from: statusURL) }.value
-            let runStart = status?.monitorStartedAt?.addingTimeInterval(-2)
+            if let started = status?.monitorStartedAt, monitorStartedAt != started { monitorStartedAt = started }
             let incoming = batch.records + egressRecords
-            if !incoming.isEmpty || runStart != nil {
-                let merged = LiveRecordWindow.merge(events: records, chain: chainRecords, incoming: incoming, notBefore: runStart)
+            if !incoming.isEmpty || monitorStartedAt != nil {
+                let merged = LiveRecordWindow.merge(events: records, chain: chainRecords, incoming: incoming)
                 if !sameIDs(records, merged.events) { records = merged.events }
                 if !sameIDs(chainRecords, merged.chain) { chainRecords = merged.chain }
                 if !incoming.isEmpty { notifyIfNeeded(incoming, now: now) }
@@ -268,12 +272,15 @@ final class RuntimeController: ObservableObject {
             let partial = health.metrics["fd_scans_partial", default: 0]
             let validation = health.metrics["activity_validation_failed", default: 0]
             let unavailable = health.metrics["unavailable", default: 0]
-            let loss = health.count > 0 || rejectedCount > 0 || health.metrics["enumeration_complete"] == 0
+            let enumerationIncomplete = health.metrics["enumeration_complete"] == 0
+            let dropped = health.count > 0 || rejectedCount > 0
+            let loss = dropped || enumerationIncomplete
+            let keys = CoverageNotice.keys(partialDescriptors: Int(partial), validationFailed: Int(validation), unavailable: Int(unavailable), enumerationIncomplete: enumerationIncomplete, droppedEvents: dropped)
+            if coverageKeys != keys { coverageKeys = keys }
             let visible = health.metrics["visible", default: 0]
             let candidates = health.metrics["known_candidates", default: 0]
             let nextStatus = L10n.format("status.visible", visible, candidates) +
-                (loss ? L10n.tr("status.loss") : "") +
-                ((partial > 0 || validation > 0 || unavailable > 0) ? L10n.tr("status.partial") : "") +
+                keys.map { " " + L10n.tr($0) }.joined() +
                 (batch.hasBacklog ? L10n.tr("status.catchup") : "") + L10n.tr("status.samplingLimit")
             publish(state: loss || partial > 0 || validation > 0 || unavailable > 0 ? .degraded : .running,
                     status: nextStatus)
@@ -358,6 +365,7 @@ final class RuntimeController: ObservableObject {
     }
 
     private func publish(state nextState: RuntimeUIState, status: String) {
+        if nextState != .degraded, !coverageKeys.isEmpty { coverageKeys = [] }
         if state != nextState { state = nextState }
         if statusMessage != status { statusMessage = status }
     }

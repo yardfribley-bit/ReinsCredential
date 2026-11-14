@@ -154,6 +154,13 @@ public struct EvidenceChainSection: Identifiable, Equatable, Sendable {
     public let title: String
     public let subtitle: String
     public let chains: [EvidenceChain]
+
+    public init(id: String, title: String, subtitle: String, chains: [EvidenceChain]) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.chains = chains
+    }
 }
 
 public extension Array where Element == EvidenceChain {
