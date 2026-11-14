@@ -139,6 +139,20 @@ void RejectedEvidenceTests() {
     monitor.Scan(); assert(monitor.Stats().retirement_pending == 0 && monitor.Stats().retirement_retry_exhausted == 1);
     std::cout << "PASS: rejected discovery/change/activity retry after queue recovery; dedup advances only on acceptance; retirement retries are bounded\n";
 }
+void IdleRescanTests() {
+    auto source = std::make_shared<Source>();
+    source->nodes = {Node(90020, 10, 1, "/usr/local/bin/codex")};
+    source->activity = false;
+    ProcessCache cache(source, {}); cache.Refresh();
+    Sink sink; AgentMonitor monitor(cache, [&](EvidenceRecord r) { return sink.Submit(std::move(r)); }, {}, {});
+    monitor.Scan();
+    assert(monitor.Stats().descriptor_scans == 1);
+    assert(monitor.Stats().candidates == 1);
+    monitor.Scan();
+    assert(monitor.Stats().descriptor_scans == 0);
+    assert(monitor.Stats().candidates == 1);
+    std::cout << "PASS: an idle known agent is not descriptor-scanned again on the next pass\n";
+}
 void CooccurrenceTests() {
     auto source = std::make_shared<Source>();
     source->nodes = {Node(90020, 10, 0, "/ordinary/unknown-agent")}; source->activity = true;
@@ -170,4 +184,4 @@ void CooccurrenceTests() {
     std::cout << "PASS: typed file/peer pair from one validated sample, unknown agents included, file-only/peer-only/invalid identity excluded, Full retries, PID generation dedup and 32-pair cap\n";
 }
 } // namespace
-int main() { FrozenImageTests(); LateParentAndEvictionTests(); RejectedEvidenceTests(); CooccurrenceTests(); }
+int main() { FrozenImageTests(); LateParentAndEvictionTests(); RejectedEvidenceTests(); IdleRescanTests(); CooccurrenceTests(); }

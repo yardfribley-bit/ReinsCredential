@@ -65,8 +65,19 @@ struct LiveFlow {
     bool established = false;
     // Connect never completed, or the flow closed before a full off-host send.
     bool failed = false;
-    // Hostname from the socket or the network-statistics domain, when one was visible.
+    // Hostname from the socket, a TLS ClientHello, or a network-statistics domain.
     std::string sni;
+    // True when a captured send began with a TLS handshake record.
+    bool tls_handshake = false;
+    // True when a captured send contained a TLS application-data record.
+    bool tls_app_data = false;
+    // Sum of captured TLS application-data record lengths. Zero when unknown.
+    uint64_t tls_app_bytes = 0;
+    // True when a captured send began with an HTTP request line.
+    bool plaintext_http = false;
+    // Previous sample's tx_latest. Zero on the first sample. Growth after a
+    // handshake-sized flight is the only kernel-counter evidence of a body.
+    uint64_t tx_previous = 0;
 };
 
 // What was visible for one already-running agent, or for one file it opened.
@@ -102,9 +113,28 @@ struct LiveClose {
 // Sent-byte slack above the registered file size. Request framing fits; a
 // multi-megabyte unrelated stream does not match a small file.
 constexpr uint64_t kFlowTxSlack = 65536;
-// Client TLS flight with no application data. Observed handshake-only sends
-// were 206 and 299 bytes. Bytes at or below this allowance do not prove a body.
+// Kept only so a finished send that raced the first sample is not erased.
+// It is not a body detector: handshake records are classified by content type.
 constexpr uint64_t kTlsHandshakeAllowance = 1024;
+// Ordinary HTTP request framing above the file. The acceptance POST is about
+// 130 bytes over a 37-byte body. A TLS ClientHello is not framing.
+constexpr uint64_t kHttpFraming = 512;
+// Without a TLS record parse, a send this far above the file is still only a
+// handshake. The acceptance handshake is about 1615 bytes. Application data
+// in that test adds 2085 more and clears this ceiling.
+constexpr uint64_t kUnparsedHandshakeAboveFile = 3072;
+
+// TLS records on the wire. Type 22 is a handshake. Type 23 is application data.
+// Change-cipher-spec and alerts are skipped. A handshake with no type 23 has
+// no body, however many bytes the records add up to.
+struct TlsRecordView {
+    bool saw_handshake = false;
+    bool saw_app_data = false;
+    uint64_t handshake_bytes = 0;
+    uint64_t app_bytes = 0;
+    std::string sni;
+};
+TlsRecordView ClassifyTlsRecords(const uint8_t* data, size_t size) noexcept;
 
 // Verdict for an agent that was already running.
 // 已上传 requires the tree's measured off-host send, summed across TCP and
@@ -118,6 +148,49 @@ constexpr uint64_t kTlsHandshakeAllowance = 1024;
 // pick a different verdict.
 LiveClose CloseLiveAccess(const LiveAccessView& view);
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path);
+
+// A tree with a sensitive file open, or inside the grace window after it
+// closes, is sampled every pass. After that grace an idle tree is not a
+// reason to stay subscribed.
+inline constexpr int64_t kFlowGraceMs = 3000;
+inline bool FlowGraceActive(bool file_open, bool have_close_stamp, int64_t since_close_ms, int64_t grace_ms = kFlowGraceMs) noexcept {
+    if (file_open) return true;
+    if (!have_close_stamp || since_close_ms < 0) return false;
+    return since_close_ms < grace_ms;
+}
+inline bool IdleWatchTeardownDue(bool any_grace, bool any_subscription) noexcept {
+    return !any_grace && any_subscription;
+}
+inline bool FastTreeSampleDue(bool sensitive_file_open, bool within_close_tail, bool slow_period_elapsed) noexcept {
+    if (sensitive_file_open || within_close_tail) return true;
+    return slow_period_elapsed;
+}
+// System-wide flow subscription is the idle hotspot. Counts are requested
+// only for a process that is already being watched.
+inline bool SubscribeEveryProcessFlow() noexcept { return false; }
+
+// The fast discovery pass does not re-inspect a process it already saw.
+// A new pid or a newly hot pid is the only fast-path inspect. Already-watched
+// trees are sampled on their own cadence, not by this pass.
+inline bool FastDiscoveryInspect(bool is_new, bool is_hot, bool already_watched, bool inspected_recently) noexcept {
+    if (already_watched || inspected_recently) return false;
+    return is_new || is_hot;
+}
+// At most `cap` previously seen pids are re-inspected, and only after a quiet gap.
+inline bool SlowDiscoveryInspect(bool already_watched, bool quiet_long_enough, uint32_t taken, uint32_t cap) noexcept {
+    return !already_watched && quiet_long_enough && taken < cap;
+}
+
+// A second close of the same upload is not a new session. A stronger verdict
+// may still replace a weaker one.
+bool ShouldEmitCloseUpdate(int prior_rank, const std::string& prior_outcome, const LiveClose& next) noexcept;
+
+// Baseline for a flow the first time this process sample sees it.
+// A flow that appears after we were already sampling counts from zero.
+// On the first sample, a counter that still fits the file window counts from
+// zero so a send that completed before that sample is not erased. A larger
+// counter is preexisting bulk traffic and stays as the baseline.
+uint64_t InitialFlowBaseline(bool process_already_sampled, uint64_t tx_bytes, uint64_t window_upper) noexcept;
 
 // A proxy body match closes the process that sent it, and the launched tree
 // that sent it. A later process that opens the same file is not covered.

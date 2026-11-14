@@ -241,10 +241,7 @@ void ApplyBehaviorOwner(ActorProcess& actor) {
     const auto hint = MatchAgent(*chosen, {});
     if (!hint.empty() && hint != "generic_runtime_candidate") owner.match_reason += ";label:" + hint;
     actor.owning_agent = owner;
-    if (actor.classification == "collector_self") return;
-    if (actor.classification.empty() || actor.classification == "unclassified_process")
-        actor.classification = hint.empty() || hint == "generic_runtime_candidate" ? "behavior_tracked" : "known_agent_candidate";
-    if (actor.classification_reason.empty()) actor.classification_reason = owner.match_reason;
+    if (actor.classification == "collector_self") actor.owning_agent.reset();
 }
 std::string MatchAgent(const ProcessNode& node, const AgentRules& rules) {
     const auto base = Lower(BaseName(node.executable));
@@ -359,6 +356,7 @@ std::optional<ActorProcess> AgentMonitor::Describe(const ProcessNode& node) cons
     auto view = cache_.View();
     if (auto resolved = view->Resolve(node.identity)) {
         AnnotateActor(*resolved, rules_);
+        ApplyBehaviorOwner(*resolved);
         return resolved;
     }
     ActorProcess actor;
@@ -386,7 +384,8 @@ std::optional<ActorProcess> AgentMonitor::Describe(const ProcessNode& node) cons
             }
         }
     }
-    AnnotateActor(actor, rules_);
+        AnnotateActor(actor, rules_);
+    ApplyBehaviorOwner(actor);
     return actor;
 }
 AgentMonitor::Claim AgentMonitor::ClaimEmit(const ProcessIdentity& identity, const std::string& detail, const Seen& seen,
@@ -408,7 +407,9 @@ void AgentMonitor::ArmFocus() {
         auto actor = view->Resolve(current.second);
         if (!actor) continue;
         AnnotateActor(*actor, rules_);
-        if (actor->owning_agent && actor->classification != "collector_self") roots.push_back(actor->process.node.identity);
+        ApplyBehaviorOwner(*actor);
+        if (actor->owning_agent && actor->owning_agent->root == actor->process.node.identity &&
+            actor->classification != "collector_self") roots.push_back(actor->process.node.identity);
         if (roots.size() == 128) break;
     }
     std::lock_guard<std::mutex> lock(mu_);
@@ -478,15 +479,29 @@ void AgentMonitor::Scan() {
         auto actor = view->Resolve(current.second);
         if (!actor) continue;
         AnnotateActor(*actor, rules_);
+        ApplyBehaviorOwner(*actor);
         processes.push_back({std::move(*actor), {}, {}, {}, 0});
         processes.back().reason = processes.back().actor.classification_reason;
     }
+    std::vector<uint8_t> skip(processes.size(), 0);
     {
         std::lock_guard<std::mutex> lock(mu_);
         focus_.clear();
-        for (const auto& seen : processes) {
-            if (seen.actor.owning_agent && seen.actor.classification != "collector_self" && focus_.size() < 128)
-                focus_.push_back(seen.actor.process.node.identity);
+        for (size_t item = 0; item < processes.size(); ++item) {
+            const auto& seen = processes[item];
+            const auto identity = seen.actor.process.node.identity;
+            const auto previous = seen_.find(identity);
+            const bool fresh = previous == seen_.end();
+            const bool touched = previous != seen_.end() && previous->second.touched_sensitive;
+            // Known-agent name alone does not force a descriptor walk every pass.
+            const bool due = fresh || touched || (previous != seen_.end() && previous->second.idle_skips == 0);
+            const auto& executable = seen.actor.process.node.executable;
+            const bool system_path = executable.rfind("/System/", 0) == 0 || executable.rfind("/usr/libexec/", 0) == 0 ||
+                executable.rfind("/usr/sbin/", 0) == 0 || seen.actor.process.node.identity.pid == 1;
+            if (system_path || !due) skip[item] = 1;
+            if (seen.actor.owning_agent && seen.actor.owning_agent->root == identity &&
+                seen.actor.classification != "collector_self" && focus_.size() < 128)
+                focus_.push_back(identity);
         }
     }
     // Bounded concurrency for all visible processes, including unknown tools.
@@ -499,12 +514,17 @@ void AgentMonitor::Scan() {
             for (;;) {
                 const auto item = index.fetch_add(1);
                 if (item >= processes.size()) break;
-                const bool peers = processes[item].actor.classification == "known_agent_candidate";
+                if (skip[item]) continue;
+                // Sockets are expanded once a sensitive file is open. Idle known
+                // agents do not take a TCP byte-count dump on every pass.
+                const bool peers = false;
                 activities[item] = cache_.Inspect(processes[item].actor.process.node, roots_, peers);
             }
         }));
     for (auto& worker : workers) worker.get();
-    stats_ = {}; stats_.processes = processes.size();
+    uint64_t descriptor_scans = 0;
+    for (size_t item = 0; item < skip.size(); ++item) if (!skip[item]) ++descriptor_scans;
+    stats_ = {}; stats_.processes = processes.size(); stats_.descriptor_scans = descriptor_scans;
     std::map<ProcessIdentity, Seen> next;
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -514,16 +534,29 @@ void AgentMonitor::Scan() {
             const auto previous = seen_.find(identity);
             const bool known = seen.actor.classification == "known_agent_candidate";
             const bool self = seen.actor.classification == "collector_self";
+            if (skip[item]) {
+                if (previous != seen_.end()) {
+                    seen.activity = previous->second.activity;
+                    seen.announced_actor = previous->second.announced_actor;
+                    seen.touched_sensitive = previous->second.touched_sensitive;
+                    seen.idle_skips = previous->second.idle_skips > 0 ? static_cast<uint8_t>(previous->second.idle_skips - 1) : 0;
+                    seen.retirement_attempts = previous->second.retirement_attempts;
+                }
+                stats_.candidates += known;
+                next.emplace(identity, std::move(seen));
+                continue;
+            }
             stats_.candidates += known;
             stats_.validation_failed += !activity.identity_validated;
             stats_.descriptors_partial += !activity.descriptors_complete;
             if (previous != seen_.end()) seen.announced_actor = previous->second.announced_actor;
-            if (!seen.announced_actor || (known && seen.announced_actor->classification_reason.empty())) {
+            const bool quiet_inventory = !known && !self && activity.sensitive_files.empty();
+            if (!quiet_inventory && (!seen.announced_actor || (known && seen.announced_actor->classification_reason.empty()))) {
                 const auto detail = self ? "collector_self_not_an_agent" : known ? seen.reason : "unclassified;inventory_only";
                 if (Emit(known ? "agent_discovered" : self ? "process_discovered" : "process_discovered", seen, "", detail, RiskLevel::Low, "process_snapshot_heuristic"))
                     seen.announced_actor = seen.actor;
-            } else if (!SameImage(seen.announced_actor->process.node, seen.actor.process.node) ||
-                seen.announced_actor->classification_reason != seen.reason) {
+            } else if (seen.announced_actor && (!SameImage(seen.announced_actor->process.node, seen.actor.process.node) ||
+                seen.announced_actor->classification_reason != seen.reason)) {
                 if (Emit(known ? "agent_changed" : "process_changed", seen, "", "image_or_classification_changed_with_same_start_identity", RiskLevel::Low, "process_snapshot"))
                     seen.announced_actor = seen.actor;
             }
@@ -531,7 +564,8 @@ void AgentMonitor::Scan() {
             else if (!self) {
                 if (known && !activity.descriptors_complete) seen.activity.insert("fd_visibility_partial_or_unavailable");
                 for (const auto& path : activity.sensitive_files) seen.activity.insert("sensitive_file_open:" + path);
-                for (const auto& peer : activity.socket_peers) seen.activity.insert("socket_peer:" + peer);
+                if (!activity.sensitive_files.empty())
+                    for (const auto& peer : activity.socket_peers) seen.activity.insert("socket_peer:" + peer);
                 if (!activity.sensitive_files.empty() && !activity.socket_peers.empty())
                     seen.activity.insert("risk_signal:file_and_socket_coobserved;upload_unproven");
             }
@@ -574,6 +608,8 @@ void AgentMonitor::Scan() {
                   }
                 }
             }
+            seen.touched_sensitive = !activity.sensitive_files.empty() || (previous != seen_.end() && previous->second.touched_sensitive);
+            seen.idle_skips = seen.touched_sensitive ? 0 : 3;
             next.emplace(identity, std::move(seen));
         }
         for (const auto& pair : seen_) if (!next.count(pair.first)) {
@@ -587,6 +623,7 @@ void AgentMonitor::Scan() {
             }
             if (retired.actor.process.state == ProcessState::Observed)
                 retired.actor.process.state = ProcessState::NotObserved;
+            if (!retired.announced_actor) continue;
             if (!Emit(retired.actor.classification == "collector_self" || retired.reason.empty() ? "process_no_longer_observed" : "agent_no_longer_observed", retired, "", "exit_or_visibility_loss_or_pid_replacement", RiskLevel::Low, "cache_state_transition")) {
                 if (++retired.retirement_attempts < 8 && stats_.retirement_pending < 1024) {
                     next.emplace(pair.first, std::move(retired)); ++stats_.retirement_pending;

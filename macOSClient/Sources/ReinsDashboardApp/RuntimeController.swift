@@ -68,6 +68,12 @@ final class RuntimeController: ObservableObject {
     @Published private(set) var state: RuntimeUIState = .stopped
     @Published private(set) var statusMessage = L10n.tr("status.firstRun")
     @Published private(set) var records: [EvidenceRecord] = []
+    /// Closures and chain inputs. Not trimmed by the events-window cap.
+    @Published private(set) var chainRecords: [EvidenceRecord] = []
+    /// Start of the collector process that is running now. Older closures stay in `chainRecords` for History.
+    @Published private(set) var monitorStartedAt: Date?
+    /// Localization keys naming each coverage gap and what to do about it.
+    @Published private(set) var coverageKeys: [String] = []
     @Published private(set) var isBusy = false
     @Published var errorMessage: String?
     @Published private(set) var watchedPaths: [String] = []
@@ -220,35 +226,37 @@ final class RuntimeController: ObservableObject {
         do {
             let batch = try await reader.poll(url: paths.evidenceURL)
             let egressRecords = (try? await egressReader.poll(url: paths.egressEvidenceURL).records) ?? []
+            let statusURL = paths.statusURL
+            let status = try? await Task.detached { try RuntimeStatus.load(from: statusURL) }.value
+            if let started = status?.monitorStartedAt, monitorStartedAt != started { monitorStartedAt = started }
             let incoming = batch.records + egressRecords
-            if !incoming.isEmpty {
-                records = Array((incoming.reversed() + records).prefix(2_000))
-                notifyIfNeeded(incoming, now: now)
+            if !incoming.isEmpty || monitorStartedAt != nil {
+                let merged = LiveRecordWindow.merge(events: records, chain: chainRecords, incoming: incoming)
+                if !sameIDs(records, merged.events) { records = merged.events }
+                if !sameIDs(chainRecords, merged.chain) { chainRecords = merged.chain }
+                if !incoming.isEmpty { notifyIfNeeded(incoming, now: now) }
             }
-            rejectedCount = batch.rejectedCount
-            lastUpdate = batch.latestCoverage?.timestamp
+            if rejectedCount != batch.rejectedCount { rejectedCount = batch.rejectedCount }
+            if lastUpdate != batch.latestCoverage?.timestamp { lastUpdate = batch.latestCoverage?.timestamp }
             switch service.registration {
             case .requiresApproval:
-                state = .approvalRequired
-                statusMessage = L10n.tr("status.notAllowed")
+                publish(state: .approvalRequired, status: L10n.tr("status.notAllowed"))
                 return
             case .absent, .missing:
-                state = .stopped
-                statusMessage = L10n.tr("status.notEnabled")
+                publish(state: .stopped, status: L10n.tr("status.notEnabled"))
                 return
             case .enabled: break
             }
-            let statusURL = paths.statusURL
-            let status = try await Task.detached { try RuntimeStatus.load(from: statusURL) }.value
+            guard let status else {
+                throw RuntimeFileError.invalidConfiguration("status unavailable")
+            }
             awaitingStatusSince = nil
             guard status.isFresh(at: now) else {
-                state = .failed
-                statusMessage = L10n.tr("status.stale")
+                publish(state: .failed, status: L10n.tr("status.stale"))
                 return
             }
             if status.state == .failed || status.state == .stopped {
-                state = .failed
-                statusMessage = status.message ?? L10n.tr("status.collectorStopped")
+                publish(state: .failed, status: status.message ?? L10n.tr("status.collectorStopped"))
                 return
             }
             guard status.state == .running,
@@ -257,28 +265,32 @@ final class RuntimeController: ObservableObject {
                   now.timeIntervalSince(health.timestamp) >= -2,
                   now.timeIntervalSince(health.timestamp) < 15 else {
                 let expired = now.timeIntervalSince(status.monitorStartedAt ?? .distantPast) > 15
-                state = status.state == .backoff ? .degraded : (expired ? .failed : .starting)
-                statusMessage = status.message ?? (expired ? L10n.tr("status.healthInterrupted") : L10n.tr("status.waitingHealth"))
+                publish(state: status.state == .backoff ? .degraded : (expired ? .failed : .starting),
+                        status: status.message ?? (expired ? L10n.tr("status.healthInterrupted") : L10n.tr("status.waitingHealth")))
                 return
             }
             let partial = health.metrics["fd_scans_partial", default: 0]
             let validation = health.metrics["activity_validation_failed", default: 0]
             let unavailable = health.metrics["unavailable", default: 0]
-            let loss = health.count > 0 || rejectedCount > 0 || health.metrics["enumeration_complete"] == 0
-            state = loss || partial > 0 || validation > 0 || unavailable > 0 ? .degraded : .running
+            let enumerationIncomplete = health.metrics["enumeration_complete"] == 0
+            let dropped = health.count > 0 || rejectedCount > 0
+            let loss = dropped || enumerationIncomplete
+            let keys = CoverageNotice.keys(partialDescriptors: Int(partial), validationFailed: Int(validation), unavailable: Int(unavailable), enumerationIncomplete: enumerationIncomplete, droppedEvents: dropped)
+            if coverageKeys != keys { coverageKeys = keys }
             let visible = health.metrics["visible", default: 0]
             let candidates = health.metrics["known_candidates", default: 0]
-            statusMessage = L10n.format("status.visible", visible, candidates) +
-                (loss ? L10n.tr("status.loss") : "") +
-                ((partial > 0 || validation > 0 || unavailable > 0) ? L10n.tr("status.partial") : "") +
+            let nextStatus = L10n.format("status.visible", visible, candidates) +
+                keys.map { " " + L10n.tr($0) }.joined() +
                 (batch.hasBacklog ? L10n.tr("status.catchup") : "") + L10n.tr("status.samplingLimit")
+            publish(state: loss || partial > 0 || validation > 0 || unavailable > 0 ? .degraded : .running,
+                    status: nextStatus)
         } catch {
             if service.registration == .enabled {
                 // A missing or invalid status must not look like endless startup.
                 if awaitingStatusSince == nil { awaitingStatusSince = now }
-                state = now.timeIntervalSince(awaitingStatusSince!) > 15 ? .failed : .starting
-                statusMessage = L10n.format("status.unknown", error.localizedDescription)
-            } else { state = .stopped }
+                publish(state: now.timeIntervalSince(awaitingStatusSince!) > 15 ? .failed : .starting,
+                        status: L10n.format("status.unknown", error.localizedDescription))
+            } else { publish(state: .stopped, status: statusMessage) }
         }
     }
 
@@ -309,7 +321,8 @@ final class RuntimeController: ObservableObject {
                 var found = false
                 for _ in 0..<20 {
                     await refreshNow()
-                    found = records.contains { record in
+                    let pool = chainRecords + records
+                found = pool.contains { record in
                         record.sourceType == "sensitive_network_cooccurrence" &&
                         record.targetResource == target.path && record.processTree.first?.pid == pid &&
                         record.destination.contains("127.0.0.1:") && record.timestamp >= started.addingTimeInterval(-1)
@@ -343,6 +356,18 @@ final class RuntimeController: ObservableObject {
         content.body = L10n.tr("notification.body")
         content.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: event.id.uuidString, content: content, trigger: nil))
+    }
+
+    private func sameIDs(_ lhs: [EvidenceRecord], _ rhs: [EvidenceRecord]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        for index in lhs.indices where lhs[index].id != rhs[index].id { return false }
+        return true
+    }
+
+    private func publish(state nextState: RuntimeUIState, status: String) {
+        if nextState != .degraded, !coverageKeys.isEmpty { coverageKeys = [] }
+        if state != nextState { state = nextState }
+        if statusMessage != status { statusMessage = status }
     }
 
     private func fail(_ error: Error) {

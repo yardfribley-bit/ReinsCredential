@@ -1,7 +1,9 @@
 #include "EgressVerdict.h"
 #include <cassert>
+#include <cstdint>
 #include <iostream>
 #include <string>
+#include <vector>
 
 using namespace agentsec;
 
@@ -138,9 +140,12 @@ int main() {
     const auto named_hello = CloseLiveAccess(Seen(37, {named}));
     assert(named_hello.verdict == UploadVerdict::NotVisible);
     assert(named_hello.detail.find("sni=api.anthropic.com") != std::string::npos);
+    // Port 443 with no application-data record is a handshake, not a body,
+    // even when the raw counter is file size plus the old 1024-byte allowance.
     const auto provider_proven = CloseLiveAccess(Seen(file_bytes, {Tcp("api.anthropic.com:443", 0, file_bytes + kTlsHandshakeAllowance, true)}));
-    assert(provider_proven.verdict == UploadVerdict::Uploaded);
-    assert(provider_proven.match_basis == "flow_txbytes");
+    assert(provider_proven.verdict == UploadVerdict::NotVisible);
+    assert(provider_proven.verdict != UploadVerdict::Uploaded);
+    assert(provider_proven.transfer_outcome == "provider_or_relay_body_not_visible");
 
     LiveFlow syn = Tcp(off, 0, 0, false);
     syn.failed = true;
@@ -245,6 +250,206 @@ int main() {
     const auto still_open = CloseLiveAccess(waiting);
     assert(still_open.defer);
     assert(still_open.verdict != UploadVerdict::NotVisible || still_open.defer);
+
+    const uint64_t canary = 37;
+    const auto upper = canary + kFlowTxSlack + kTlsHandshakeAllowance;
+    assert(InitialFlowBaseline(false, 180, upper) == 0);
+    assert(InitialFlowBaseline(false, 0, upper) == 0);
+    assert(InitialFlowBaseline(false, upper + 1, upper) == upper + 1);
+    assert(InitialFlowBaseline(true, upper + 1, upper) == 0);
+    const auto posted = CloseLiveAccess(Seen(canary, {Tcp("192.168.1.11:53429", 0, 180, true)}));
+    assert(posted.verdict == UploadVerdict::Uploaded);
+    assert(posted.verdict != UploadVerdict::NotFound);
+    assert(posted.verdict != UploadVerdict::NotVisible);
+    assert(posted.destination == "192.168.1.11:53429");
+    assert(posted.match_basis == "flow_txbytes");
+    assert(posted.detail.find("tx_sum=180") != std::string::npos);
+    LiveFlow hello = Tcp("192.168.1.11:53431", 0, 300, true);
+    hello.sni = "api.anthropic.com";
+    const auto sni_hello = CloseLiveAccess(Seen(canary, {hello}));
+    assert(sni_hello.verdict == UploadVerdict::NotVisible);
+    assert(sni_hello.verdict != UploadVerdict::Uploaded);
+    assert(sni_hello.verdict != UploadVerdict::NotFound);
+    assert(sni_hello.destination == "192.168.1.11:53431");
+    assert(sni_hello.transfer_outcome == "provider_or_relay_body_not_visible");
+    LiveFlow records_only = Tcp("192.168.1.11:53431", 0, 400, true);
+    records_only.tls_handshake = true;
+    const auto record_hello = CloseLiveAccess(Seen(canary, {records_only}));
+    assert(record_hello.verdict == UploadVerdict::NotVisible);
+    assert(record_hello.verdict != UploadVerdict::Uploaded);
+    assert(record_hello.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(record_hello.destination == "192.168.1.11:53431");
+    LiveFlow encrypted = Tcp("192.168.1.11:443", 0, 300, true);
+    encrypted.tls_handshake = true;
+    encrypted.tls_app_data = true;
+    encrypted.tls_app_bytes = canary;
+    const auto encrypted_body = CloseLiveAccess(Seen(canary, {encrypted}));
+    assert(encrypted_body.verdict == UploadVerdict::Uploaded);
+    assert(encrypted_body.match_basis == "flow_txbytes");
+    const auto quiet = CloseLiveAccess(Seen(canary, {}));
+    assert(quiet.verdict == UploadVerdict::NotVisible);
+    assert(quiet.verdict != UploadVerdict::NotFound);
+    assert(quiet.transfer_outcome == "unseen_channel");
+    assert(quiet.destination.empty());
+    const auto measured_idle = CloseLiveAccess(Seen(canary, {Tcp("192.168.1.11:53429", 100, 100, true)}));
+    assert(measured_idle.verdict == UploadVerdict::NotFound);
+    assert(measured_idle.destination == "192.168.1.11:53429");
+    assert(measured_idle.transfer_outcome == "live_agent_observed_no_upload");
+
+    auto record = [](uint8_t type, size_t payload) {
+        std::vector<uint8_t> bytes(5 + payload);
+        bytes[0] = type;
+        bytes[1] = 0x03;
+        bytes[2] = 0x03;
+        bytes[3] = static_cast<uint8_t>((payload >> 8) & 0xff);
+        bytes[4] = static_cast<uint8_t>(payload & 0xff);
+        return bytes;
+    };
+    // Handshake records only, about 1646 bytes on the wire, no content type 23.
+    const auto hello_bytes = record(22, 1641);
+    assert(hello_bytes.size() == 1646);
+    const auto hello_records = ClassifyTlsRecords(hello_bytes.data(), hello_bytes.size());
+    assert(hello_records.saw_handshake);
+    assert(!hello_records.saw_app_data);
+    assert(hello_records.app_bytes == 0);
+    assert(hello_records.handshake_bytes == 1641);
+    LiveFlow handshake_only = Tcp("192.168.1.11:54531", 0, hello_bytes.size(), true);
+    handshake_only.tls_handshake = hello_records.saw_handshake;
+    handshake_only.tls_app_data = hello_records.saw_app_data;
+    handshake_only.tls_app_bytes = hello_records.app_bytes;
+    const auto hello_close = CloseLiveAccess(Seen(canary, {handshake_only}));
+    assert(hello_close.verdict == UploadVerdict::NotVisible);
+    assert(hello_close.verdict != UploadVerdict::Uploaded);
+    assert(hello_close.verdict != UploadVerdict::NotFound);
+    assert(hello_close.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(hello_close.destination == "192.168.1.11:54531");
+    assert(hello_close.match_basis != "flow_txbytes");
+    LiveClose second_upload;
+    second_upload.verdict = UploadVerdict::Uploaded;
+    second_upload.transfer_outcome = "flow_txbytes;left_host;tx_sum=1646";
+    assert(!ShouldEmitCloseUpdate(4, "flow_txbytes;left_host;tx_sum=1615", second_upload));
+    assert(ShouldEmitCloseUpdate(0, "", second_upload));
+    // The field failure: the session was seen, the counter stayed 0, and no
+    // record flag was attached. That is an invisible body, not 未发现.
+    LiveFlow counter_zero = Tcp("192.168.1.11:54631", 0, 0, true);
+    assert(!counter_zero.tls_handshake);
+    assert(!counter_zero.tls_app_data);
+    assert(counter_zero.tx_latest == 0);
+    const auto zero_close = CloseLiveAccess(Seen(canary, {counter_zero}));
+    assert(zero_close.verdict == UploadVerdict::NotVisible);
+    assert(zero_close.verdict != UploadVerdict::NotFound);
+    assert(zero_close.verdict != UploadVerdict::Uploaded);
+    assert(zero_close.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(zero_close.destination == "192.168.1.11:54631");
+    assert(zero_close.detail.find("tx_sum=0") != std::string::npos);
+    LiveClose zero_again = zero_close;
+    assert(!ShouldEmitCloseUpdate(2, zero_close.transfer_outcome, zero_again));
+    // A refused connect is still attempted, and a stable non-zero counter is still 未发现.
+    LiveFlow refused_zero = Tcp("192.168.1.11:54630", 0, 0, false);
+    refused_zero.failed = true;
+    const auto refused_close = CloseLiveAccess(Seen(canary, {refused_zero}));
+    assert(refused_close.verdict == UploadVerdict::Attempted);
+    assert(refused_close.verdict != UploadVerdict::NotVisible);
+    // Handshake-only kernel counter: 1615 bytes, 37-byte file. Not an upload.
+    // The connection has ended (window settled). While it is still open the
+    // same counter is deferred so a later body can still be counted.
+    LiveFlow handshake_counter = Tcp("192.168.1.11:54731", 0, 1615, true);
+    const auto handshake_done = CloseLiveAccess(Seen(canary, {handshake_counter}));
+    assert(handshake_done.verdict == UploadVerdict::NotVisible);
+    assert(handshake_done.verdict != UploadVerdict::Uploaded);
+    assert(handshake_done.verdict != UploadVerdict::NotFound);
+    assert(handshake_done.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(handshake_done.destination == "192.168.1.11:54731");
+    assert(!ShouldEmitCloseUpdate(2, handshake_done.transfer_outcome, handshake_done));
+    auto handshake_holding = Seen(canary, {handshake_counter});
+    handshake_holding.window_settled = false;
+    assert(CloseLiveAccess(handshake_holding).defer);
+    // The acceptance POST is HTTP-sized and still uploads.
+    const auto short_post = CloseLiveAccess(Seen(canary, {Tcp("192.168.1.11:54629", 0, 167, true)}));
+    assert(short_post.verdict == UploadVerdict::Uploaded);
+    assert(short_post.match_basis == "flow_txbytes");
+    assert(short_post.detail.find("tx_sum=167") != std::string::npos);
+    // Handshake 1615, then 2085 bytes of application data. Not closed at 1615.
+    LiveFlow after_body = Tcp("192.168.1.11:54732", 0, 1615 + 2085, true);
+    after_body.tx_previous = 1615;
+    after_body.tls_app_data = true;
+    after_body.tls_app_bytes = 2085;
+    after_body.tls_handshake = true;
+    const auto body_later = CloseLiveAccess(Seen(canary, {after_body}));
+    assert(body_later.verdict == UploadVerdict::Uploaded);
+    assert(body_later.verdict != UploadVerdict::NotVisible);
+    assert(body_later.detail.find("tls_app_bytes=2085") != std::string::npos);
+    assert(body_later.detail.find("tx_sum=2085") != std::string::npos || body_later.detail.find("tls_app_bytes=2085") != std::string::npos);
+    LiveFlow grown = Tcp("192.168.1.11:54732", 0, 1615 + 2085, true);
+    grown.tx_previous = 1615;
+    const auto grown_close = CloseLiveAccess(Seen(canary, {grown}));
+    assert(grown_close.verdict == UploadVerdict::Uploaded);
+    assert(grown_close.detail.find("body_after_handshake=2085") != std::string::npos);
+    assert(grown_close.detail.find("tx_sum=2085") != std::string::npos);
+
+    // One sample that already includes the handshake and the body must not be
+    // published as that sum while the file is still open. Application bytes,
+    // once visible, are the upload size, and the handshake is named beside them.
+    LiveFlow lumped = Tcp("192.168.1.11:54832", 0, 3729, true);
+    auto lumped_open = Seen(canary, {lumped});
+    lumped_open.window_settled = false;
+    const auto lumped_wait = CloseLiveAccess(lumped_open);
+    assert(lumped_wait.defer);
+    assert(lumped_wait.verdict != UploadVerdict::Uploaded);
+    LiveFlow lumped_body = lumped;
+    lumped_body.tls_handshake = true;
+    lumped_body.tls_app_data = true;
+    lumped_body.tls_app_bytes = 2085;
+    const auto lumped_split = CloseLiveAccess(Seen(canary, {lumped_body}));
+    assert(lumped_split.verdict == UploadVerdict::Uploaded);
+    assert(lumped_split.detail.find("tx_sum=2085") != std::string::npos);
+    assert(lumped_split.detail.find("tls_app_bytes=2085") != std::string::npos);
+    assert(lumped_split.detail.find("handshake_tx=1644") != std::string::npos);
+    assert(lumped_split.detail.find("tx_sum=3729") == std::string::npos);
+    // A handshake whose counter never reached the 1615-byte flight must still
+    // not be called 未发现.
+    LiveFlow short_handshake = Tcp("192.168.1.11:54831", 0, 20, true);
+    const auto short_tls = CloseLiveAccess(Seen(canary, {short_handshake}));
+    assert(short_tls.verdict == UploadVerdict::NotVisible);
+    assert(short_tls.verdict != UploadVerdict::NotFound);
+    assert(short_tls.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(FlowGraceActive(true, false, 9000));
+    assert(FlowGraceActive(false, true, 1000));
+    assert(!FlowGraceActive(false, true, kFlowGraceMs));
+    assert(IdleWatchTeardownDue(false, true));
+    assert(!IdleWatchTeardownDue(true, true));
+
+    assert(FastTreeSampleDue(true, false, false));
+    assert(FastTreeSampleDue(false, true, false));
+    assert(!FastTreeSampleDue(false, false, false));
+    assert(FastTreeSampleDue(false, false, true));
+    assert(!SubscribeEveryProcessFlow());
+    // A real application-data record still closes uploaded. 2085 is 1024+37+1024.
+    const auto app_record = record(23, 2085);
+    const auto app_records = ClassifyTlsRecords(app_record.data(), app_record.size());
+    assert(app_records.saw_app_data);
+    assert(app_records.app_bytes == 2085);
+    LiveFlow with_body = Tcp("192.168.1.11:54532", 0, 1646 + app_record.size(), true);
+    with_body.tls_handshake = true;
+    with_body.tls_app_data = true;
+    with_body.tls_app_bytes = app_records.app_bytes;
+    const auto body_close = CloseLiveAccess(Seen(canary, {with_body}));
+    assert(body_close.verdict == UploadVerdict::Uploaded);
+    assert(body_close.match_basis == "flow_txbytes");
+    assert(body_close.destination == "192.168.1.11:54532");
+    // Change-cipher-spec before application data must not hide the body.
+    auto prefixed = record(20, 1);
+    prefixed.insert(prefixed.end(), app_record.begin(), app_record.end());
+    const auto after_ccs = ClassifyTlsRecords(prefixed.data(), prefixed.size());
+    assert(after_ccs.saw_app_data && after_ccs.app_bytes == 2085);
+
+    assert(FastDiscoveryInspect(true, false, false, false));
+    assert(!FastDiscoveryInspect(false, false, false, false));
+    assert(!FastDiscoveryInspect(true, true, true, false));
+    assert(!FastDiscoveryInspect(false, true, false, true));
+    assert(SlowDiscoveryInspect(false, true, 0, 1));
+    assert(!SlowDiscoveryInspect(false, true, 1, 1));
+    assert(!SlowDiscoveryInspect(true, true, 0, 1));
 
     std::cout << "PASS: live-agent flow verdicts\n";
     return 0;

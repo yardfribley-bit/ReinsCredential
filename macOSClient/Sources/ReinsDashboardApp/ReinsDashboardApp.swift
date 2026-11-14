@@ -1,8 +1,10 @@
 import AppKit
+import EvidenceCore
 import SwiftUI
 
 @main
 struct ReinsDashboardApp: App {
+    @NSApplicationDelegateAdaptor(DashboardAppDelegate.self) private var appDelegate
     @StateObject private var store = DashboardStore()
     @StateObject private var runtime = RuntimeController()
     @StateObject private var language = LanguageStore.shared
@@ -10,42 +12,12 @@ struct ReinsDashboardApp: App {
     @State private var aboutPresented = false
 
     var body: some Scene {
-        WindowGroup("ReinsCredential") {
-            GeometryReader { geometry in
-                DashboardView(store: store, runtime: runtime)
-                    .environmentObject(language)
-                    .id(language.resolved)
-                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-                    .onChange(of: language.choice) { _ in runtime.refresh() }
-                    .sheet(isPresented: $aboutPresented) { AboutReinsView().environmentObject(language) }
-            }
-                .frame(minWidth: 1_050, minHeight: 640)
-                .onOpenURL { store.importLog(from: $0) }
-                .onAppear {
-                    guard !didStartSession else { return }
-                    didStartSession = true
-                    #if DEBUG
-                    DashboardSmoke.runIfRequested(store: store)
-                    #endif
-                    // Development previews and synthetic render probes must not
-                    // register a login item or start a real process collector.
-                    guard !CommandLine.arguments.contains("--smoke-test") else { return }
-                    if ProductVerification.stopIfRequested(runtime: runtime) { return }
-                    runtime.beginPolling()
-                    runtime.refresh()
-                    let bundle = Bundle.main.bundleURL
-                    let helper = bundle.appendingPathComponent("Contents/MacOS/ReinsRuntime")
-                    let collector = bundle.appendingPathComponent("Contents/Helpers/agent-monitor")
-                    if bundle.pathExtension == "app",
-                       FileManager.default.isExecutableFile(atPath: helper.path),
-                       FileManager.default.isExecutableFile(atPath: collector.path) {
-                        if CommandLine.arguments.contains("--verify-installation") { runtime.start() }
-                        else { runtime.startIfNeeded() }
-                    }
-                    ProductVerification.runIfRequested(runtime: runtime)
-                }
+        WindowGroup(id: "main") {
+            DashboardRoot(store: store, runtime: runtime, language: language,
+                          aboutPresented: $aboutPresented, didStartSession: $didStartSession)
         }
-        .defaultSize(width: 1_360, height: 840)
+        .defaultSize(width: WindowPlacement.preferred.width, height: WindowPlacement.preferred.height)
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button(language.tr("menu.openLog")) { store.isImporterPresented = true }
@@ -74,6 +46,92 @@ struct ReinsDashboardApp: App {
             CommandGroup(replacing: .appInfo) {
                 Button(language.tr("menu.about")) { aboutPresented = true }
             }
+        }
+    }
+}
+
+private struct DashboardRoot: View {
+    @ObservedObject var store: DashboardStore
+    @ObservedObject var runtime: RuntimeController
+    @ObservedObject var language: LanguageStore
+    @Binding var aboutPresented: Bool
+    @Binding var didStartSession: Bool
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        DashboardView(store: store, runtime: runtime)
+            .environmentObject(language)
+            .id(language.resolved)
+            .frame(minWidth: WindowPlacement.minimum.width, minHeight: WindowPlacement.minimum.height)
+            .onChange(of: language.choice) { _ in runtime.refresh() }
+            .sheet(isPresented: $aboutPresented) { AboutReinsView().environmentObject(language) }
+            .onOpenURL { store.importLog(from: $0) }
+            .onAppear {
+                MainWindowOpener.shared.open = { openWindow(id: "main") }
+                DashboardAppDelegate.restoreWindows()
+                guard !didStartSession else { return }
+                didStartSession = true
+                #if DEBUG
+                DashboardSmoke.runIfRequested(store: store)
+                #endif
+                guard !CommandLine.arguments.contains("--smoke-test") else { return }
+                if ProductVerification.stopIfRequested(runtime: runtime) { return }
+                runtime.beginPolling()
+                runtime.refresh()
+                let bundle = Bundle.main.bundleURL
+                let helper = bundle.appendingPathComponent("Contents/MacOS/ReinsRuntime")
+                let collector = bundle.appendingPathComponent("Contents/Helpers/agent-monitor")
+                if bundle.pathExtension == "app",
+                   FileManager.default.isExecutableFile(atPath: helper.path),
+                   FileManager.default.isExecutableFile(atPath: collector.path) {
+                    if CommandLine.arguments.contains("--verify-installation") { runtime.start() }
+                    else { runtime.startIfNeeded() }
+                }
+                ProductVerification.runIfRequested(runtime: runtime)
+            }
+    }
+}
+
+final class MainWindowOpener {
+    static let shared = MainWindowOpener()
+    var open: (() -> Void)?
+}
+
+final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.async { Self.restoreWindows() }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        Self.restoreWindows(createIfMissing: !flag)
+        return true
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        Self.clampAndFront(activate: false)
+    }
+
+    static func restoreWindows(createIfMissing: Bool = false) {
+        NSApp.unhide(nil)
+        let mains = NSApp.windows.filter { $0.canBecomeMain && $0.frame.width > 1 }
+        if mains.isEmpty && createIfMissing {
+            MainWindowOpener.shared.open?()
+            DispatchQueue.main.async { clampAndFront(activate: true) }
+            return
+        }
+        clampAndFront(activate: true)
+    }
+
+    static func clampAndFront(activate: Bool = true) {
+        if activate {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        for window in NSApp.windows where window.canBecomeMain {
+            let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+                ?? CGRect(x: 0, y: 0, width: WindowPlacement.preferred.width, height: WindowPlacement.preferred.height)
+            window.setFrame(WindowPlacement.clamped(saved: window.frame, visible: visible), display: true)
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
         }
     }
 }

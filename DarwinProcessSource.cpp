@@ -6,6 +6,9 @@
 #include <sys/kern_control.h>
 #include <sys/sys_domain.h>
 #include <sys/ioctl.h>
+#include <net/bpf.h>
+#include <net/if.h>
+#include <ifaddrs.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
@@ -31,6 +34,7 @@
 #include <array>
 #include <cstring>
 #include <filesystem>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <stdexcept>
@@ -70,7 +74,7 @@ std::string PeerText(bool v4, const std::string& address, uint16_t port) {
 }
 // tcp_sockinfo has no cumulative send counter in the public SDK. The pcb list
 // does: snd_max - iss is the sequence span for that connection (SYN plus data).
-std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
+std::optional<uint64_t> TcpDataBytes(const std::string& flow_id, int max_age_ms = 50) {
     struct Cache {
         std::mutex mu;
         MonoClock::time_point at{};
@@ -79,7 +83,7 @@ std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
     static Cache cache;
     std::lock_guard<std::mutex> lock(cache.mu);
     const auto now = MonoClock::now();
-        if (cache.at.time_since_epoch().count() == 0 || now - cache.at > std::chrono::milliseconds(8)) {
+        if (cache.at.time_since_epoch().count() == 0 || now - cache.at > std::chrono::milliseconds(max_age_ms)) {
         cache.at = now;
         cache.bytes.clear();
         size_t size = 0;
@@ -142,6 +146,238 @@ std::optional<uint64_t> TcpDataBytes(const std::string& flow_id) {
 // Per-flow UDP/QUIC (and userland TCP) send counters from the same kernel
 // control nettop uses. Private, version-sensitive, and optional: if the
 // control socket cannot be opened, callers keep the previous unmeasured path.
+std::string ProviderHostname(const uint8_t* data, size_t size) {
+    std::string best;
+    size_t index = 0;
+    while (index < size) {
+        const auto byte = data[index];
+        if (byte < 0x21 || byte > 0x7e) { ++index; continue; }
+        size_t end = index;
+        while (end < size && data[end] >= 0x21 && data[end] <= 0x7e) ++end;
+        if (end - index >= 4 && end - index <= 253 && std::memchr(data + index, '.', end - index)) {
+            std::string token(reinterpret_cast<const char*>(data + index), end - index);
+            while (!token.empty() && (token.back() == '.' || token.back() == ',')) token.pop_back();
+            if (IsProviderOrRelay(token) && token.size() > best.size()) best = std::move(token);
+        }
+        index = end;
+    }
+    return best;
+}
+class PayloadHints {
+public:
+    struct Hint {
+        std::string sni;
+        bool tls_handshake = false;
+        bool tls_app_data = false;
+        bool http = false;
+        uint64_t app_bytes = 0;
+    };
+    static PayloadHints& Shared() { static PayloadHints hints; return hints; }
+    void Arm() {
+        active_.store(true);
+        std::lock_guard<std::mutex> lock(mu_);
+        if (started_) return;
+        started_ = true;
+        std::thread([this] { Loop(); }).detach();
+    }
+    void Quiesce() { active_.store(false); }
+    Hint Lookup(const std::string& flow_id) const {
+        const auto bar = flow_id.find('|');
+        if (bar == std::string::npos) return {};
+        const auto key = flow_id.substr(bar + 1);
+        std::lock_guard<std::mutex> lock(mu_);
+        auto found = hints_.find(key);
+        if (found != hints_.end()) return found->second;
+        const auto split = key.find('|');
+        const auto colon = split == std::string::npos ? std::string::npos : key.rfind(':', split);
+        if (colon == std::string::npos || split == std::string::npos) return {};
+        found = hints_.find("*:" + key.substr(colon + 1));
+        if (found != hints_.end()) return found->second;
+        const auto remote = key.substr(split);
+        found = hints_.find(std::string("*") + remote);
+        return found == hints_.end() ? Hint{} : found->second;
+    }
+private:
+    void Remember(const std::string& key, const Hint& hint) {
+        if (key.empty()) return;
+        auto& slot = hints_[key];
+        if (slot.sni.empty()) slot.sni = hint.sni;
+        slot.tls_handshake = slot.tls_handshake || hint.tls_handshake;
+        slot.tls_app_data = slot.tls_app_data || hint.tls_app_data;
+        slot.http = slot.http || hint.http;
+        slot.app_bytes = std::max(slot.app_bytes, hint.app_bytes);
+        if (hints_.size() > 4096) hints_.erase(hints_.begin());
+    }
+    static void ParseTls(const uint8_t* data, size_t size, Hint& hint) {
+        const auto view = ClassifyTlsRecords(data, size);
+        if (hint.sni.empty()) hint.sni = view.sni;
+        hint.tls_handshake = hint.tls_handshake || view.saw_handshake;
+        if (view.saw_app_data) {
+            hint.tls_app_data = true;
+            hint.app_bytes += view.app_bytes;
+        }
+    }
+    void Ingest(const uint8_t* frame, size_t size, int dlt) {
+        // macOS attaches en0 as DLT_PKTAP. The ethernet parser never saw those
+        // frames, so a TLS body stayed invisible and the kernel sum was reported.
+        if (dlt == 149) {
+            if (size < 12) return;
+            uint32_t header = 0;
+            uint32_t next = 0;
+            std::memcpy(&header, frame, 4);
+            std::memcpy(&next, frame + 8, 4);
+            if (header < 12 || header >= size) return;
+            const int inner = next == DLT_EN10MB || next == DLT_NULL || next == DLT_RAW ? static_cast<int>(next) : DLT_RAW;
+            Ingest(frame + header, size - header, inner);
+            return;
+        }
+        size_t offset = 0;
+        if (dlt == DLT_EN10MB) {
+            if (size < 14) return;
+            unsigned eth = (static_cast<unsigned>(frame[12]) << 8) | frame[13];
+            offset = 14;
+            if (eth == 0x8100 && size >= 18) {
+                eth = (static_cast<unsigned>(frame[16]) << 8) | frame[17];
+                offset = 18;
+            }
+            if (eth != 0x0800) return;
+        } else if (dlt != DLT_RAW && dlt != DLT_NULL) return;
+        if (dlt == DLT_NULL) {
+            if (size < 4) return;
+            offset = 4;
+        }
+        if (offset + 20 > size) return;
+        const auto header = static_cast<size_t>(frame[offset] & 0x0f) * 4;
+        if (header < 20 || frame[offset + 9] != IPPROTO_TCP || offset + header + 20 > size) return;
+        const uint8_t* tcp = frame + offset + header;
+        const unsigned data_off = (static_cast<unsigned>(tcp[12] >> 4) & 0x0fu) * 4u;
+        if (data_off < 20 || offset + header + data_off >= size) return;
+        const uint8_t* payload = tcp + data_off;
+        const size_t length = size - static_cast<size_t>(payload - frame);
+        if (!length) return;
+        Hint hint;
+        if (length >= 5 && (std::memcmp(payload, "POST ", 5) == 0 || std::memcmp(payload, "HEAD ", 5) == 0)) hint.http = true;
+        else if (length >= 4 && (std::memcmp(payload, "GET ", 4) == 0 || std::memcmp(payload, "PUT ", 4) == 0)) hint.http = true;
+        else if (length >= 6 && std::memcmp(payload, "PATCH ", 6) == 0) hint.http = true;
+        else if (payload[0] == 22 && payload[1] == 0x03) ParseTls(payload, length, hint);
+        else return;
+        char source_text[INET_ADDRSTRLEN];
+        char dest_text[INET_ADDRSTRLEN];
+        if (!inet_ntop(AF_INET, frame + offset + 12, source_text, sizeof(source_text))) return;
+        if (!inet_ntop(AF_INET, frame + offset + 16, dest_text, sizeof(dest_text))) return;
+        const unsigned source_port = (static_cast<unsigned>(tcp[0]) << 8) | tcp[1];
+        const unsigned dest_port = (static_cast<unsigned>(tcp[2]) << 8) | tcp[3];
+        const auto local = std::string(source_text) + ":" + std::to_string(source_port);
+        const auto remote = std::string(dest_text) + ":" + std::to_string(dest_port);
+        std::lock_guard<std::mutex> lock(mu_);
+        Remember(local + "|" + remote, hint);
+        Remember("*:" + std::to_string(source_port) + "|" + remote, hint);
+        Remember(std::string("*|") + remote, hint);
+    }
+    int OpenInterface(const std::string& name, int& dlt) {
+        int fd = -1;
+        for (int index = 0; index < 8 && fd < 0; ++index)
+            fd = ::open(("/dev/bpf" + std::to_string(index)).c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return -1;
+        int length = 1 << 16;
+        if (ioctl(fd, BIOCSBLEN, &length) < 0) { ::close(fd); return -1; }
+        ifreq request{};
+        std::strncpy(request.ifr_name, name.c_str(), IFNAMSIZ - 1);
+        if (ioctl(fd, BIOCSETIF, &request) < 0) { ::close(fd); return -1; }
+        u_int on = 1;
+        ioctl(fd, BIOCIMMEDIATE, &on);
+        ioctl(fd, BIOCGDLT, &dlt);
+        if (dlt == DLT_EN10MB) {
+            bpf_insn program[] = {
+                BPF_STMT(BPF_LD + BPF_H + BPF_ABS, 12),
+                BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, 0x0800, 0, 3),
+                BPF_STMT(BPF_LD + BPF_B + BPF_ABS, 23),
+                BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, IPPROTO_TCP, 0, 1),
+                BPF_STMT(BPF_RET + BPF_K, 2048),
+                BPF_STMT(BPF_RET + BPF_K, 0),
+            };
+            bpf_program filter{static_cast<u_int>(sizeof(program) / sizeof(program[0])), program};
+            ioctl(fd, BIOCSETF, &filter);
+        }
+        return fd;
+    }
+    void OpenDevices(std::vector<std::pair<int, int>>& devices, bool& logged) {
+        ifaddrs* interfaces = nullptr;
+        if (getifaddrs(&interfaces) != 0) return;
+        std::set<std::string> used;
+        for (auto* item = interfaces; item && devices.size() < 4; item = item->ifa_next) {
+            if (!item->ifa_name || !item->ifa_addr || item->ifa_addr->sa_family != AF_INET) continue;
+            const std::string name = item->ifa_name;
+            if (!used.insert(name).second) continue;
+            if (name == "lo0" || name.rfind("awdl", 0) == 0 || name.rfind("llw", 0) == 0 || name.rfind("utun", 0) == 0) continue;
+            int dlt = 0;
+            const int fd = OpenInterface(name, dlt);
+            if (fd >= 0) devices.push_back({fd, dlt});
+        }
+        freeifaddrs(interfaces);
+        if (devices.empty() && !logged) {
+            logged = true;
+            std::cerr << "egress payload capture unavailable\n";
+        }
+    }
+    void Loop() {
+        std::vector<std::pair<int, int>> devices;
+        bool logged = false;
+        std::vector<uint8_t> buffer(1 << 16);
+        while (!stop_.load()) {
+            if (!active_.load()) {
+                for (const auto& device : devices) if (device.first >= 0) ::close(device.first);
+                devices.clear();
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
+            if (devices.empty()) OpenDevices(devices, logged);
+            if (devices.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
+            pollfd waits[4]{};
+            for (size_t index = 0; index < devices.size(); ++index) {
+                waits[index].fd = devices[index].first;
+                waits[index].events = POLLIN;
+            }
+            if (::poll(waits, static_cast<nfds_t>(devices.size()), 200) <= 0) continue;
+            for (size_t index = 0; index < devices.size(); ++index) {
+                if (!(waits[index].revents & POLLIN)) continue;
+                const auto count = ::read(devices[index].first, buffer.data(), buffer.size());
+                if (count <= 0) continue;
+                size_t offset = 0;
+                while (offset + sizeof(bpf_hdr) <= static_cast<size_t>(count)) {
+                    const auto* header = reinterpret_cast<const bpf_hdr*>(buffer.data() + offset);
+                    if (header->bh_hdrlen < sizeof(bpf_hdr) || offset + header->bh_hdrlen > static_cast<size_t>(count)) break;
+                    const auto cap = static_cast<size_t>(header->bh_caplen);
+                    if (offset + header->bh_hdrlen + cap > static_cast<size_t>(count)) break;
+                    Ingest(buffer.data() + offset + header->bh_hdrlen, cap, devices[index].second);
+                    const auto step = BPF_WORDALIGN(header->bh_hdrlen + header->bh_caplen);
+                    if (!step) break;
+                    offset += step;
+                }
+            }
+        }
+        for (const auto& device : devices) if (device.first >= 0) ::close(device.first);
+    }
+    mutable std::mutex mu_;
+    bool started_ = false;
+    std::atomic<bool> active_{false};
+    std::atomic<bool> stop_{false};
+    std::map<std::string, Hint> hints_;
+};
+void ApplyPayloadHint(SocketFlow& flow) {
+    if (flow.flow_id.empty()) return;
+    const auto hint = PayloadHints::Shared().Lookup(flow.flow_id);
+    if (flow.sni.empty() && !hint.sni.empty()) flow.sni = hint.sni;
+    if (hint.tls_handshake) flow.tls_handshake = true;
+    if (hint.tls_app_data) {
+        flow.tls_app_data = true;
+        flow.tls_app_bytes = std::max(flow.tls_app_bytes, hint.app_bytes);
+    }
+    if (hint.http) flow.plaintext_http = true;
+}
 class NetworkStatistics {
 public:
     std::optional<uint64_t> Tx(const std::string& flow_id) {
@@ -172,13 +408,55 @@ public:
         hot_.clear();
         return out;
     }
+    void Start() {
+        std::call_once(start_, [this] { thread_ = std::thread([this] { Loop(); }); });
+    }
+    void RestoreHot(const std::vector<pid_t>& pids) {
+        std::lock_guard<std::mutex> lock(mu_);
+        for (const auto pid : pids) if (pid > 0) hot_.insert(pid);
+    }
+    void PollWatched() {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!Open()) return;
+        Drain(20);
+        Pump(64);
+        Request(1004, ~uint64_t{0});
+        Drain(20);
+    }
+    void ReleaseSocketLocked() {
+        if (fd_ >= 0) ::close(fd_);
+        fd_ = -1;
+        failed_ = false;
+        udp_subscribed_ = false;
+        subscribed_.clear();
+        sources_.clear();
+        pending_.clear();
+        hot_.clear();
+    }
+    void Unwatch(pid_t pid) {
+        std::lock_guard<std::mutex> lock(mu_);
+        watch_.erase(pid);
+        subscribed_.erase(pid);
+        if (watch_.empty()) {
+            ReleaseSocketLocked();
+            PayloadHints::Shared().Quiesce();
+        }
+    }
+    void ReleaseIdle() {
+        std::lock_guard<std::mutex> lock(mu_);
+        watch_.clear();
+        ReleaseSocketLocked();
+        PayloadHints::Shared().Quiesce();
+    }
     void Watch(pid_t pid) {
         if (pid <= 0) return;
         {
             std::lock_guard<std::mutex> lock(mu_);
             watch_.insert(pid);
+            SubscribeLocked(pid);
         }
-        std::call_once(start_, [this] { thread_ = std::thread([this] { Loop(); }); });
+        Start();
+        PayloadHints::Shared().Arm();
     }
     ~NetworkStatistics() {
         stop_.store(true);
@@ -273,6 +551,7 @@ private:
         source.flow_id = std::to_string(source.udp ? IPPROTO_UDP : IPPROTO_TCP) + "|" + local + "|" + remote;
         source.described = true;
         source.provider = provider;
+        if (source.sni.empty()) source.sni = ProviderHostname(data, size);
         return true;
     }
     static std::string Wildcard(const std::string& flow_id) {
@@ -325,9 +604,16 @@ private:
         ::setsockopt(fd_, SOL_SOCKET, SO_RCVBUF, &buffer, sizeof(buffer));
         const int flags = ::fcntl(fd_, F_GETFL, 0);
         if (flags >= 0) ::fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
+        EnsureUdpSubscription();
+        return true;
+    }
+    void EnsureUdpSubscription() {
+        if (udp_subscribed_) return;
+        udp_subscribed_ = true;
         constexpr uint64_t kFilter = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20 | 0x40 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 |
             0x200000;
-        for (const uint32_t provider : {2u, 3u, 4u, 5u, 8u}) {
+        // UDP has no pcb send counter. Subscribing to UDP only, not every TCP flow.
+        for (const uint32_t provider : {4u, 5u}) {
             AddAll message{};
             message.context = 0x1000 + provider;
             message.type = 1002;
@@ -336,9 +622,25 @@ private:
             message.filter = kFilter;
             message.provider = provider;
             message.target_pid = -1;
-            if (!Send(&message, sizeof(message))) { ::close(fd_); fd_ = -1; failed_ = true; std::cerr << "egress ntstat unavailable\n"; return false; }
+            if (!Send(&message, sizeof(message))) { ::close(fd_); fd_ = -1; failed_ = true; udp_subscribed_ = false; std::cerr << "egress ntstat unavailable\n"; return; }
         }
-        return true;
+    }
+    void SubscribeLocked(pid_t pid) {
+        if (pid <= 0 || !Open() || !subscribed_.insert(pid).second) return;
+        if (SubscribeEveryProcessFlow()) pid = -1;
+        constexpr uint64_t kFilter = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20 | 0x40 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 |
+            0x200000;
+        for (const uint32_t provider : {2u, 3u, 8u}) {
+            AddAll message{};
+            message.context = 0x1000 + provider + static_cast<uint32_t>(pid);
+            message.type = 1002;
+            message.length = sizeof(message);
+            message.flags = 1;
+            message.filter = kFilter;
+            message.provider = provider;
+            message.target_pid = pid;
+            if (!Send(&message, sizeof(message))) { ::close(fd_); fd_ = -1; failed_ = true; std::cerr << "egress ntstat unavailable\n"; return; }
+        }
     }
     void Request(uint32_t type, uint64_t srcref) {
         Query message{};
@@ -357,9 +659,14 @@ private:
             const auto provider = Read32(data, size, 24);
             if (srcref == 0 || sources_.count(srcref)) return;
             sources_[srcref].provider = provider;
-            pending_.push_front(srcref);
-            Request(1005, srcref);
-            Request(1004, srcref);
+            // Asking for every system flow in the same drain feeds the socket
+            // as fast as we read it. Describe a bounded batch; the rest wait.
+            const bool udp = provider == 4 || provider == 5;
+            if (udp || query_budget_ > 0) {
+                if (!udp && query_budget_ > 0) --query_budget_;
+                Request(1005, srcref);
+                Request(1004, srcref);
+            } else if (pending_.size() < 128) pending_.push_back(srcref);
         } else if (type == 10002) {
             const auto srcref = Read64(data, size, 16);
             auto found = sources_.find(srcref);
@@ -414,6 +721,7 @@ private:
         else {
             if (flow.bytes_known) {
                 slot.bytes_known = true;
+                if (flow.tx_bytes > slot.tx_bytes && slot.tx_bytes > 0) slot.tx_prior = slot.tx_bytes;
                 slot.tx_bytes = std::max(slot.tx_bytes, flow.tx_bytes);
             }
             if (flow.tcp_state >= 4) slot.tcp_state = flow.tcp_state;
@@ -424,7 +732,8 @@ private:
         }
         if (source.have_tx) Publish(source.flow_id, source.tx);
         if (!source.sni.empty() && slot.sni.empty()) slot.sni = source.sni;
-        if (changed) hot_.insert(source.pid);
+        ApplyPayloadHint(slot);
+        if (changed && (watch_.count(source.pid) || hot_.size() < 64)) hot_.insert(source.pid);
         if (retained_[source.pid].size() > 64) retained_[source.pid].erase(retained_[source.pid].begin());
     }
     void Drain(int budget_ms) {
@@ -562,18 +871,22 @@ private:
                 std::lock_guard<std::mutex> lock(mu_);
                 fd = fd_;
             }
+            int ready = 0;
             if (fd >= 0) {
                 pollfd wait{};
                 wait.fd = fd;
                 wait.events = POLLIN;
-                ::poll(&wait, 1, 50);
+                ready = ::poll(&wait, 1, 200);
             } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
             if (stop_.load()) break;
-            std::lock_guard<std::mutex> lock(mu_);
-            DrainNonblock();
-            Pump(32);
+            if (ready > 0) {
+                std::lock_guard<std::mutex> lock(mu_);
+                query_budget_ = 8;
+                DrainNonblock();
+                Pump(4);
+            }
         }
     }
     void Refresh() {
@@ -597,6 +910,9 @@ private:
     std::thread thread_;
     MonoClock::time_point refreshed_{};
     std::set<pid_t> watch_;
+    std::set<pid_t> subscribed_;
+    bool udp_subscribed_ = false;
+    int query_budget_ = 0;
     std::map<uint64_t, Source> sources_;
     std::deque<uint64_t> pending_;
     std::map<std::string, uint64_t> bytes_;
@@ -668,10 +984,43 @@ public:
         }
         ProcessSample sample;
         sample.enumeration_complete = static_cast<size_t>(count) < pids.size();
+        ++sample_generation_;
+        std::set<pid_t> live;
         for (size_t i = 0; i < std::min(pids.size(), static_cast<size_t>(count)); ++i) {
-            if (pids[i] <= 0) continue;
-            if (auto node = ReadNode(pids[i])) sample.processes.push_back(std::move(*node));
-            else ++sample.unavailable;
+            const auto pid = pids[i];
+            if (pid <= 0) continue;
+            live.insert(pid);
+            auto cached = idle_nodes_.find(pid);
+            // New pids are read in full so a short-lived process is not missed.
+            // A stable pid is not queried on every 500 ms pass; one slice in
+            // sixteen re-reads it, which is enough to notice exec and PID reuse.
+            const bool refresh = cached == idle_nodes_.end() ||
+                (sample_generation_ % 16) == (static_cast<uint32_t>(pid) % 16);
+            if (!refresh) {
+                cached->second.confirmed = sample_generation_;
+                sample.processes.push_back(cached->second.node);
+                continue;
+            }
+            auto info = BsdInfo(pid);
+            if (!info) { ++sample.unavailable; continue; }
+            const auto identity = Identity(*info);
+            if (cached != idle_nodes_.end() && cached->second.node.identity == identity &&
+                (sample_generation_ % 8) != (static_cast<uint32_t>(pid) % 8)) {
+                cached->second.node.ppid = static_cast<pid_t>(info->pbi_ppid);
+                cached->second.confirmed = sample_generation_;
+                sample.processes.push_back(cached->second.node);
+                continue;
+            }
+            if (auto node = ReadNode(pid)) {
+                idle_nodes_[pid] = IdleNode{*node, sample_generation_};
+                sample.processes.push_back(std::move(*node));
+            } else ++sample.unavailable;
+        }
+        if ((sample_generation_ % 8) == 0) {
+            for (auto it = idle_nodes_.begin(); it != idle_nodes_.end(); ) {
+                if (!live.count(it->first)) it = idle_nodes_.erase(it);
+                else ++it;
+            }
         }
         return sample;
     }
@@ -684,6 +1033,11 @@ public:
         return after && Same(node, *after) && static_cast<pid_t>(after->pbi_ppid) == ppid;
     }
     bool Validate(const ProcessNode& node) override {
+        auto cached = idle_nodes_.find(node.identity.pid);
+        if (cached != idle_nodes_.end() && cached->second.confirmed == sample_generation_ &&
+            cached->second.node.identity == node.identity && cached->second.node.executable == node.executable &&
+            cached->second.node.arguments == node.arguments)
+            return true;
         auto before = BsdInfo(node.identity.pid);
         if (!before || !Same(node, *before) || Executable(node.identity.pid) != node.executable) return false;
         auto after = BsdInfo(node.identity.pid);
@@ -764,7 +1118,7 @@ public:
                     const auto& tcp = s.soi_proto.pri_tcp;
                     flow.udp = false;
                     flow.tcp_state = tcp.tcpsi_state;
-                    if (auto sent = TcpDataBytes(flow.flow_id)) {
+                    if (auto sent = TcpDataBytes(flow.flow_id, include_idle_peers ? 0 : 50)) {
                         flow.bytes_known = true;
                         flow.tx_bytes = *sent;
                     } else if (tcp.tcpsi_state < 4) {
@@ -799,16 +1153,31 @@ public:
                         flow.bytes_known = false;
                     }
                 }
+                ApplyPayloadHint(flow);
                 result.flows.push_back(std::move(flow));
         }
         return result;
     }
+    struct IdleNode {
+        ProcessNode node;
+        uint32_t confirmed = 0;
+    };
+    std::map<pid_t, IdleNode> idle_nodes_;
+    uint32_t sample_generation_ = 0;
     std::vector<SocketFlow> RetainedFlows(pid_t pid) const override { return Ntstat().FlowsFor(pid); }
     std::vector<pid_t> TakeHotPids() override { return Ntstat().TakeHot(); }
+    void RestoreHotPids(const std::vector<pid_t>& pids) override { Ntstat().RestoreHot(pids); }
     void WatchFlows(pid_t pid) override { Ntstat().Watch(pid); }
+    void UnwatchFlows(pid_t pid) override { Ntstat().Unwatch(pid); }
+    void ReleaseIdleWatch() override { Ntstat().ReleaseIdle(); }
+    void PollFlowCounts() override { Ntstat().PollWatched(); }
+    void StartFlowWatch() override {
+        Ntstat().Start();
+    }
 };
 } // namespace
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource() { return std::make_shared<DarwinProcessSource>(); }
+void AttachCapturedPayload(SocketFlow& flow) { ApplyPayloadHint(flow); }
 bool IsWithin(const std::string& path, const std::string& root) noexcept {
     return path == root || (path.size() > root.size() && path.compare(0, root.size(), root) == 0 && (root == "/" || path[root.size()] == '/'));
 }

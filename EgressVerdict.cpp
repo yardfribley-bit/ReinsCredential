@@ -1,4 +1,5 @@
 #include "EgressVerdict.h"
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cctype>
 #include <cstring>
@@ -133,9 +134,24 @@ bool TlsShaped(const LiveFlow& flow) {
     return PeerPort(flow.destination) == 443;
 }
 uint64_t ApplicationBytes(const LiveFlow& flow, uint64_t delta) {
-    if (flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow))
-        return delta > kTlsHandshakeAllowance ? delta - kTlsHandshakeAllowance : 0;
+    if (flow.plaintext_http) return delta;
+    if (flow.tls_app_data && flow.tls_app_bytes > 0) return flow.tls_app_bytes;
+    if (flow.tls_handshake || (flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow))) return 0;
     return delta;
+}
+// Kernel counters do not name TLS records. A flight larger than HTTP framing
+// and no bigger than an unparsed ClientHello is not a body yet.
+bool InUnparsedHandshakeBand(uint64_t file_bytes, uint64_t delta) {
+    return delta > file_bytes + kHttpFraming && delta <= file_bytes + kUnparsedHandshakeAboveFile;
+}
+bool HandshakeOnly(const LiveFlow& flow, uint64_t delta) {
+    if (flow.plaintext_http) return false;
+    if (flow.tls_app_data && flow.tls_app_bytes > 0) return false;
+    if (flow.tls_handshake) return true;
+    if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && flow.measured &&
+        !flow.loopback && !flow.preexisting && flow.tx_latest == 0 && delta == 0)
+        return true;
+    return flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow) && delta > 0;
 }
 void NoteSni(LiveClose& result, const LiveFlow* flow) {
     if (!flow || flow->sni.empty() || result.detail.find("sni=") != std::string::npos) return;
@@ -156,6 +172,66 @@ LiveClose Defer(UploadVerdict verdict) {
 }
 } // namespace
 
+TlsRecordView ClassifyTlsRecords(const uint8_t* data, size_t size) noexcept {
+    TlsRecordView view;
+    if (!data) return view;
+    size_t index = 0;
+    while (index + 5 <= size && data[index + 1] == 0x03) {
+        const uint8_t type = data[index];
+        const size_t length = (static_cast<size_t>(data[index + 3]) << 8) | data[index + 4];
+        const bool whole = index + 5 + length <= size;
+        const uint8_t* body = data + index + 5;
+        const size_t body_len = whole ? length : size - (index + 5);
+        const size_t step = whole ? 5 + length : size - index;
+        if (type == 20 || type == 21) {
+            if (!whole) break;
+            index += step;
+            continue;
+        }
+        if (type == 22) {
+            view.saw_handshake = true;
+            view.handshake_bytes += body_len;
+            if (view.sni.empty() && body_len > 38 && body[0] == 1) {
+                size_t cursor = 38;
+                if (cursor < body_len) {
+                    const size_t session = body[cursor];
+                    cursor += 1 + session;
+                    if (cursor + 2 <= body_len) {
+                        const size_t ciphers = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
+                        cursor += 2 + ciphers;
+                        if (cursor < body_len) {
+                            const size_t compression = body[cursor];
+                            cursor += 1 + compression;
+                            if (cursor + 2 <= body_len) {
+                                const size_t extensions = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
+                                cursor += 2;
+                                const size_t end = std::min(body_len, cursor + extensions);
+                                while (cursor + 4 <= end) {
+                                    const size_t kind = (static_cast<size_t>(body[cursor]) << 8) | body[cursor + 1];
+                                    const size_t ext = (static_cast<size_t>(body[cursor + 2]) << 8) | body[cursor + 3];
+                                    cursor += 4;
+                                    if (cursor + ext > end) break;
+                                    if (kind == 0 && ext >= 5) {
+                                        const size_t name_len = (static_cast<size_t>(body[cursor + 3]) << 8) | body[cursor + 4];
+                                        if (name_len > 0 && name_len < 253 && cursor + 5 + name_len <= cursor + ext)
+                                            view.sni.assign(reinterpret_cast<const char*>(body + cursor + 5), name_len);
+                                    }
+                                    cursor += ext;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (type == 23) {
+            view.saw_app_data = true;
+            view.app_bytes += body_len;
+        } else break;
+        if (!whole) break;
+        index += step;
+    }
+    return view;
+}
 LiveClose CloseLiveAccess(const LiveAccessView& view) {
     LiveClose result;
     if (!view.agent_visible) {
@@ -195,16 +271,22 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
     const LiveFlow* unmeasured = nullptr;
     const LiveFlow* handshake = nullptr;
     const LiveFlow* loopback_send = nullptr;
+    const LiveFlow* loopback_peer = nullptr;
+    const LiveFlow* measured_offhost = nullptr;
     bool any_offhost = false;
     bool any_measured_offhost = false;
     bool saw_measured_flow = false;
+    bool saw_proxy = false;
+    bool defer_unparsed_handshake = false;
+    std::string body_note;
     for (const auto& flow : view.flows) {
-        if (flow.to_local_proxy) continue;
+        if (flow.to_local_proxy) { saw_proxy = true; continue; }
         const auto delta = TxDelta(flow);
         const auto app = ApplicationBytes(flow, delta);
         const bool measured = Measured(flow);
         if (measured) saw_measured_flow = true;
         if (flow.loopback) {
+            if (measured && !loopback_peer) loopback_peer = &flow;
             if (measured && flow.kind == LiveFlowKind::TcpMeasured && flow.established && delta >= lower && !loopback_send)
                 loopback_send = &flow;
             // A datagram whose byte count never arrived is still unresolved,
@@ -218,6 +300,46 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
             continue;
         }
         any_measured_offhost = true;
+        if (!measured_offhost) measured_offhost = &flow;
+        if (HandshakeOnly(flow, delta)) {
+            if (!handshake) handshake = &flow;
+            continue;
+        }
+        if (flow.tls_app_data && flow.tls_app_bytes > 0 && flow.kind == LiveFlowKind::TcpMeasured && flow.established) {
+            tcp_sum += flow.tls_app_bytes;
+            if (!upload_peer) upload_peer = &flow;
+            const auto handshake_tx = flow.tx_latest > flow.tls_app_bytes ? flow.tx_latest - flow.tls_app_bytes : flow.tx_previous;
+            body_note = ";handshake_tx=" + std::to_string(handshake_tx) +
+                ";tls_app_bytes=" + std::to_string(flow.tls_app_bytes);
+            continue;
+        }
+        // Bytes sent after a handshake-sized flight are the body. The 1615-byte
+        // sample itself is not an upload.
+        if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && !flow.plaintext_http &&
+            InUnparsedHandshakeBand(view.file_bytes, flow.tx_previous) && flow.tx_latest > flow.tx_previous) {
+            const auto growth = flow.tx_latest - flow.tx_previous;
+            tcp_sum += growth;
+            if (growth > 0 && !upload_peer) upload_peer = &flow;
+            body_note = ";handshake_tx=" + std::to_string(flow.tx_previous) +
+                ";body_after_handshake=" + std::to_string(growth);
+            continue;
+        }
+        if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && !flow.plaintext_http &&
+            !(flow.tls_app_data && flow.tls_app_bytes > 0) && InUnparsedHandshakeBand(view.file_bytes, delta)) {
+            if (!view.window_settled) { defer_unparsed_handshake = true; continue; }
+            if (!handshake) handshake = &flow;
+            continue;
+        }
+        // One kernel reading above the handshake ceiling still contains the
+        // handshake. Do not publish that sum as the body while the watch is
+        // open: a later sample can name the application bytes, or a prior
+        // reading can name the handshake flight.
+        if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && !flow.plaintext_http &&
+            !(flow.tls_app_data && flow.tls_app_bytes > 0) && !flow.preexisting &&
+            delta > view.file_bytes + kUnparsedHandshakeAboveFile && delta <= upper &&
+            !InUnparsedHandshakeBand(view.file_bytes, flow.tx_previous)) {
+            if (!view.window_settled) { defer_unparsed_handshake = true; continue; }
+        }
         if (flow.kind == LiveFlowKind::UdpOrQuic) {
             udp_sum += delta;
             if (!upload_peer && delta > 0) upload_peer = &flow;
@@ -226,21 +348,26 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         if (flow.established) {
             tcp_sum += app;
             if (app > 0 && !upload_peer) upload_peer = &flow;
-            else if (TlsShaped(flow) && delta > 0 && app < lower && !handshake) handshake = &flow;
+            if (flow.tls_app_data && flow.tls_app_bytes > 0) {
+                const auto handshake_tx = flow.tx_latest > flow.tls_app_bytes ? flow.tx_latest - flow.tls_app_bytes : flow.tx_previous;
+                body_note = ";handshake_tx=" + std::to_string(handshake_tx) +
+                    ";tls_app_bytes=" + std::to_string(flow.tls_app_bytes);
+            }
         } else if (flow.failed && !attempt && delta < lower) {
             attempt = &flow;
         }
     }
     const auto sum = tcp_sum + udp_sum;
     const bool in_window = sum >= lower && sum <= upper && upload_peer;
+    if (!in_window && defer_unparsed_handshake && !handshake) return Defer(UploadVerdict::NotVisible);
     if (in_window) {
         const bool udp_carried = udp_sum > 0 && tcp_sum < lower;
         result.verdict = UploadVerdict::Uploaded;
         result.destination = upload_peer->destination;
         result.match_basis = udp_carried ? "flow_txbytes_udp" : "flow_txbytes";
-        result.transfer_outcome = result.match_basis + ";left_host;" + SumText(sum, lower, view.file_bytes);
+        result.transfer_outcome = result.match_basis + ";left_host;" + SumText(sum, lower, view.file_bytes) + body_note;
         result.detail = "match=" + result.match_basis + ";" + SumText(sum, lower, view.file_bytes) +
-            ";plaintext_not_recovered;no_ca;no_system_proxy;app_settings_not_modified";
+            body_note + ";plaintext_not_recovered;no_ca;no_system_proxy;app_settings_not_modified";
         NoteSni(result, upload_peer);
         return result;
     }
@@ -311,12 +438,62 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
         result.detail = "process_exited;no_measured_offhost_send;not_rewritten_as_not_found;app_settings_not_modified";
         return result;
     }
+    if (view.file_open && sum == 0 && !handshake && !attempt && !unmeasured && !loopback_send &&
+        !loopback_peer && !measured_offhost && !saw_proxy) {
+        if (!view.window_settled) return Defer(UploadVerdict::NotVisible);
+        result.verdict = UploadVerdict::NotVisible;
+        result.match_basis = "observation_impossible";
+        result.transfer_outcome = "unseen_channel";
+        result.detail = "no_measured_peer;tx_sum=0;empty_destination;not_rewritten_as_not_found;"
+            "unresolved_not_a_clean_bill;app_settings_not_modified";
+        return result;
+    }
+    // A completed off-host TCP session with no HTTP body and no application
+    // data is a handshake we could not parse. It is not "no upload found".
+    if (measured_offhost && measured_offhost->kind == LiveFlowKind::TcpMeasured &&
+        !measured_offhost->plaintext_http &&
+        !(measured_offhost->tls_app_data && measured_offhost->tls_app_bytes > 0) &&
+        !(measured_offhost->preexisting && TxDelta(*measured_offhost) == 0)) {
+        result.verdict = UploadVerdict::NotVisible;
+        result.destination = measured_offhost->destination;
+        result.match_basis = "observation_impossible";
+        result.transfer_outcome = IsProviderOrRelay(measured_offhost->destination) || !measured_offhost->sni.empty()
+            ? "provider_or_relay_body_not_visible" : "tls_handshake_body_not_visible";
+        result.detail = "tls_handshake_bytes_are_not_a_body;unresolved_not_a_clean_bill;not_rewritten_as_not_found;" +
+            SumText(TxDelta(*measured_offhost), lower, view.file_bytes) + ";app_settings_not_modified";
+        NoteSni(result, measured_offhost);
+        return result;
+    }
     result.verdict = UploadVerdict::NotFound;
     result.match_basis = "live_agent_observed";
     result.transfer_outcome = "live_agent_observed_no_upload";
+    if (measured_offhost) result.destination = measured_offhost->destination;
+    else if (loopback_peer) result.destination = loopback_peer->destination;
     result.detail = "agent_seen;file_open_observed;every_offhost_channel_measured;aggregate_below_lower_bound;" +
         SumText(sum, lower, view.file_bytes) + ";app_settings_not_modified";
     return result;
+}
+bool ShouldEmitCloseUpdate(int prior_rank, const std::string& prior_outcome, const LiveClose& next) noexcept {
+    int rank = 0;
+    switch (next.verdict) {
+    case UploadVerdict::Uploaded: rank = 4; break;
+    case UploadVerdict::Attempted: rank = 3; break;
+    case UploadVerdict::NotVisible: rank = 2; break;
+    case UploadVerdict::NotFound: rank = 1; break;
+    }
+    if (prior_rank <= 0) return true;
+    if (rank < prior_rank) return false;
+    // The same upload ticking upward (1615 then 1646) is one session.
+    if (rank == prior_rank && next.verdict == UploadVerdict::Uploaded) return false;
+    if (rank == prior_rank && prior_outcome == next.transfer_outcome) return false;
+    if (rank == prior_rank && prior_outcome.find("loopback_not_off_host") != std::string::npos &&
+        next.transfer_outcome.find("loopback_not_off_host") == std::string::npos) return false;
+    return true;
+}
+uint64_t InitialFlowBaseline(bool process_already_sampled, uint64_t tx_bytes, uint64_t window_upper) noexcept {
+    if (process_already_sampled) return 0;
+    if (window_upper > 0 && tx_bytes <= window_upper) return 0;
+    return tx_bytes;
 }
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path) {
     const std::string label = UploadVerdictLabel(close.verdict);

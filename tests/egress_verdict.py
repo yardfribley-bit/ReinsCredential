@@ -830,6 +830,60 @@ def live_toolchain_chain(directory, secret):
     return "uploaded"
 
 
+def live_idle_reposts(directory, binary, secret):
+    """Idle, then a short off-host POST, repeated cold and warm. Every one must upload."""
+    host = routable_ip()
+    if not host:
+        return "skipped"
+    server = Server(accept_timeout=40, bind_host="0.0.0.0", accepts=3)
+    log = directory / "idle-reposts.jsonl"
+    proc = subprocess.Popen(
+        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "30",
+         "--sample-ms", "40"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        time.sleep(1.2)
+        for index in range(3):
+            ready = directory / f"idle-repost-{index}.ready"
+            if ready.exists():
+                ready.unlink()
+            before = log.read_text() if log.exists() else ""
+            agent = subprocess.Popen([str(binary), "short", str(secret), host, str(server.port), str(ready)])
+            time.sleep(0.05)
+            ready.write_text("go\n")
+            deadline = time.time() + 8
+            while time.time() < deadline:
+                text = log.read_text() if log.exists() else ""
+                added = text[len(before):] if text.startswith(before) else text
+                if '"upload_verdict":"uploaded"' in added.replace(" ", "") or '"upload_verdict": "uploaded"' in added:
+                    break
+                time.sleep(0.1)
+            else:
+                raise SystemExit(f"idle repost {index} produced no uploaded close\n{redact(text if log.exists() else '')}")
+            try:
+                agent.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                agent.kill()
+            time.sleep(1.2)
+        records = load_records(log)
+        uploads = [record for record in records
+                   if record.get("type") == "sensitive_access_closed" and record.get("upload_verdict") == "uploaded"
+                   and record.get("evidence_basis") == "flow_txbytes"]
+        if len(uploads) < 3:
+            raise SystemExit(f"idle reposts uploaded {len(uploads)} times, want 3")
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    server.join()
+    if server.box.get("data", b"").count(MARKER) < 3:
+        raise SystemExit("idle reposts: the peer did not receive every 37-byte body")
+    return "uploaded"
+
+
 def main():
     if not PROXY.exists():
         raise SystemExit("agent-egress is not built")
@@ -900,6 +954,13 @@ def main():
                 tn += 1
             else:
                 fn += 1
+        reposts = live_idle_reposts(directory, binary, secret)
+        if reposts == "skipped":
+            print("SKIP live-idle-reposts no routable address")
+        elif reposts == "uploaded":
+            upload_tp += 3
+        else:
+            fn += 1
         after_canary = live_after_canary(directory, unknown, secret)
         if after_canary == "skipped":
             print("SKIP live-after-canary no routable address")
@@ -928,6 +989,10 @@ def main():
         raise SystemExit(f"missing cpu samples idle={len(idle_cpu)} active={len(active_cpu)}")
     counted = dict(LAUNCHED_VERDICTS)
     counted.update({mode: verdict for mode, verdict in LIVE_VERDICTS.items() if mode not in skipped})
+    if reposts == "uploaded":
+        counted["live-idle-repost-1"] = "uploaded"
+        counted["live-idle-repost-2"] = "uploaded"
+        counted["live-idle-repost-3"] = "uploaded"
     if after_canary == "uploaded":
         counted["live-after-canary"] = "uploaded"
     if toolchain == "uploaded":

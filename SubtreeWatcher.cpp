@@ -79,6 +79,7 @@ void SubtreeWatcher::Start() {
         try {
         std::map<pid_t, ProcessIdentity> watching;
         std::set<pid_t> seen_children;
+        size_t sweep_cursor = 0;
         std::map<std::string, uint64_t> atime;
         auto files = SensitiveFiles(roots_);
         auto files_refreshed = MonoClock::now();
@@ -150,10 +151,16 @@ void SubtreeWatcher::Start() {
                     if (seen_children.size() > 512) seen_children.erase(seen_children.begin());
                 }
             };
-            std::set<pid_t> parents;
-            for (const auto& identity : focus) parents.insert(identity.pid);
-            for (const auto& pair : watching) parents.insert(pair.first);
-            for (pid_t parent : parents) {
+            std::vector<pid_t> parents;
+            parents.reserve(focus.size());
+            for (const auto& identity : focus) parents.push_back(identity.pid);
+            // NOTE_FORK still wakes this loop within 5 ms. The backup child walk
+            // covers focus roots, not every descendant, so a large agent tree
+            // does not call proc_listchildpids on each of them every wakeup.
+            const size_t sweep_budget = parents.size() <= 8 ? parents.size() : 4;
+            for (size_t n = 0; n < sweep_budget && !parents.empty(); ++n) {
+                const auto parent = parents[sweep_cursor % parents.size()];
+                ++sweep_cursor;
                 if (ListChildren(parent, children) < 0) continue;
                 for (pid_t child : children) if (child > 0 && !watching.count(child)) burst(child);
             }
