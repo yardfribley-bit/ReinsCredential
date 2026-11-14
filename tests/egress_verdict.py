@@ -989,6 +989,10 @@ def main():
         raise SystemExit(f"missing cpu samples idle={len(idle_cpu)} active={len(active_cpu)}")
     counted = dict(LAUNCHED_VERDICTS)
     counted.update({mode: verdict for mode, verdict in LIVE_VERDICTS.items() if mode not in skipped})
+    if reposts == "uploaded":
+        counted["live-idle-repost-1"] = "uploaded"
+        counted["live-idle-repost-2"] = "uploaded"
+        counted["live-idle-repost-3"] = "uploaded"
     if after_canary == "uploaded":
         counted["live-after-canary"] = "uploaded"
     if toolchain == "uploaded":
