@@ -143,11 +143,15 @@ uint64_t ApplicationBytes(const LiveFlow& flow, uint64_t delta) {
 }
 bool HandshakeOnly(const LiveFlow& flow, uint64_t delta, uint64_t lower) {
     if (flow.plaintext_http) return false;
-    // Application data is a TLS record of type 23 (or a parsed length). Handshake
-    // records alone, however large, are not a body. The fixed 1024-byte slack is
-    // not what decides this.
-    if (flow.tls_handshake && !(flow.tls_app_data && flow.tls_app_bytes > 0)) return true;
     if (flow.tls_app_data && flow.tls_app_bytes > 0) return false;
+    // Type 22 with no type 23 is not a body, whatever the byte counter says.
+    if (flow.tls_handshake) return true;
+    // An established off-host session whose send counter stayed at 0 is not a
+    // measured "no upload". The handshake bytes are often absent from that
+    // counter, and missing record flags must not turn the session into 未发现.
+    if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && flow.measured &&
+        !flow.loopback && !flow.preexisting && flow.tx_latest == 0 && delta == 0)
+        return true;
     return flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow) && delta > 0 &&
         ApplicationBytes(flow, delta) < lower;
 }

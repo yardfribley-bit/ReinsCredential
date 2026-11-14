@@ -570,7 +570,13 @@ struct Session {
     IProcessSource& source;
     std::vector<Version> versions;
     std::vector<std::string> roots;
-    struct Root { ProcessIdentity identity; pid_t pid = 0; bool launched = false; };
+    struct Root {
+        ProcessIdentity identity;
+        pid_t pid = 0;
+        bool launched = false;
+        MonoClock::time_point last_sample{};
+        MonoClock::time_point last_file{};
+    };
     std::vector<Root> watched;
     bool launched = false;
     bool watch_live = false;
@@ -958,9 +964,11 @@ struct Session {
         }
         return false;
     }
-    void NoteFilesAndSockets(const ProcessNode& node, bool launched_tree, const ProcessIdentity& root) {
+    void NoteFilesAndSockets(const ProcessNode& node, bool launched_tree, const ProcessIdentity& root, bool include_idle_peers) {
         auto actor = Describe(source, node);
-        auto activity = source.Inspect(node, roots, true);
+        // Idle peers are expanded only while a sensitive file is open, or in
+        // the short tail after it closes. Otherwise this is a vnode walk.
+        auto activity = source.Inspect(node, roots, include_idle_peers);
         // libproc does not set identity_validated on this direct call. The
         // lookup above already re-read the process; a missing descriptor list
         // is the incompleteness signal.
@@ -996,7 +1004,13 @@ struct Session {
             Emit(std::move(record));
         }
     }
-    void SampleTree(pid_t root, const ProcessIdentity& identity, bool launched_tree) {
+    bool FileOpenNow(const ProcessIdentity& identity) const {
+        auto found = live_procs.find(identity);
+        if (found == live_procs.end()) return false;
+        for (const auto& file : found->second.files) if (file.second.open_now) return true;
+        return false;
+    }
+    void SampleTree(pid_t root, const ProcessIdentity& identity, bool launched_tree, bool include_idle_peers) {
         if (root <= 0) return;
         if (!launched_tree && !source.Lookup(root)) {
             auto found = live_procs.find(identity);
@@ -1043,7 +1057,7 @@ struct Session {
                 return;
             }
             ++seen;
-            NoteFilesAndSockets(*node, launched_tree, identity);
+            NoteFilesAndSockets(*node, launched_tree, identity, include_idle_peers);
             for (auto child : ChildPids(pid)) pending.push_back(child);
         }
         if (!pending.empty()) {
@@ -1165,9 +1179,25 @@ struct Session {
         const bool sample_launched = now - started_at < std::chrono::seconds(5) ||
             now - last_launched_sample >= std::chrono::seconds(1);
         if (sample_launched) last_launched_sample = now;
-        for (const auto& root : watched) {
+        std::vector<ProcessIdentity> finished;
+        for (auto& root : watched) {
             if (root.launched && !sample_launched) continue;
-            SampleTree(root.pid, root.identity, root.launched);
+            const bool file_open = FileOpenNow(root.identity);
+            const bool tail = root.last_file.time_since_epoch().count() != 0 &&
+                now - root.last_file < std::chrono::seconds(1);
+            const bool slow_elapsed = root.last_sample.time_since_epoch().count() == 0 ||
+                now - root.last_sample >= std::chrono::seconds(1);
+            if (!FastTreeSampleDue(file_open, tail, slow_elapsed)) continue;
+            const bool peers = file_open || tail;
+            SampleTree(root.pid, root.identity, root.launched, peers);
+            root.last_sample = now;
+            if (FileOpenNow(root.identity)) root.last_file = now;
+            if (!root.launched && !source.Lookup(root.pid)) finished.push_back(root.identity);
+        }
+        if (!finished.empty()) {
+            watched.erase(std::remove_if(watched.begin(), watched.end(), [&](const Root& root) {
+                return std::find(finished.begin(), finished.end(), root.identity) != finished.end();
+            }), watched.end());
         }
         FlushLive();
     }
@@ -1789,7 +1819,7 @@ int main(int argc, char** argv) {
             store.Check();
         }
             if (child.pid > 0) {
-            for (const auto& root : session.watched) if (root.pid == child.pid) session.SampleTree(child.pid, root.identity, root.launched);
+            for (const auto& root : session.watched) if (root.pid == child.pid) session.SampleTree(child.pid, root.identity, root.launched, true);
         }
         if (child.pid > 0) child.Stop();
         session.CloseAccesses();

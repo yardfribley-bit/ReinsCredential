@@ -139,6 +139,17 @@ TlsRecordView ClassifyTlsRecords(const uint8_t* data, size_t size) noexcept;
 LiveClose CloseLiveAccess(const LiveAccessView& view);
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path);
 
+// A tree with a sensitive file open, or within a second after that file
+// closes, is sampled every pass so a short send is not missed. An idle tree
+// is sampled only when the slow period has elapsed.
+inline bool FastTreeSampleDue(bool sensitive_file_open, bool within_close_tail, bool slow_period_elapsed) noexcept {
+    if (sensitive_file_open || within_close_tail) return true;
+    return slow_period_elapsed;
+}
+// System-wide flow subscription is the idle hotspot. Counts are requested
+// only for a process that is already being watched.
+inline bool SubscribeEveryProcessFlow() noexcept { return false; }
+
 // The fast discovery pass does not re-inspect a process it already saw.
 // A new pid or a newly hot pid is the only fast-path inspect. Already-watched
 // trees are sampled on their own cadence, not by this pass.

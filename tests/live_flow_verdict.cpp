@@ -326,6 +326,32 @@ int main() {
     second_upload.transfer_outcome = "flow_txbytes;left_host;tx_sum=1646";
     assert(!ShouldEmitCloseUpdate(4, "flow_txbytes;left_host;tx_sum=1615", second_upload));
     assert(ShouldEmitCloseUpdate(0, "", second_upload));
+    // The field failure: the session was seen, the counter stayed 0, and no
+    // record flag was attached. That is an invisible body, not 未发现.
+    LiveFlow counter_zero = Tcp("192.168.1.11:54631", 0, 0, true);
+    assert(!counter_zero.tls_handshake);
+    assert(!counter_zero.tls_app_data);
+    assert(counter_zero.tx_latest == 0);
+    const auto zero_close = CloseLiveAccess(Seen(canary, {counter_zero}));
+    assert(zero_close.verdict == UploadVerdict::NotVisible);
+    assert(zero_close.verdict != UploadVerdict::NotFound);
+    assert(zero_close.verdict != UploadVerdict::Uploaded);
+    assert(zero_close.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(zero_close.destination == "192.168.1.11:54631");
+    assert(zero_close.detail.find("tx_sum=0") != std::string::npos);
+    LiveClose zero_again = zero_close;
+    assert(!ShouldEmitCloseUpdate(2, zero_close.transfer_outcome, zero_again));
+    // A refused connect is still attempted, and a stable non-zero counter is still 未发现.
+    LiveFlow refused_zero = Tcp("192.168.1.11:54630", 0, 0, false);
+    refused_zero.failed = true;
+    const auto refused_close = CloseLiveAccess(Seen(canary, {refused_zero}));
+    assert(refused_close.verdict == UploadVerdict::Attempted);
+    assert(refused_close.verdict != UploadVerdict::NotVisible);
+    assert(FastTreeSampleDue(true, false, false));
+    assert(FastTreeSampleDue(false, true, false));
+    assert(!FastTreeSampleDue(false, false, false));
+    assert(FastTreeSampleDue(false, false, true));
+    assert(!SubscribeEveryProcessFlow());
     // A real application-data record still closes uploaded. 2085 is 1024+37+1024.
     const auto app_record = record(23, 2085);
     const auto app_records = ClassifyTlsRecords(app_record.data(), app_record.size());
