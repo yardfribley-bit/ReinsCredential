@@ -52,19 +52,36 @@ enum DashboardSmoke {
                 let listRows = rowCount(in: view, minX: width * 0.28, maxX: width * 0.78)
                 guard sidebarRows >= 1 else { throw SmokeFailure.noRows(column: "sidebar", count: sidebarRows) }
                 guard listRows >= 1 else { throw SmokeFailure.noRows(column: "list", count: listRows) }
-                try await Task.sleep(nanoseconds: 2_000_000_000)
+                DashboardAppDelegate.clampLiveSplits()
+                view.layoutSubtreeIfNeeded()
+                try await Task.sleep(nanoseconds: 60_000_000_000)
                 view.layoutSubtreeIfNeeded()
                 guard headingIsVisible(in: view, window: window) else { throw SmokeFailure.hiddenHeading }
                 guard rowIsVisible(in: view, window: window) else { throw SmokeFailure.hiddenRows }
                 guard inspectorHasSelection(in: view, window: window) else { throw SmokeFailure.emptyInspector }
+                let windowHeight = window.frame.height
                 let savedHeight = SplitFrameSanitizer.tallestSubviewHeight(in: .standard)
+                if savedHeight > windowHeight {
+                    throw SmokeFailure.savedHeight(saved: savedHeight, window: windowHeight)
+                }
+                let seeded = [
+                    "NSSplitView Subview Frames main-AppWindow-1, SidebarNavigationSplitView",
+                    "NSSplitView Subview Frames main-AppWindow-1, ListRewrite",
+                    "NSSplitView Subview Frames SidebarNavigationSplitView"
+                ]
+                for key in seeded {
+                    guard let stored = UserDefaults.standard.object(forKey: key) else { throw SmokeFailure.missingSplitKey(key) }
+                    let height = SplitFrameSanitizer.tallestHeight(of: stored)
+                    if height > windowHeight { throw SmokeFailure.savedHeight(saved: height, window: windowHeight) }
+                }
+                for subview in splitSubviews(in: view) where subview.frame.height > windowHeight {
+                    throw SmokeFailure.savedHeight(saved: subview.frame.height, window: windowHeight)
+                }
+                let panes = panesInsideWindow(in: view, window: window)
+                guard panes.sidebar else { throw SmokeFailure.paneOutside(column: "sidebar") }
+                guard panes.list else { throw SmokeFailure.paneOutside(column: "list") }
+                guard panes.inspector else { throw SmokeFailure.paneOutside(column: "inspector") }
                 let contentHeight = window.contentLayoutRect.height
-                if savedHeight > contentHeight + 2 {
-                    throw SmokeFailure.savedHeight(saved: savedHeight, window: contentHeight)
-                }
-                for subview in splitSubviews(in: view) where subview.frame.height > contentHeight + 2 {
-                    throw SmokeFailure.savedHeight(saved: subview.frame.height, window: contentHeight)
-                }
                 let sidebarView = columnHost(in: view, minX: 0, maxX: width * 0.4) ?? view
                 let listView = columnHost(in: view, minX: width * 0.3, maxX: width * 0.75) ?? view
                 let inspectorView = columnHost(in: view, minX: width * 0.62, maxX: width) ?? view
@@ -87,7 +104,9 @@ enum DashboardSmoke {
                     "list_pixels": listPixels.dark,
                     "inspector_pixels": inspectorPixels.dark,
                     "saved_split_height": savedHeight,
+                    "window_height": windowHeight,
                     "content_height": contentHeight,
+                    "panes_inside_window": panes.sidebar && panes.list && panes.inspector,
                 ]
                 try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                     .write(to: directory.appendingPathComponent("ui-smoke.json"), options: .atomic)
@@ -200,6 +219,34 @@ enum DashboardSmoke {
         return walk(view)
     }
 
+    private static func panesInsideWindow(in view: NSView, window: NSWindow) -> (sidebar: Bool, list: Bool, inspector: Bool) {
+        let bounds = window.frame
+        var sidebar = false
+        var list = false
+        var inspector = false
+        func consider(_ frame: NSRect, text: String) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.count >= 2, frame.width > 1, frame.height > 1, frame.height <= bounds.height + 2 else { return }
+            guard bounds.contains(CGPoint(x: frame.midX, y: frame.midY)) else { return }
+            let x = (frame.midX - bounds.minX) / max(bounds.width, 1)
+            if x < 0.38 { sidebar = true }
+            if x > 0.22 && x < 0.78 { list = true }
+            if x > 0.62 { inspector = true }
+        }
+        func walk(_ object: AnyObject, depth: Int) {
+            if depth > 16 { return }
+            let label = object.accessibilityLabel?() ?? ""
+            let value = (object.accessibilityValue?() as? String) ?? ""
+            let title = object.accessibilityTitle?() ?? ""
+            consider(object.accessibilityFrame?() ?? .null, text: "\(label) \(value) \(title)")
+            if let children = object.accessibilityChildren?() {
+                for child in children { walk(child as AnyObject, depth: depth + 1) }
+            }
+        }
+        walk(view, depth: 0)
+        return (sidebar, list, inspector)
+    }
+
     private static func splitSubviews(in view: NSView) -> [NSView] {
         var found: [NSView] = []
         if let split = view as? NSSplitView { found.append(contentsOf: split.subviews) }
@@ -293,6 +340,8 @@ enum DashboardSmoke {
         case noRows(column: String, count: Int)
         case blankColumn(column: String, pixels: Int)
         case savedHeight(saved: CGFloat, window: CGFloat)
+        case missingSplitKey(String)
+        case paneOutside(column: String)
         var errorDescription: String? {
             switch self {
             case .noWindow: return "No visible dashboard window was created."
@@ -303,7 +352,9 @@ enum DashboardSmoke {
             case .hiddenRows: return "No list row intersects the visible window."
             case .noRows(let column, let count): return "The \(column) has \(count) rows; a blank window must fail."
             case .blankColumn(let column, let pixels): return "The \(column) rendered \(pixels) non-background pixels."
-            case .savedHeight(let saved, let window): return "Split height \(saved) is taller than the window content \(window)."
+            case .savedHeight(let saved, let window): return "Split height \(saved) is taller than the hosting window \(window)."
+            case .missingSplitKey(let key): return "The split defaults key was deleted instead of clamped: \(key)."
+            case .paneOutside(let column): return "The \(column) has no accessibility text inside the window."
             }
         }
     }

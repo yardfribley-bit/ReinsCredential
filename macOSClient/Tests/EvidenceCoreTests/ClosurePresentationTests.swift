@@ -42,11 +42,26 @@ final class ClosurePresentationTests: XCTestCase {
         XCTAssertEqual(SplitFrameSanitizer.subviewHeights(in: measured[0]), [5089])
         XCTAssertEqual(SplitFrameSanitizer.savedWindowHeights(in: defaults), [816])
         let limit = SplitFrameSanitizer.maxRestorableSubviewHeight(defaults: defaults, screenHeight: 870)
-        XCTAssertLessThan(limit, 816)
-        XCTAssertGreaterThan(limit, 700)
+        XCTAssertEqual(limit, 816)
+        XCTAssertFalse(SplitFrameSanitizer.containsImpossibleHeight("0, 0, 218, 850, NO, NO", maxHeight: 870))
+        XCTAssertTrue(SplitFrameSanitizer.containsImpossibleHeight("0, 0, 218, 850, NO, NO", maxHeight: limit))
+        XCTAssertTrue(SplitFrameSanitizer.containsImpossibleHeight("0, 0, 898, 1469.5, NO, NO", maxHeight: limit))
         let removedTall = SplitFrameSanitizer.removeImpossibleFrames(defaults: defaults, maxSubviewHeight: limit)
         XCTAssertEqual(removedTall, [key])
         XCTAssertEqual(SplitFrameSanitizer.tallestSubviewHeight(in: defaults), 700)
+        defaults.set(measured, forKey: key)
+        defaults.set(["0.000000, 0.000000, 898.000000, 1469.500000, NO, NO"], forKey: "NSSplitView Subview Frames Rewrite")
+        defaults.set(autosaved, forKey: "NSSplitView Subview Frames Comma")
+        let corrected = SplitFrameSanitizer.correctSavedFrames(defaults: defaults, maxSubviewHeight: limit)
+        XCTAssertEqual(corrected, [
+            "NSSplitView Subview Frames Comma",
+            "NSSplitView Subview Frames Rewrite",
+            key
+        ])
+        XCTAssertEqual(SplitFrameSanitizer.tallestHeight(of: defaults.object(forKey: key)), 816)
+        XCTAssertEqual(SplitFrameSanitizer.tallestHeight(of: defaults.object(forKey: "NSSplitView Subview Frames Rewrite")), 816)
+        XCTAssertEqual(SplitFrameSanitizer.subviewHeights(in: defaults.string(forKey: "NSSplitView Subview Frames Comma") ?? ""), [816, 816])
+        XCTAssertNotNil(defaults.object(forKey: key))
     }
 
     func testWindowFrameIsClampedOntoTheVisibleScreen() {

@@ -102,18 +102,26 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     static var isQuitting = false
     static var stopRuntime: (@MainActor () async -> Void)?
 
-    func applicationWillFinishLaunching(_ notification: Notification) {
+    override init() {
+        super.init()
         if CommandLine.arguments.contains("--smoke-seed-split") {
-            // The measured white-screen fixture. Seeded before the window is
-            // created so AppKit would restore it, and the launch must still
-            // show the panes and must not keep this height.
+            // Written before the guard exists, so launch correction has to
+            // rewrite these three measured fixtures before the window reads them.
+            UserDefaults.standard.set("216 54 1224 816 0 0 1440 870", forKey: "NSWindow Frame main-AppWindow-1")
             UserDefaults.standard.set(Self.oversizedSplitFrames, forKey: Self.splitFrameKey)
+            UserDefaults.standard.set(["0.000000, 0.000000, 898.000000, 1469.500000, NO, NO"],
+                                      forKey: "NSSplitView Subview Frames main-AppWindow-1, ListRewrite")
+            UserDefaults.standard.set(
+                "0.000000, 0.000000, 211.000000, 6161.000000, NO, 211.000000, 0.000000, 680.000000, 6161.000000, NO",
+                forKey: "NSSplitView Subview Frames SidebarNavigationSplitView")
         }
+        SplitWriteGuard.install()
+    }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
         let screen = NSScreen.screens.map(\.frame.height).max() ?? 1_600
         let limit = SplitFrameSanitizer.maxRestorableSubviewHeight(defaults: .standard, screenHeight: screen)
-        if !CommandLine.arguments.contains("--smoke-seed-split") {
-            _ = SplitFrameSanitizer.removeImpossibleFrames(defaults: .standard, maxSubviewHeight: limit)
-        }
+        _ = SplitFrameSanitizer.correctSavedFrames(defaults: .standard, maxSubviewHeight: limit)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -225,31 +233,40 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
                 let hook = SplitClampView(frame: .zero)
                 content.addSubview(hook)
             }
-            clamp(content, height: contentHeightLimit(window))
+            clamp(content, height: min(contentHeightLimit(window), window.frame.height))
         }
-        if limit < 1_600 {
-            _ = SplitFrameSanitizer.removeImpossibleFrames(defaults: .standard, maxSubviewHeight: limit)
-        }
+        let windowHeight = NSApp.windows.filter { $0.canBecomeMain && $0.frame.height > 2 }.map(\.frame.height).min()
+            ?? SplitFrameSanitizer.savedWindowHeights(in: .standard).min()
+            ?? limit
+        _ = SplitFrameSanitizer.correctSavedFrames(defaults: .standard, maxSubviewHeight: windowHeight)
     }
 
     private static func clamp(_ view: NSView, height limit: CGFloat) {
         if let split = view as? NSSplitView {
-            if split.frame.height > limit + 1, let parent = split.superview, parent.bounds.height > 2, parent.bounds.height <= limit + 1 {
+            if split.frame.height > limit + 1 {
                 var frame = split.frame
-                frame.size.height = parent.bounds.height
+                frame.size.height = limit
+                frame.origin.y = 0
                 split.frame = frame
             }
-            let height = min(split.bounds.height > 2 ? split.bounds.height : limit, limit)
-            if split.autosaveName != nil { split.autosaveName = nil }
-            guard height > 2 else {
-                for child in view.subviews { clamp(child, height: limit) }
-                return
+            var ancestor = split.superview
+            while let host = ancestor, host !== host.window?.contentView {
+                if host.frame.height > limit + 1 {
+                    var frame = host.frame
+                    frame.size.height = limit
+                    frame.origin.y = 0
+                    host.frame = frame
+                }
+                ancestor = host.superview
             }
-            for subview in split.subviews where abs(subview.frame.height - height) > 1 || abs(subview.frame.origin.y) > 1 {
-                var frame = subview.frame
-                frame.size.height = height
-                frame.origin.y = 0
-                subview.frame = frame
+            let height = min(split.bounds.height > 2 ? split.bounds.height : limit, limit)
+            if height > 2 {
+                for subview in split.subviews where subview.frame.height > height + 1 || abs(subview.frame.origin.y) > 1 {
+                    var frame = subview.frame
+                    frame.size.height = height
+                    frame.origin.y = 0
+                    subview.frame = frame
+                }
             }
         }
         for child in view.subviews { clamp(child, height: limit) }
@@ -292,6 +309,40 @@ final class SplitClampView: NSView {
     override func layout() {
         super.layout()
         DashboardAppDelegate.clampLiveSplits()
+    }
+}
+
+/// Rewrites a split-frame defaults write before it is stored. The stored
+/// height is the hosting window's height. The key is not deleted.
+enum SplitWriteGuard {
+    private static var installed = false
+
+    static func install() {
+        guard !installed else { return }
+        let selector = NSSelectorFromString("setObject:forKey:")
+        guard let original = class_getInstanceMethod(UserDefaults.self, selector),
+              let replacement = class_getInstanceMethod(UserDefaults.self, #selector(UserDefaults.reins_setObject(_:forKey:))) else { return }
+        method_exchangeImplementations(original, replacement)
+        installed = true
+    }
+
+    static func limit() -> CGFloat {
+        let live = NSApp.windows.filter { $0.canBecomeMain && $0.frame.height > 2 }.map(\.frame.height)
+        if let height = live.min() { return height }
+        if let saved = SplitFrameSanitizer.savedWindowHeights(in: .standard).filter({ $0 > 1 }).min() { return saved }
+        return NSScreen.screens.map(\.frame.height).max() ?? 800
+    }
+}
+
+extension UserDefaults {
+    @objc(reins_setObject:forKey:)
+    func reins_setObject(_ value: Any?, forKey key: String) {
+        var stored = value
+        if key.contains("NSSplitView Subview Frames") {
+            let result = SplitFrameSanitizer.correcting(value, maxHeight: SplitWriteGuard.limit())
+            if result.changed { stored = result.stored }
+        }
+        reins_setObject(stored, forKey: key)
     }
 }
 

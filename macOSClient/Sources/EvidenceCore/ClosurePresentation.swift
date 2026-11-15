@@ -62,15 +62,81 @@ public enum SplitFrameSanitizer {
         }
     }
 
-    /// The tallest height AppKit may restore into a split column. Prefers the
-    /// saved window height over the screen, because a 1469-point column is
-    /// already above an 816-point window on an 870-point screen.
+    /// The tallest height AppKit may restore. This is the hosting window's
+    /// height. On the measured Mac the window is 816 points and the screen is
+    /// 870, so a column of 850 is already too tall. 5089 and 1469.5 both fail.
     public static func maxRestorableSubviewHeight(defaults: UserDefaults, screenHeight: CGFloat) -> CGFloat {
         let windows = savedWindowHeights(in: defaults)
-        let windowLimit = windows.map { max($0 - 48, 200) }.min()
-        let screen = screenHeight > 1 ? screenHeight : 1_600
-        if let windowLimit { return min(screen, windowLimit) }
-        return screen
+        if let window = windows.filter({ $0 > 1 }).min() { return window }
+        return screenHeight > 1 ? screenHeight : 1_600
+    }
+
+    /// Rewrites split-frame text so every subview height is at most `maxHeight`.
+    /// Widths and the YES/NO flags stay. This is what a defaults write must store.
+    public static func clampFrameText(_ saved: String, maxHeight: CGFloat) -> String {
+        var ranges: [Range<String.Index>] = []
+        var values: [CGFloat] = []
+        var index = saved.startIndex
+        while index < saved.endIndex {
+            while index < saved.endIndex, !saved[index].isNumber, saved[index] != "-", saved[index] != "." {
+                index = saved.index(after: index)
+            }
+            guard index < saved.endIndex else { break }
+            let start = index
+            if saved[index] == "-" { index = saved.index(after: index) }
+            var saw = false
+            while index < saved.endIndex, saved[index].isNumber || saved[index] == "." {
+                saw = true
+                index = saved.index(after: index)
+            }
+            guard saw, let value = Double(saved[start..<index]), value.isFinite else { continue }
+            ranges.append(start..<index)
+            values.append(CGFloat(value))
+        }
+        var result = saved
+        var heightIndex = 3
+        var replacements: [(Range<String.Index>, String)] = []
+        while heightIndex < values.count {
+            if values[heightIndex] > maxHeight {
+                replacements.append((ranges[heightIndex], String(format: "%.6f", Double(maxHeight))))
+            }
+            heightIndex += 4
+        }
+        for (range, text) in replacements.reversed() {
+            result.replaceSubrange(range, with: text)
+        }
+        return result
+    }
+
+    /// Corrects a defaults value in place. Returns the value to store, and whether it changed.
+    public static func correcting(_ value: Any?, maxHeight: CGFloat) -> (stored: Any, changed: Bool) {
+        let texts = frameTexts(value)
+        guard !texts.isEmpty else { return (0, false) }
+        let fixed = texts.map { clampFrameText($0, maxHeight: maxHeight) }
+        let changed = fixed != texts
+        if value is String { return (fixed[0], changed) }
+        return (fixed, changed)
+    }
+
+    /// Rewrites every saved split frame taller than the window. The key stays;
+    /// its height becomes the window height. Widths are unchanged.
+    @discardableResult
+    public static func correctSavedFrames(defaults: UserDefaults, maxSubviewHeight: CGFloat) -> [String] {
+        let keys = defaults.dictionaryRepresentation().keys.filter { $0.contains("NSSplitView Subview Frames") }
+        var changed: [String] = []
+        for key in keys {
+            let original = defaults.object(forKey: key)
+            let result = correcting(original, maxHeight: maxSubviewHeight)
+            if result.changed {
+                defaults.set(result.stored, forKey: key)
+                changed.append(key)
+            }
+        }
+        return changed.sorted()
+    }
+
+    public static func tallestHeight(of value: Any?) -> CGFloat {
+        frameTexts(value).flatMap { subviewHeights(in: $0) }.max() ?? 0
     }
 
     public static func tallestSubviewHeight(in defaults: UserDefaults) -> CGFloat {

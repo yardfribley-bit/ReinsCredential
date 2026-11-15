@@ -14,7 +14,7 @@ bin="$(/usr/bin/swift build --package-path "$client_dir" --show-bin-path)"
 smoke_dir="$(mktemp -d "${TMPDIR:-/tmp/}reins-ui-smoke.XXXXXX")"
 "$bin/ReinsDashboard" --smoke-test "$smoke_dir" --smoke-evidence "$smoke_dir/fixture.jsonl" --smoke-seed-split &
 smoke_pid=$!
-for _ in $(seq 1 90); do
+for _ in $(seq 1 180); do
   if ! kill -0 "$smoke_pid" 2>/dev/null; then break; fi
   sleep 1
 done
