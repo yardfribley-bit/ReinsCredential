@@ -122,7 +122,7 @@ final class RuntimeController: ObservableObject {
                 self?.watchedPaths = configuration.sensitivePaths
             }
             while !Task.isCancelled {
-                await self?.refreshNow()
+                await self?.refreshNow(force: false)
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
@@ -241,11 +241,13 @@ final class RuntimeController: ObservableObject {
         }
     }
 
-    func refreshNow(now: Date = Date()) async {
+    func refreshNow(now: Date = Date(), force: Bool = true) async {
         guard !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
-        if notedLogs && !logsDiffer() { return }
+        // The polling loop skips a redraw when nothing was written. An explicit
+        // refresh still runs, so a clock change or a registration change is visible.
+        if !force && notedLogs && !logsDiffer() { return }
         defer { noteLogs() }
         do {
             let batch = try await reader.poll(url: paths.evidenceURL)

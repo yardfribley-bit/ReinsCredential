@@ -361,9 +361,12 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
                 body_note = ";handshake_tx=" + std::to_string(handshake_tx) +
                     ";tls_app_bytes=" + std::to_string(flow.tls_app_bytes);
             }
-        } else if (!flow.established && !flow.loopback && delta < lower && !attempt) {
-            // SYN_SENT and a refused connect are attempts. Port 443 does not
-            // turn a connect that sent no bytes into a TLS handshake.
+        } else if (flow.failed && !flow.loopback && delta < lower && !attempt) {
+            attempt = &flow;
+        } else if (!flow.established && !flow.failed && !flow.loopback && delta == 0 && !attempt) {
+            // A SYN that has not failed yet can still send. Only a finished
+            // window with no bytes is an attempt. Port 443 does not make it TLS.
+            if (!view.window_settled) { defer_unparsed_handshake = true; continue; }
             attempt = &flow;
         }
     }
