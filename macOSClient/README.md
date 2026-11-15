@@ -23,7 +23,7 @@ open macOSClient/dist/ReinsCredential.app
 # 同时编译 Apple Silicon 与 Intel
 macOSClient/scripts/build-app.sh --arch arm64 --arch x86_64
 
-# 63 项测试，含真实 C++ ToJson → Swift 解码
+# 含真实 C++ ToJson → Swift 解码，以及本机网页控制台测试
 macOSClient/scripts/check.sh
 macOSClient/scripts/package-local.sh
 macOSClient/scripts/install-local.sh
@@ -70,6 +70,16 @@ ReinsDashboardApp
 - 损坏/超大/未知 Schema/重复事件 ID 的完整行被跳过，显示行号；重复 ID 保留首次出现记录。
 - 全部记录无效、读取失败或权限拒绝时，保留之前的数据并报错。有效空日志可显示空状态。
 - 风险筛选、PID/进程/路径/目的地搜索和选择状态仅作用于当前快照。
+
+## 本机网页控制台
+
+AppKit 仪表盘仍在。需要在浏览器里看同一份证据时，在仓库根目录运行：
+
+```sh
+swift run --package-path macOSClient web-dashboard
+```
+
+地址是 [http://127.0.0.1:8790/](http://127.0.0.1:8790/)，只绑定 `127.0.0.1`。它用 `EvidenceLogReader` 和 `EvidenceChainBuilder` 只读 `runtime/evidence.jsonl` 与 `runtime/egress.jsonl`，不启动采集。停止用 Ctrl-C，或 `swift run --package-path macOSClient web-dashboard stop`。
 
 ## 验证与 AI 协作入口
 
