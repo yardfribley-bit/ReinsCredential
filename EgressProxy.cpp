@@ -25,6 +25,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <thread>
@@ -584,6 +585,15 @@ struct Session {
     std::unique_ptr<TlsIntercept> tls;
     std::map<pid_t, MonoClock::time_point> inspected_at;
     std::map<pid_t, MonoClock::time_point> first_seen;
+    struct BirthSnapshot {
+        ProcessNode node;
+        ActivitySample activity;
+    };
+    std::mutex birth_mu;
+    std::vector<BirthSnapshot> births;
+    std::atomic<bool> birth_stop{false};
+    std::thread birth_thread;
+    bool birth_started = false;
     MonoClock::time_point last_slow_inspect{};
     MonoClock::time_point last_launched_sample{};
     MonoClock::time_point started_at = MonoClock::now();
@@ -598,6 +608,16 @@ struct Session {
     std::set<std::string> socket_seen;
     uint64_t http_requests = 0, content_matches = 0, opaque_tunnels = 0, attribution_failures = 0;
     explicit Session(EvidenceStore& evidence, IProcessSource& processes) : store(evidence), source(processes) {}
+    ~Session() { StopBirth(); }
+    void StopBirth() {
+        birth_stop.store(true);
+        if (birth_thread.joinable()) birth_thread.join();
+    }
+    void EnsureBirth() {
+        if (birth_started) return;
+        birth_started = true;
+        birth_thread = std::thread([this] { BirthLoop(); });
+    }
     void Emit(EvidenceRecord record) { store.SubmitCritical(std::move(record)); }
     void NoteAccess(const ActorProcess& actor, const std::string& path) {
         if (path.empty()) return;
@@ -1138,6 +1158,84 @@ struct Session {
         std::cerr << "egress live " << node->identity.pid << " " << label << "\n";
         return true;
     }
+    void CommitBirth(const BirthSnapshot& snap) {
+        if (snap.activity.sensitive_files.empty()) return;
+        const auto pid = snap.node.identity.pid;
+        auto actor = Describe(source, snap.node);
+        if (WatchingPid(pid)) {
+            ObserveLive(snap.node, actor, snap.activity, snap.node.identity);
+            last_sensitive_at = MonoClock::now();
+            return;
+        }
+        if (watched.size() >= 64) { tree_truncated = true; return; }
+        for (const auto& path : snap.activity.sensitive_files) NoteAccess(actor, path);
+        ObserveLive(snap.node, actor, snap.activity, snap.node.identity);
+        last_sensitive_at = MonoClock::now();
+        source.WatchFlows(pid);
+        Root root{snap.node.identity, pid, false};
+        root.last_file = MonoClock::now();
+        watched.push_back(root);
+        inspected_at[pid] = root.last_file;
+        std::string label = snap.node.name.empty() ? snap.node.executable : snap.node.name;
+        if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
+        std::cerr << "egress live " << pid << " " << label << "\n";
+    }
+    void DrainBirths() {
+        std::vector<BirthSnapshot> found;
+        {
+            std::lock_guard<std::mutex> lock(birth_mu);
+            found.swap(births);
+        }
+        for (const auto& snap : found) CommitBirth(snap);
+    }
+    void BirthLoop() {
+        struct Item { pid_t pid; MonoClock::time_point born; };
+        std::vector<Item> recent;
+        std::set<pid_t> known;
+        while (!birth_stop.load()) {
+            int estimate = proc_listallpids(nullptr, 0);
+            if (estimate > 0) {
+                std::vector<pid_t> pids(static_cast<size_t>(estimate) + 64);
+                const int count = proc_listallpids(pids.data(), static_cast<int>(pids.size() * sizeof(pid_t)));
+                const auto now = MonoClock::now();
+                std::set<pid_t> alive;
+                const auto listed = count > 0 ? std::min(pids.size(), static_cast<size_t>(count)) : 0;
+                for (size_t index = 0; index < listed; ++index) if (pids[index] > 1) alive.insert(pids[index]);
+                for (const auto pid : alive) {
+                    if (!known.insert(pid).second) continue;
+                    recent.push_back(Item{pid, now});
+                }
+                if (known.size() > 8192) {
+                    for (auto it = known.begin(); it != known.end(); ) {
+                        if (!alive.count(*it)) it = known.erase(it);
+                        else ++it;
+                    }
+                }
+                std::vector<BirthSnapshot> found;
+                for (auto it = recent.begin(); it != recent.end(); ) {
+                    if (!alive.count(it->pid) || now - it->born > std::chrono::milliseconds(400)) {
+                        it = recent.erase(it);
+                        continue;
+                    }
+                    auto node = source.Lookup(it->pid);
+                    if (!node) { ++it; continue; }
+                    if (IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) {
+                        it = recent.erase(it);
+                        continue;
+                    }
+                    auto activity = source.Inspect(*node, roots, false);
+                    if (!activity.sensitive_files.empty()) activity = source.Inspect(*node, roots, true);
+                    if (!activity.sensitive_files.empty()) found.push_back(BirthSnapshot{*node, std::move(activity)});
+                    ++it;
+                }
+                if (!found.empty()) {
+                    std::lock_guard<std::mutex> lock(birth_mu);
+                    if (births.size() < 512) births.insert(births.end(), found.begin(), found.end());
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(8));
+        }
+    }
     void DiscoverHolders() {
         if (!watch_live) return;
         source.StartFlowWatch();
@@ -1164,23 +1262,16 @@ struct Session {
         if (count <= 0) return;
         const auto listed = std::min(pids.size(), static_cast<size_t>(count));
         std::vector<pid_t> fresh;
-        std::vector<pid_t> young;
         fresh.reserve(32);
         for (size_t index = 0; index < listed; ++index) {
             const auto pid = pids[index];
             if (pid <= 1 || WatchingPid(pid)) continue;
             if (!first_seen.count(pid)) first_seen[pid] = now;
-            const bool newborn = now - first_seen[pid] < std::chrono::seconds(2);
+            // New pids are snapshotted on the birth thread. This pass only
+            // remembers pids the birth window already closed.
             const auto seen = inspected_at.find(pid);
-            if (newborn) young.push_back(pid);
-            else if (seen == inspected_at.end()) fresh.push_back(pid);
-        }
-        std::sort(young.begin(), young.end(), [](pid_t left, pid_t right) { return left > right; });
-        size_t young_budget = 8;
-        for (const auto pid : young) {
-            if (!young_budget || watched.size() >= 64) break;
-            --young_budget;
-            ConsiderPid(pid);
+            if (seen == inspected_at.end() && now - first_seen[pid] >= std::chrono::milliseconds(400))
+                fresh.push_back(pid);
         }
         const bool background_due = last_sweep.time_since_epoch().count() == 0 ||
             now - last_sweep >= std::chrono::milliseconds(200);
@@ -1216,6 +1307,10 @@ struct Session {
         }
     }
     void SampleWatched() {
+        if (watch_live) {
+            EnsureBirth();
+            DrainBirths();
+        }
         DiscoverHolders();
         const auto now = MonoClock::now();
         // The launched canary opens its file immediately. Follow it closely for

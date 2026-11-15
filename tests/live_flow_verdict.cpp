@@ -425,9 +425,9 @@ int main() {
     assert(FlowGraceActive(true, false, 9000));
     assert(FlowGraceActive(false, true, 1000));
     assert(!FlowGraceActive(false, true, kFlowGraceMs));
-    assert(SubscriptionHoldActive(3000));
-    assert(SubscriptionHoldActive(60000));
+    assert(SubscriptionHoldActive(1000));
     assert(!SubscriptionHoldActive(kSubscriptionHoldMs));
+    assert(!SubscriptionHoldActive(60000));
     assert(IdleWatchTeardownDue(false, true));
     assert(!IdleWatchTeardownDue(true, true));
 

@@ -151,11 +151,11 @@ LiveClose CloseLiveAccess(const LiveAccessView& view);
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path);
 
 // A tree with a sensitive file open, or inside the short grace after it
-// closes, is sampled every pass. The kernel subscription itself stays up
-// much longer: tearing it down when a short-lived process exits drops the
-// next open that arrives while the socket is being created again.
+// closes, is sampled every pass. The kernel socket stays up only briefly
+// after that. A new process is snapshotted on its own pass, so tearing the
+// socket down does not hide the next short-lived open.
 inline constexpr int64_t kFlowGraceMs = 3000;
-inline constexpr int64_t kSubscriptionHoldMs = 90000;
+inline constexpr int64_t kSubscriptionHoldMs = 3000;
 inline bool FlowGraceActive(bool file_open, bool have_close_stamp, int64_t since_close_ms, int64_t grace_ms = kFlowGraceMs) noexcept {
     if (file_open) return true;
     if (!have_close_stamp || since_close_ms < 0) return false;

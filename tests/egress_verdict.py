@@ -905,6 +905,76 @@ def _closes_on(records, port):
             if record.get("type") == "sensitive_access_closed" and _dest_port(record.get("destination")) == port]
 
 
+def _uploaded_flow_count(path):
+    if not path.exists():
+        return 0
+    count = 0
+    for line in path.read_text().splitlines():
+        if "sensitive_access_closed" in line and '"upload_verdict":"uploaded"' in line.replace(" ", "") and "flow_txbytes" in line:
+            if "flow_txbytes_udp" in line:
+                continue
+            count += 1
+    return count
+
+
+def live_a2_short_burst(directory, binary, secret):
+    """A 2s POST exits, then a ~100ms POST starts immediately. Repeat. None may be missed."""
+    host = routable_ip()
+    if not host:
+        return "skipped"
+    server = Server(accept_timeout=180, bind_host="0.0.0.0", accepts=40)
+    log = directory / "a2-short.jsonl"
+    proc = subprocess.Popen(
+        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "0",
+         "--sample-ms", "40"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        time.sleep(0.4)
+        if proc.poll() is not None:
+            raise SystemExit(f"a2-short proxy exited early code {proc.returncode}")
+        for index in range(20):
+            base = _uploaded_flow_count(log)
+            delayed_ready = directory / f"a2-ready-{index}"
+            if delayed_ready.exists():
+                delayed_ready.unlink()
+            delayed = subprocess.Popen(
+                [str(binary), "delay-short", str(secret), host, str(server.port), str(delayed_ready)])
+            time.sleep(0.05)
+            delayed_ready.write_text("go\n")
+            try:
+                delayed.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                delayed.kill()
+                raise SystemExit(f"a2-short delayed post {index} did not exit")
+            short_ready = directory / f"short-ready-{index}"
+            short_ready.write_text("go\n")
+            short = subprocess.Popen(
+                [str(binary), "short", str(secret), host, str(server.port), str(short_ready)])
+            try:
+                short.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                short.kill()
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if _uploaded_flow_count(log) >= base + 2:
+                    break
+                time.sleep(0.05)
+            else:
+                raise SystemExit(
+                    f"a2-short missed a close at {index}: have {_uploaded_flow_count(log) - base}, want 2")
+        if _uploaded_flow_count(log) < 40:
+            raise SystemExit(f"a2-short uploaded {_uploaded_flow_count(log)}, want 40")
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    server.join()
+    return "ok"
+
+
 def live_field_rounds(directory, binary, secret, ca):
     """Two rounds after a minute idle: refused, loopback, two short posts, TLS body, TLS hello.
 
@@ -1097,6 +1167,7 @@ def main():
     content_unseen = 0
     after_canary = "skipped"
     rounds = "skipped"
+    burst = "skipped"
     with tempfile.TemporaryDirectory(prefix="reins-egress-") as temporary:
         directory = Path(temporary)
         os.chmod(directory, 0o700)
@@ -1161,6 +1232,13 @@ def main():
                 tn += 1
             else:
                 fn += 1
+        burst = live_a2_short_burst(directory, binary, secret)
+        if burst == "skipped":
+            print("SKIP live-a2-short no routable address")
+        elif burst == "ok":
+            upload_tp += 40
+        else:
+            fn += 1
         rounds = live_field_rounds(directory, binary, secret, ca)
         if rounds == "skipped":
             print("SKIP live-field-rounds no routable address")
@@ -1206,6 +1284,9 @@ def main():
         raise SystemExit(f"missing cpu samples idle={len(idle_cpu)} active={len(active_cpu)}")
     counted = dict(LAUNCHED_VERDICTS)
     counted.update({mode: verdict for mode, verdict in LIVE_VERDICTS.items() if mode not in skipped})
+    if burst == "ok":
+        for index in range(40):
+            counted[f"a2-short-{index}"] = "uploaded"
     if rounds == "ok":
         counted["field-post-1"] = "uploaded"
         counted["field-post-2"] = "uploaded"
