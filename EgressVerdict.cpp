@@ -394,6 +394,15 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
     }
     if (unmeasured) {
         if (!view.window_settled) return Defer(UploadVerdict::NotVisible);
+        // A datagram that stayed on this machine is not an off-host body we failed to read.
+        if (unmeasured->loopback && !any_offhost) {
+            result.verdict = UploadVerdict::NotFound;
+            result.destination = unmeasured->destination;
+            result.match_basis = "live_agent_observed";
+            result.transfer_outcome = "live_agent_observed_loopback_not_off_host";
+            result.detail = "agent_seen;loopback_send_did_not_leave_host;app_settings_not_modified";
+            return result;
+        }
         result.verdict = UploadVerdict::NotVisible;
         result.destination = unmeasured->destination;
         result.match_basis = "observation_impossible";

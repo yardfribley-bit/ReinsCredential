@@ -189,9 +189,9 @@ int main() {
     loopback_udp.destination = "127.0.0.1:9";
     loopback_udp.loopback = true;
     const auto local_udp = CloseLiveAccess(Seen(file_bytes, {loopback_udp}));
-    assert(local_udp.verdict == UploadVerdict::NotVisible);
-    assert(local_udp.verdict != UploadVerdict::NotFound);
-    assert(local_udp.transfer_outcome == "udp_or_quic_body_not_visible");
+    assert(local_udp.verdict == UploadVerdict::NotFound);
+    assert(local_udp.verdict != UploadVerdict::NotVisible);
+    assert(local_udp.transfer_outcome.find("loopback_not_off_host") != std::string::npos);
     assert(udp.transfer_outcome == "udp_or_quic_body_not_visible");
     assert(udp.destination == quic.destination);
     auto udp_and_gap = Seen(file_bytes, {quic});
