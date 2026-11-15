@@ -975,6 +975,73 @@ def live_a2_short_burst(directory, binary, secret):
     return "ok"
 
 
+def live_three_rounds(directory, binary, secret):
+    """A, A2 (2s warmup), D1, D2, E, three times back to back. No misses, no TLS close on plain HTTP."""
+    host = routable_ip()
+    if not host:
+        return "skipped"
+    server = Server(accept_timeout=120, bind_host="0.0.0.0", accepts=12)
+    refused = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    refused.bind((host, 0))
+    refused_port = refused.getsockname()[1]
+    refused.close()
+    log = directory / "three-rounds.jsonl"
+    proc = subprocess.Popen(
+        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "0",
+         "--sample-ms", "40"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def run(mode, port, ready, wait):
+        path = directory / ready
+        if path.exists():
+            path.unlink()
+        agent = subprocess.Popen([str(binary), mode, str(secret), host, str(port), str(path)])
+        time.sleep(0.05)
+        path.write_text("go\n")
+        try:
+            agent.wait(timeout=wait)
+        except subprocess.TimeoutExpired:
+            agent.kill()
+            raise SystemExit(f"three-rounds {mode} did not exit")
+
+    try:
+        time.sleep(0.4)
+        if proc.poll() is not None:
+            raise SystemExit(f"three-rounds proxy exited early code {proc.returncode}")
+        for index in range(3):
+            base_up = _uploaded_flow_count(log)
+            run("short", server.port, f"a-{index}", 5)
+            run("delay-short", server.port, f"a2-{index}", 8)
+            run("short", server.port, f"d1-{index}", 5)
+            run("short", server.port, f"d2-{index}", 5)
+            run("refused-short", refused_port, f"e-{index}", 5)
+            deadline = time.time() + 6
+            while time.time() < deadline and _uploaded_flow_count(log) < base_up + 4:
+                time.sleep(0.05)
+            if _uploaded_flow_count(log) < base_up + 4:
+                raise SystemExit(f"three-rounds round {index} uploads {_uploaded_flow_count(log) - base_up}, want 4")
+        records = load_records(log)
+        http_tls = [record for record in _closes_on(records, server.port)
+                    if "tls_handshake" in (record.get("transfer_outcome") or "")]
+        if http_tls:
+            raise SystemExit(f"three-rounds plain HTTP produced {len(http_tls)} TLS closes")
+        refused_ok = [record for record in _closes_on(records, refused_port)
+                      if record.get("upload_verdict") == "attempted" and record.get("evidence_basis") == "flow_attempt"]
+        refused_bad = [record for record in _closes_on(records, refused_port)
+                       if record.get("upload_verdict") != "attempted"]
+        if len(refused_ok) != 3 or refused_bad:
+            raise SystemExit(f"three-rounds refused attempted={len(refused_ok)} other={len(refused_bad)}")
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    server.join()
+    return "ok"
+
+
 def live_field_rounds(directory, binary, secret, ca):
     """Two rounds after a minute idle: refused, loopback, two short posts, TLS body, TLS hello.
 
@@ -1168,6 +1235,7 @@ def main():
     after_canary = "skipped"
     rounds = "skipped"
     burst = "skipped"
+    triplet = "skipped"
     with tempfile.TemporaryDirectory(prefix="reins-egress-") as temporary:
         directory = Path(temporary)
         os.chmod(directory, 0o700)
@@ -1232,6 +1300,14 @@ def main():
                 tn += 1
             else:
                 fn += 1
+        triplet = live_three_rounds(directory, binary, secret)
+        if triplet == "skipped":
+            print("SKIP live-three-rounds no routable address")
+        elif triplet == "ok":
+            upload_tp += 12
+            attempted_tp += 3
+        else:
+            fn += 1
         burst = live_a2_short_burst(directory, binary, secret)
         if burst == "skipped":
             print("SKIP live-a2-short no routable address")
@@ -1284,6 +1360,12 @@ def main():
         raise SystemExit(f"missing cpu samples idle={len(idle_cpu)} active={len(active_cpu)}")
     counted = dict(LAUNCHED_VERDICTS)
     counted.update({mode: verdict for mode, verdict in LIVE_VERDICTS.items() if mode not in skipped})
+    if triplet == "ok":
+        for index in range(12):
+            counted[f"round-post-{index}"] = "uploaded"
+        counted["round-refused-1"] = "attempted"
+        counted["round-refused-2"] = "attempted"
+        counted["round-refused-3"] = "attempted"
     if burst == "ok":
         for index in range(40):
             counted[f"a2-short-{index}"] = "uploaded"

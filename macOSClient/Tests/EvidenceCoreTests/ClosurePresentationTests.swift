@@ -16,12 +16,20 @@ final class ClosurePresentationTests: XCTestCase {
         XCTAssertTrue(SplitFrameSanitizer.containsImpossibleHeight(saved, maxHeight: 900))
         XCTAssertEqual(SplitFrameSanitizer.subviewHeights(in: saved), [3510, 3509.5, 1497])
         XCTAssertFalse(SplitFrameSanitizer.containsImpossibleHeight("{{0, 0}, {260, 800}}", maxHeight: 900))
+        let autosaved = "0.000000, 0.000000, 211.000000, 6161.000000, NO, 211.000000, 0.000000, 680.000000, 6161.000000, NO"
+        XCTAssertEqual(SplitFrameSanitizer.subviewHeights(in: autosaved), [6161, 6161])
+        XCTAssertTrue(SplitFrameSanitizer.containsImpossibleHeight(autosaved, maxHeight: 900))
         let defaults = UserDefaults(suiteName: "reins-split-\(UUID().uuidString)")!
         defaults.set(saved, forKey: "NSSplitView Subview Frames SidebarNavigationSplitView")
+        defaults.set(autosaved, forKey: "NSSplitView Subview Frames main-AppWindow-1, SidebarNavigationSplitView")
         defaults.set("{{0, 0}, {260, 700}}", forKey: "NSSplitView Subview Frames Keep")
         let removed = SplitFrameSanitizer.removeImpossibleFrames(defaults: defaults, maxSubviewHeight: 900)
-        XCTAssertEqual(removed, ["NSSplitView Subview Frames SidebarNavigationSplitView"])
+        XCTAssertEqual(removed, [
+            "NSSplitView Subview Frames SidebarNavigationSplitView",
+            "NSSplitView Subview Frames main-AppWindow-1, SidebarNavigationSplitView"
+        ])
         XCTAssertNil(defaults.string(forKey: "NSSplitView Subview Frames SidebarNavigationSplitView"))
+        XCTAssertNil(defaults.string(forKey: "NSSplitView Subview Frames main-AppWindow-1, SidebarNavigationSplitView"))
         XCTAssertEqual(defaults.string(forKey: "NSSplitView Subview Frames Keep"), "{{0, 0}, {260, 700}}")
     }
 

@@ -332,19 +332,17 @@ int main() {
     second_upload.transfer_outcome = "flow_txbytes;left_host;tx_sum=1646";
     assert(!ShouldEmitCloseUpdate(4, "flow_txbytes;left_host;tx_sum=1615", second_upload));
     assert(ShouldEmitCloseUpdate(0, "", second_upload));
-    // The field failure: the session was seen, the counter stayed 0, and no
-    // record flag was attached. That is an invisible body, not 未发现.
+    // A connection that has not sent is not a TLS handshake. Emitting that
+    // close is how a plain HTTP POST gained an extra not_visible.
     LiveFlow counter_zero = Tcp("192.168.1.11:54631", 0, 0, true);
-    assert(!counter_zero.tls_handshake);
-    assert(!counter_zero.tls_app_data);
-    assert(counter_zero.tx_latest == 0);
+    auto zero_open = Seen(canary, {counter_zero});
+    zero_open.window_settled = false;
+    assert(CloseLiveAccess(zero_open).defer);
     const auto zero_close = CloseLiveAccess(Seen(canary, {counter_zero}));
-    assert(zero_close.verdict == UploadVerdict::NotVisible);
-    assert(zero_close.verdict != UploadVerdict::NotFound);
-    assert(zero_close.verdict != UploadVerdict::Uploaded);
-    assert(zero_close.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(zero_close.verdict == UploadVerdict::NotFound);
+    assert(zero_close.verdict != UploadVerdict::NotVisible);
+    assert(zero_close.transfer_outcome != "tls_handshake_body_not_visible");
     assert(zero_close.destination == "192.168.1.11:54631");
-    assert(zero_close.detail.find("tx_sum=0") != std::string::npos);
     LiveClose zero_again = zero_close;
     assert(!ShouldEmitCloseUpdate(2, zero_close.transfer_outcome, zero_again));
     // A refused connect is still attempted, and a stable non-zero counter is still 未发现.
@@ -415,17 +413,19 @@ int main() {
     assert(lumped_split.detail.find("tls_app_bytes=2085") != std::string::npos);
     assert(lumped_split.detail.find("handshake_tx=1644") != std::string::npos);
     assert(lumped_split.detail.find("tx_sum=3729") == std::string::npos);
-    // A handshake whose counter never reached the 1615-byte flight must still
-    // not be called 未发现.
+    // Twenty bytes on a high port is not a TLS close and not an upload.
     LiveFlow short_handshake = Tcp("192.168.1.11:54831", 0, 20, true);
     const auto short_tls = CloseLiveAccess(Seen(canary, {short_handshake}));
-    assert(short_tls.verdict == UploadVerdict::NotVisible);
-    assert(short_tls.verdict != UploadVerdict::NotFound);
-    assert(short_tls.transfer_outcome == "tls_handshake_body_not_visible");
+    assert(short_tls.verdict == UploadVerdict::NotFound);
+    assert(short_tls.verdict != UploadVerdict::NotVisible);
+    assert(short_tls.transfer_outcome != "tls_handshake_body_not_visible");
+    const auto plain_post = CloseLiveAccess(Seen(canary, {Tcp("192.168.1.11:55029", 0, 167, true)}));
+    assert(plain_post.verdict == UploadVerdict::Uploaded);
+    assert(plain_post.transfer_outcome.find("tls_handshake") == std::string::npos);
     assert(FlowGraceActive(true, false, 9000));
     assert(FlowGraceActive(false, true, 1000));
     assert(!FlowGraceActive(false, true, kFlowGraceMs));
-    assert(SubscriptionHoldActive(1000));
+    assert(SubscriptionHoldActive(4000));
     assert(!SubscriptionHoldActive(kSubscriptionHoldMs));
     assert(!SubscriptionHoldActive(60000));
     assert(IdleWatchTeardownDue(false, true));

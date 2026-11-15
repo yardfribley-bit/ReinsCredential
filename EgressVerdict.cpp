@@ -148,9 +148,8 @@ bool HandshakeOnly(const LiveFlow& flow, uint64_t delta) {
     if (flow.plaintext_http) return false;
     if (flow.tls_app_data && flow.tls_app_bytes > 0) return false;
     if (flow.tls_handshake) return true;
-    if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && flow.measured &&
-        !flow.loopback && !flow.preexisting && flow.tx_latest == 0 && delta == 0)
-        return true;
+    // A connection that has not sent yet is not a handshake. Calling it one
+    // closes a plain HTTP POST that is still warming up.
     return flow.kind == LiveFlowKind::TcpMeasured && TlsShaped(flow) && delta > 0;
 }
 void NoteSni(LiveClose& result, const LiveFlow* flow) {
@@ -457,11 +456,14 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
             "unresolved_not_a_clean_bill;app_settings_not_modified";
         return result;
     }
-    // A completed off-host TCP session with no HTTP body and no application
-    // data is a handshake we could not parse. It is not "no upload found".
+    // Only a flight that is actually handshake-sized, or is marked TLS, is a
+    // handshake. A short plain counter is not; an HTTP POST must not be closed
+    // as tls_handshake_body_not_visible before the real send.
     if (measured_offhost && measured_offhost->kind == LiveFlowKind::TcpMeasured &&
         !measured_offhost->plaintext_http &&
         !(measured_offhost->tls_app_data && measured_offhost->tls_app_bytes > 0) &&
+        (measured_offhost->tls_handshake || TlsShaped(*measured_offhost) ||
+         InUnparsedHandshakeBand(view.file_bytes, TxDelta(*measured_offhost))) &&
         !(measured_offhost->preexisting && TxDelta(*measured_offhost) == 0)) {
         result.verdict = UploadVerdict::NotVisible;
         result.destination = measured_offhost->destination;

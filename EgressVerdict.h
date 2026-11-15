@@ -155,7 +155,7 @@ std::string LiveVerdictSummary(const LiveClose& close, const std::string& proces
 // after that. A new process is snapshotted on its own pass, so tearing the
 // socket down does not hide the next short-lived open.
 inline constexpr int64_t kFlowGraceMs = 3000;
-inline constexpr int64_t kSubscriptionHoldMs = 3000;
+inline constexpr int64_t kSubscriptionHoldMs = 12000;
 inline bool FlowGraceActive(bool file_open, bool have_close_stamp, int64_t since_close_ms, int64_t grace_ms = kFlowGraceMs) noexcept {
     if (file_open) return true;
     if (!have_close_stamp || since_close_ms < 0) return false;

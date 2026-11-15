@@ -128,6 +128,7 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        Self.repairSplitViews()
         Self.isQuitting = true
         let waiter = DispatchSemaphore(value: 0)
         Task { @MainActor in
@@ -181,16 +182,25 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
         repairSplitViews()
     }
 
+    static func contentHeightLimit(_ window: NSWindow) -> CGFloat {
+        let layout = window.contentLayoutRect.height
+        let cap = layout > 2 ? layout : window.frame.height
+        let screen = window.screen?.frame.height ?? cap
+        return min(cap, screen)
+    }
+
     static func repairSplitViews() {
         for window in NSApp.windows where window.canBecomeMain {
             guard let content = window.contentView else { continue }
-            constrainSplits(content, limit: content.bounds.height)
+            constrainSplits(content, limit: contentHeightLimit(window))
         }
+        let screen = NSScreen.screens.map(\.frame.height).max() ?? 1_600
+        _ = SplitFrameSanitizer.removeImpossibleFrames(defaults: .standard, maxSubviewHeight: screen)
     }
 
     static func splitViewsFit(_ window: NSWindow) -> Bool {
-        guard let content = window.contentView, content.bounds.height > 2 else { return false }
-        let limit = content.bounds.height + 8
+        guard let content = window.contentView else { return false }
+        let limit = contentHeightLimit(window) + 8
         var found = false
         var fits = true
         func walk(_ view: NSView) {
@@ -209,11 +219,15 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private static func constrainSplits(_ view: NSView, limit: CGFloat) {
-        if let split = view as? NSSplitView, split.bounds.height > 2 {
-            let cap = min(limit, split.bounds.height) + 1
-            let tooTall = split.subviews.contains { $0.frame.height > cap || $0.frame.height < 1 }
+        if let split = view as? NSSplitView, limit > 2 {
+            if split.frame.height > limit + 1 {
+                var frame = split.frame
+                frame.size.height = limit
+                split.frame = frame
+            }
+            let height = min(split.bounds.height > 2 ? split.bounds.height : limit, limit)
+            let tooTall = split.subviews.contains { $0.frame.height > height + 1 || $0.frame.height < 1 }
             if tooTall {
-                let height = split.bounds.height
                 for subview in split.subviews {
                     var frame = subview.frame
                     frame.size.height = height
@@ -222,8 +236,10 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
                 }
                 split.adjustSubviews()
             }
+            // Stop AppKit from writing the oversized frames back into defaults.
+            split.autosaveName = nil
         }
-        let childLimit = view.bounds.height > 2 ? view.bounds.height : limit
+        let childLimit = view.bounds.height > 2 ? min(view.bounds.height, limit) : limit
         for child in view.subviews { constrainSplits(child, limit: childLimit) }
     }
 

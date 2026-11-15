@@ -1191,11 +1191,22 @@ struct Session {
         for (const auto& snap : found) CommitBirth(snap);
     }
     void BirthLoop() {
-        struct Item { pid_t pid; MonoClock::time_point born; };
+        // A short POST can start in the same second the previous agent exits,
+        // and can open its file a moment after the pid first appears. Follow
+        // each new pid for a few seconds. Only a handful are inspected per
+        // pass so this thread cannot stall past the process lifetime, and an
+        // idle machine with no new pids does not walk descriptors.
+        struct Item {
+            pid_t pid = 0;
+            MonoClock::time_point born{};
+            MonoClock::time_point next{};
+            bool saw_file = false;
+        };
         std::vector<Item> recent;
         std::set<pid_t> known;
         while (!birth_stop.load()) {
             int estimate = proc_listallpids(nullptr, 0);
+            bool busy = false;
             if (estimate > 0) {
                 std::vector<pid_t> pids(static_cast<size_t>(estimate) + 64);
                 const int count = proc_listallpids(pids.data(), static_cast<int>(pids.size() * sizeof(pid_t)));
@@ -1203,9 +1214,9 @@ struct Session {
                 std::set<pid_t> alive;
                 const auto listed = count > 0 ? std::min(pids.size(), static_cast<size_t>(count)) : 0;
                 for (size_t index = 0; index < listed; ++index) if (pids[index] > 1) alive.insert(pids[index]);
-                for (const auto pid : alive) {
-                    if (!known.insert(pid).second) continue;
-                    recent.push_back(Item{pid, now});
+                for (auto it = alive.rbegin(); it != alive.rend(); ++it) {
+                    if (!known.insert(*it).second) continue;
+                    recent.insert(recent.begin(), Item{*it, now, now, false});
                 }
                 if (known.size() > 8192) {
                     for (auto it = known.begin(); it != known.end(); ) {
@@ -1214,28 +1225,44 @@ struct Session {
                     }
                 }
                 std::vector<BirthSnapshot> found;
+                int budget = 4;
                 for (auto it = recent.begin(); it != recent.end(); ) {
-                    if (!alive.count(it->pid) || now - it->born > std::chrono::milliseconds(400)) {
+                    const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->born).count();
+                    if (!alive.count(it->pid) || age > (it->saw_file ? 1500 : 2500)) {
                         it = recent.erase(it);
                         continue;
                     }
+                    if (now < it->next) { ++it; continue; }
+                    if (!it->saw_file && budget <= 0) { ++it; continue; }
                     auto node = source.Lookup(it->pid);
                     if (!node) { ++it; continue; }
                     if (IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) {
                         it = recent.erase(it);
                         continue;
                     }
-                    auto activity = source.Inspect(*node, roots, false);
-                    if (!activity.sensitive_files.empty()) activity = source.Inspect(*node, roots, true);
-                    if (!activity.sensitive_files.empty()) found.push_back(BirthSnapshot{*node, std::move(activity)});
+                    if (!it->saw_file) --budget;
+                    auto activity = source.Inspect(*node, roots, it->saw_file);
+                    if (!it->saw_file && !activity.sensitive_files.empty()) {
+                        it->saw_file = true;
+                        activity = source.Inspect(*node, roots, true);
+                    }
+                    if (!activity.sensitive_files.empty()) {
+                        it->saw_file = true;
+                        it->next = now + std::chrono::milliseconds(8);
+                        busy = true;
+                        found.push_back(BirthSnapshot{*node, std::move(activity)});
+                    } else {
+                        it->next = now + std::chrono::milliseconds(30);
+                    }
                     ++it;
                 }
                 if (!found.empty()) {
                     std::lock_guard<std::mutex> lock(birth_mu);
                     if (births.size() < 512) births.insert(births.end(), found.begin(), found.end());
                 }
+                if (!recent.empty()) busy = true;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(8));
+            std::this_thread::sleep_for(std::chrono::milliseconds(busy ? 8 : 40));
         }
     }
     void DiscoverHolders() {

@@ -38,40 +38,31 @@ public enum SplitFrameSanitizer {
     }
 
     public static func subviewHeights(in saved: String) -> [CGFloat] {
-        var heights: [CGFloat] = []
-        let chars = Array(saved)
-        var index = 0
-        func skipSpace() {
-            while index < chars.count, chars[index] == " " || chars[index] == "\n" || chars[index] == "\t" { index += 1 }
-        }
-        func parseNumber() -> CGFloat? {
-            skipSpace()
+        // Both AppKit forms store x, y, width, height in that order:
+        // "{{x, y}, {w, h}}" and "x, y, w, h, NO".
+        var numbers: [CGFloat] = []
+        var index = saved.startIndex
+        while index < saved.endIndex {
+            while index < saved.endIndex, !saved[index].isNumber, saved[index] != "-", saved[index] != "." {
+                index = saved.index(after: index)
+            }
+            guard index < saved.endIndex else { break }
             let start = index
-            if index < chars.count, chars[index] == "-" || chars[index] == "+" { index += 1 }
+            if saved[index] == "-" { index = saved.index(after: index) }
             var saw = false
-            while index < chars.count, chars[index].isNumber || chars[index] == "." {
+            while index < saved.endIndex, saved[index].isNumber || saved[index] == "." {
                 saw = true
-                index += 1
+                index = saved.index(after: index)
             }
-            guard saw, let value = Double(String(chars[start..<index])), value.isFinite else { return nil }
-            return CGFloat(value)
+            if saw, let value = Double(saved[start..<index]), value.isFinite {
+                numbers.append(CGFloat(value))
+            }
         }
-        while index < chars.count {
-            if chars[index] == "{", index + 1 < chars.count, chars[index + 1] == "{" {
-                index += 2
-                guard parseNumber() != nil else { continue }
-                skipSpace()
-                if index < chars.count, chars[index] == "," { index += 1 }
-                guard parseNumber() != nil else { continue }
-                while index < chars.count, chars[index] != "{" { index += 1 }
-                if index < chars.count, chars[index] == "{" { index += 1 }
-                guard parseNumber() != nil else { continue }
-                skipSpace()
-                if index < chars.count, chars[index] == "," { index += 1 }
-                if let height = parseNumber() { heights.append(height) }
-            } else {
-                index += 1
-            }
+        var heights: [CGFloat] = []
+        var cursor = 3
+        while cursor < numbers.count {
+            heights.append(numbers[cursor])
+            cursor += 4
         }
         return heights
     }
