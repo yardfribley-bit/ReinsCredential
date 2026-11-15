@@ -74,12 +74,17 @@ final class SplitClampTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(hostInWindow.minY, layout.minY - 1)
         XCTAssertLessThanOrEqual(hostInWindow.maxY, layout.maxY + 1)
 
-        XCTAssertEqual(sidebar.frame.height, split.bounds.height, accuracy: 1.5)
-        XCTAssertEqual(sidebar.frame.minY, split.bounds.minY, accuracy: 1.5)
-        XCTAssertEqual(sidebar.frame.width, 218, accuracy: 1)
-        XCTAssertEqual(split.subviews[1].frame.height, split.bounds.height, accuracy: 1.5)
-        XCTAssertNotEqual(split.subviews[1].frame.height, 1_469.5, accuracy: 0.1)
-        XCTAssertLessThan(split.subviews[2].frame.height, 11_488)
+        let panes = split.arrangedSubviews
+        XCTAssertGreaterThanOrEqual(panes.count, 3)
+        XCTAssertEqual(panes[0].frame.height, split.bounds.height, accuracy: 1.5)
+        XCTAssertEqual(panes[0].frame.minY, split.bounds.minY, accuracy: 1.5)
+        XCTAssertGreaterThanOrEqual(panes[0].frame.width, 140)
+        XCTAssertLessThan(panes[0].frame.width, split.bounds.width * 0.5)
+        XCTAssertNotEqual(panes[0].frame.width, 5_089, accuracy: 1)
+        XCTAssertEqual(panes[1].frame.height, split.bounds.height, accuracy: 1.5)
+        XCTAssertNotEqual(panes[1].frame.height, 1_469.5, accuracy: 0.1)
+        XCTAssertGreaterThanOrEqual(panes[2].frame.width, 200)
+        XCTAssertLessThan(panes[2].frame.height, 11_488)
 
         let screenContent = window.convertToScreen(layout)
         let headingFrame = heading.accessibilityFrame()

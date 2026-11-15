@@ -223,7 +223,9 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     /// content rect, then fits the panes and clears a leftover document offset.
     /// Divider widths stay. Saved frames keep those widths and the content height.
     private static var clamping = false
-    static func clampLiveSplits() {
+    /// `relayout` is false when AppKit is already inside `layout`. Calling
+    /// `layoutSubtreeIfNeeded` from there re-enters layout and can crash.
+    static func clampLiveSplits(relayout: Bool = true) {
         guard !clamping else { return }
         clamping = true
         defer { clamping = false }
@@ -235,10 +237,16 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
                 content.addSubview(hook)
             }
             clamp(content, window: window)
-            content.layoutSubtreeIfNeeded()
+            if relayout {
+                content.layoutSubtreeIfNeeded()
+                clamp(content, window: window)
+                content.layoutSubtreeIfNeeded()
+            }
+            // AppKit's own split layout runs during the pass above and can
+            // move panes. Fit again after that, then show the first text.
+            // Do not lay out again here: this call can already be inside layout.
             clamp(content, window: window)
             revealContent(in: content, window: window)
-            content.layoutSubtreeIfNeeded()
             let bounds = SplitFrameCap.hostingBounds(in: window)
             if bounds.height > 2 { hosting = bounds }
         }
@@ -279,10 +287,19 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
         resetStaleBoundsOrigin(view)
     }
 
+    /// Real panes only. Divider views live in `subviews` as well, and writing
+    /// their frames corrupts the split.
+    private static func panes(of split: NSSplitView) -> [NSView] {
+        let arranged = split.arrangedSubviews
+        if !arranged.isEmpty { return arranged }
+        return split.subviews.filter { !String(describing: type(of: $0)).contains("Divider") }
+    }
+
     private static func fitSubviews(_ split: NSSplitView) {
         let bounds = split.bounds
-        guard bounds.width > 2, bounds.height > 2 else { return }
-        for subview in split.subviews {
+        let panes = panes(of: split)
+        guard bounds.width > 2, bounds.height > 2, !panes.isEmpty else { return }
+        for subview in panes {
             let fitted = split.isVertical
                 ? SplitFrameSanitizer.fitted(subview.frame, into: bounds)
                 : SplitFrameSanitizer.fittedHorizontal(subview.frame, into: bounds)
@@ -317,7 +334,7 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     private static func revealContent(in content: NSView, window: NSWindow) {
         func walk(_ view: NSView) {
             if let split = view as? NSSplitView {
-                for column in split.subviews {
+                for column in panes(of: split) {
                     guard let top = topmostText(in: column), !textInsideContent(top, window: window) else { continue }
                     scrollToTop(in: column)
                     if let top = topmostText(in: column), !textInsideContent(top, window: window) {
@@ -395,7 +412,7 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
         var found = false
         var fits = true
         func walk(_ view: NSView) {
-            if let split = view as? NSSplitView, split.subviews.count >= 2, let parent = split.superview {
+            if let split = view as? NSSplitView, panes(of: split).count >= 2, let parent = split.superview {
                 found = true
                 let container = SplitFrameCap.visibleLimit(in: parent, window: window)
                 if split.frame.height > limit + 8 || split.frame.height < 1 || split.frame.width < 1
@@ -403,7 +420,8 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
                     || split.frame.minX < container.minX - 1 || split.frame.maxX > container.maxX + 1 {
                     fits = false
                 }
-                for subview in split.subviews {
+                let panes = panes(of: split)
+                for subview in panes {
                     if subview.frame.height > limit + 8 || subview.frame.height < 1 || subview.frame.width < 1 {
                         fits = false
                     }
@@ -413,8 +431,8 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
                         fits = false
                     }
                 }
-                if split.isVertical, split.subviews.count >= 3 {
-                    if split.subviews[0].frame.width < 140 || split.subviews[split.subviews.count - 1].frame.width < 200 {
+                if split.isVertical, panes.count >= 3 {
+                    if panes[0].frame.width < 140 || panes[panes.count - 1].frame.width < 200 {
                         fits = false
                     }
                 }
@@ -436,7 +454,7 @@ final class SplitClampView: NSView {
     override var isFlipped: Bool { true }
     override func layout() {
         super.layout()
-        DashboardAppDelegate.clampLiveSplits()
+        DashboardAppDelegate.clampLiveSplits(relayout: false)
     }
 }
 
@@ -549,6 +567,8 @@ enum SplitFrameCap {
 
     static func capped(_ frame: NSRect, view: NSView) -> NSRect {
         if let split = view.superview as? NSSplitView {
+            let panes = split.arrangedSubviews
+            if !panes.isEmpty, panes.contains(where: { $0 === view }) == false { return frame }
             return cappedSubview(frame, split: split)
         }
         guard let window = view.window, window.canBecomeMain else { return frame }
