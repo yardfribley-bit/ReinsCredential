@@ -947,7 +947,7 @@ def live_field_rounds(directory, binary, secret, ca):
                     ready.unlink()
                 before = log.read_text() if log.exists() else ""
                 agent = subprocess.Popen(command)
-                time.sleep(0.4)
+                time.sleep(1.0)
                 ready.write_text("go\n")
                 try:
                     agent.wait(timeout=8)
@@ -961,7 +961,16 @@ def live_field_rounds(directory, binary, secret, ca):
                         break
                     time.sleep(0.1)
                 else:
-                    raise SystemExit(f"field round case {name} produced no closure")
+                    kinds = {}
+                    text = log.read_text() if log.exists() else ""
+                    for line in text.splitlines():
+                        mark = line.find('"type":')
+                        if mark < 0:
+                            continue
+                        token = line[mark + 7:].split('"', 2)
+                        kind = token[1] if len(token) > 1 else "?"
+                        kinds[kind] = kinds.get(kind, 0) + 1
+                    raise SystemExit(f"field round case {name} produced no closure; record types {kinds}; proxy {proc.poll()}")
                 if index < len(gaps):
                     time.sleep(gaps[index])
             time.sleep(8)

@@ -588,6 +588,7 @@ struct Session {
     MonoClock::time_point last_launched_sample{};
     MonoClock::time_point started_at = MonoClock::now();
     MonoClock::time_point last_sensitive_at{};
+    MonoClock::time_point last_sweep{};
     size_t rescan_cursor = 0;
     uint16_t proxy_port = 0;
     bool tree_truncated = false;
@@ -1181,18 +1182,21 @@ struct Session {
             --young_budget;
             ConsiderPid(pid);
         }
+        const bool background_due = last_sweep.time_since_epoch().count() == 0 ||
+            now - last_sweep >= std::chrono::milliseconds(200);
+        if (background_due) last_sweep = now;
         std::sort(fresh.begin(), fresh.end(), [](pid_t left, pid_t right) { return left > right; });
-        size_t fresh_budget = 4;
+        size_t fresh_budget = background_due ? 2 : 0;
         for (const auto pid : fresh) {
             if (!fresh_budget || watched.size() >= 64) break;
             if (!FastDiscoveryInspect(true, false, WatchingPid(pid), false)) continue;
             --fresh_budget;
             ConsiderPid(pid);
         }
-        if (listed > 0 && watched.size() < 64) {
-            // Walk the live pid list, a few per sample, so a process that was
-            // idle and then opens a file is found while that file is still open.
-            size_t sweep_budget = 4;
+        if (background_due && listed > 0 && watched.size() < 64) {
+            // A long-lived process that opens a file later is revisited on a
+            // slower pass. New processes are handled above, every sample.
+            size_t sweep_budget = 2;
             for (size_t n = 0; n < listed && sweep_budget; ++n) {
                 const auto pid = pids[rescan_cursor % listed];
                 ++rescan_cursor;
