@@ -245,6 +245,13 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private static func clamp(_ view: NSView, window: NSWindow) {
+        if view !== window.contentView, let parent = view.superview, hostsSplit(view) {
+            let target = SplitFrameCap.fitTarget(parent, window: window)
+            if target.height > 2 {
+                let fitted = SplitFrameSanitizer.fitted(view.frame, into: target)
+                if !framesMatch(view.frame, fitted) { view.frame = fitted }
+            }
+        }
         if let split = view as? NSSplitView {
             let bounds = SplitFrameCap.columnBounds(split, window: window)
             if bounds.height > 2 {
@@ -255,6 +262,11 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         for child in view.subviews { clamp(child, window: window) }
+    }
+
+    private static func hostsSplit(_ view: NSView) -> Bool {
+        if view is NSSplitView { return true }
+        return view.subviews.contains(where: hostsSplit)
     }
 
     static func splitViewsFit(_ window: NSWindow) -> Bool {
@@ -348,6 +360,19 @@ enum SplitFrameCap {
 
     /// The rect a column must fill. A split that is taller than the content
     /// area is still the document height, so the content rect is used instead.
+    static func fitTarget(_ parent: NSView, window: NSWindow) -> CGRect {
+        let content = window.contentLayoutRect
+        if parent === window.contentView, content.height > 2, content.width > 2 {
+            return CGRect(origin: .zero, size: content.size)
+        }
+        if parent.bounds.height > 2, parent.bounds.width > 2,
+           content.height <= 2 || parent.bounds.height <= content.height + 1 {
+            return CGRect(origin: .zero, size: parent.bounds.size)
+        }
+        guard content.width > 2, content.height > 2 else { return .zero }
+        return CGRect(origin: .zero, size: content.size)
+    }
+
     static func columnBounds(_ split: NSSplitView, window: NSWindow) -> CGRect {
         let content = window.contentLayoutRect
         if split.bounds.height > 2, split.bounds.width > 2,
@@ -382,12 +407,21 @@ enum SplitFrameCap {
     }
 
     static func capped(_ frame: NSRect, view: NSView) -> NSRect {
-        guard let split = view.superview as? NSSplitView else { return frame }
-        let window = view.window ?? split.window
-        guard let window, window.canBecomeMain else { return frame }
-        let bounds = columnBounds(split, window: window)
-        guard bounds.height > 2 else { return frame }
-        return SplitFrameSanitizer.fitted(frame, into: bounds)
+        if let split = view.superview as? NSSplitView {
+            let window = view.window ?? split.window
+            guard let window, window.canBecomeMain else { return frame }
+            let bounds = columnBounds(split, window: window)
+            guard bounds.height > 2 else { return frame }
+            return SplitFrameSanitizer.fitted(frame, into: bounds)
+        }
+        if view is NSSplitView, let parent = view.superview {
+            let window = view.window ?? parent.window
+            guard let window, window.canBecomeMain else { return frame }
+            let target = fitTarget(parent, window: window)
+            guard target.height > 2 else { return frame }
+            return SplitFrameSanitizer.fitted(frame, into: target)
+        }
+        return frame
     }
 }
 
