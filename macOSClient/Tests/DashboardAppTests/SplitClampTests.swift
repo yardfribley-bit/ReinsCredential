@@ -23,13 +23,13 @@ final class SplitClampTests: XCTestCase {
         split.isVertical = true
         host.addSubview(split)
 
-        let sidebar = NSView(frame: NSRect(x: 0, y: 0, width: 218, height: 5_089))
+        let sidebar = FlippedContainer(frame: NSRect(x: 0, y: 0, width: 218, height: 5_089))
         let heading = NSTextField(labelWithString: "All evidence")
-        heading.frame = NSRect(x: 12, y: 5_049, width: 180, height: 22)
+        heading.frame = NSRect(x: 12, y: 16, width: 180, height: 22)
         heading.setAccessibilityLabel("All evidence")
         sidebar.addSubview(heading)
         let bottom = NSTextField(labelWithString: "bottom marker")
-        bottom.frame = NSRect(x: 12, y: 8, width: 160, height: 18)
+        bottom.frame = NSRect(x: 12, y: 5_040, width: 160, height: 18)
         sidebar.addSubview(bottom)
         split.addSubview(sidebar)
         split.addSubview(NSView(frame: NSRect(x: 219, y: 0, width: 680, height: 1_469.5)))
@@ -53,7 +53,6 @@ final class SplitClampTests: XCTestCase {
         XCTAssertLessThanOrEqual(capped.maxX, limit.maxX + 1)
 
         DashboardAppDelegate.clampLiveSplits()
-        content.layoutSubtreeIfNeeded()
 
         XCTAssertLessThanOrEqual(host.frame.height, layout.height + 1)
         XCTAssertLessThan(host.frame.height, 11_488)
@@ -132,6 +131,7 @@ final class SplitClampTests: XCTestCase {
             backing: .buffered,
             defer: false)
         window.title = "ReinsCredential"
+        window.isReleasedWhenClosed = false
         window.setFrame(NSRect(x: 216, y: 54, width: 1_224, height: 816), display: true)
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)

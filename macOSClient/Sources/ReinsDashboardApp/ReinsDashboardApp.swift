@@ -223,28 +223,20 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     /// content rect, then fits the panes and clears a leftover document offset.
     /// Divider widths stay. Saved frames keep those widths and the content height.
     private static var clamping = false
-    /// `relayout` is false when AppKit is already inside `layout`. Calling
-    /// `layoutSubtreeIfNeeded` from there re-enters layout and can crash.
-    static func clampLiveSplits(relayout: Bool = true) {
+    static var isClamping: Bool { clamping }
+    /// Frame changes are not applied from inside `layout`. AppKit lays the
+    /// split out itself; doing it again here re-enters layout and crashes.
+    static func clampLiveSplits() {
         guard !clamping else { return }
         clamping = true
         defer { clamping = false }
         var hosting = CGRect.null
-        for window in NSApp.windows where window.canBecomeMain {
+        for window in NSApp.windows where window.canBecomeMain && window.isVisible {
             guard let content = window.contentView else { continue }
             if content.subviews.contains(where: { $0 is SplitClampView }) == false {
                 let hook = SplitClampView(frame: .zero)
                 content.addSubview(hook)
             }
-            clamp(content, window: window)
-            if relayout {
-                content.layoutSubtreeIfNeeded()
-                clamp(content, window: window)
-                content.layoutSubtreeIfNeeded()
-            }
-            // AppKit's own split layout runs during the pass above and can
-            // move panes. Fit again after that, then show the first text.
-            // Do not lay out again here: this call can already be inside layout.
             clamp(content, window: window)
             revealContent(in: content, window: window)
             let bounds = SplitFrameCap.hostingBounds(in: window)
@@ -305,6 +297,26 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
                 : SplitFrameSanitizer.fittedHorizontal(subview.frame, into: bounds)
             if !framesMatch(subview.frame, fitted) { subview.frame = fitted }
             resetStaleBoundsOrigin(subview)
+        }
+        placeDividers(split, panes: panes, bounds: bounds)
+    }
+
+    /// Puts each divider between the panes that were just fitted. Leaving a
+    /// divider at the old document height makes the next layout crash.
+    private static func placeDividers(_ split: NSSplitView, panes: [NSView], bounds: CGRect) {
+        guard panes.count >= 2 else { return }
+        let dividers = split.subviews.filter { candidate in panes.contains { $0 === candidate } == false }
+        guard dividers.count == panes.count - 1 else { return }
+        let thickness = max(split.dividerThickness, 1)
+        for index in dividers.indices {
+            let edge = split.isVertical ? panes[index].frame.maxX : panes[index].frame.maxY
+            let frame: CGRect
+            if split.isVertical {
+                frame = CGRect(x: edge, y: bounds.minY, width: thickness, height: bounds.height)
+            } else {
+                frame = CGRect(x: bounds.minX, y: edge, width: bounds.width, height: thickness)
+            }
+            if !framesMatch(dividers[index].frame, frame) { dividers[index].frame = frame }
         }
     }
 
@@ -450,11 +462,19 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 /// Lays out with the window and pulls split columns back to the content height.
+/// The correction is scheduled, not run inside `layout`, because setting frames
+/// from a layout pass crashes AppKit.
 final class SplitClampView: NSView {
+    private static var scheduled = false
     override var isFlipped: Bool { true }
     override func layout() {
         super.layout()
-        DashboardAppDelegate.clampLiveSplits(relayout: false)
+        guard !DashboardAppDelegate.isClamping, !Self.scheduled else { return }
+        Self.scheduled = true
+        DispatchQueue.main.async {
+            Self.scheduled = false
+            DashboardAppDelegate.clampLiveSplits()
+        }
     }
 }
 
