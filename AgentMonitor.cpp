@@ -608,13 +608,8 @@ void AgentMonitor::Scan() {
                   }
                 }
             }
-            seen.touched_sensitive = !activity.sensitive_files.empty();
-            // One more scan after the file disappears, then a long idle gap.
-            // A process that once opened a file must not be descriptor-walked
-            // forever, and a brand-new pid is still scanned on the pass it appears.
-            const bool follow_up = activity.sensitive_files.empty() && previous != seen_.end() &&
-                previous->second.touched_sensitive;
-            seen.idle_skips = (seen.touched_sensitive || follow_up) ? 0 : static_cast<uint8_t>(8);
+            seen.touched_sensitive = !activity.sensitive_files.empty() || (previous != seen_.end() && previous->second.touched_sensitive);
+            seen.idle_skips = seen.touched_sensitive ? 0 : 3;
             next.emplace(identity, std::move(seen));
         }
         for (const auto& pair : seen_) if (!next.count(pair.first)) {
