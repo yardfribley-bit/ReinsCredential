@@ -23,8 +23,10 @@ struct DashboardView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        split
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { proxy in
+            split
+                .frame(width: max(proxy.size.width, 1), height: max(proxy.size.height, 1))
+        }
         .navigationTitle("ReinsCredential")
         .background(Color(nsColor: .windowBackgroundColor))
         .toolbar {
@@ -384,6 +386,7 @@ struct DashboardView: View {
                             .padding(12)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             case .events:
                 if store.visibleRecords.isEmpty {

@@ -52,6 +52,19 @@ enum DashboardSmoke {
                 let listRows = rowCount(in: view, minX: width * 0.28, maxX: width * 0.78)
                 guard sidebarRows >= 1 else { throw SmokeFailure.noRows(column: "sidebar", count: sidebarRows) }
                 guard listRows >= 1 else { throw SmokeFailure.noRows(column: "list", count: listRows) }
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                view.layoutSubtreeIfNeeded()
+                guard headingIsVisible(in: view, window: window) else { throw SmokeFailure.hiddenHeading }
+                guard rowIsVisible(in: view, window: window) else { throw SmokeFailure.hiddenRows }
+                guard inspectorHasSelection(in: view, window: window) else { throw SmokeFailure.emptyInspector }
+                let savedHeight = SplitFrameSanitizer.tallestSubviewHeight(in: .standard)
+                let contentHeight = window.contentLayoutRect.height
+                if savedHeight > contentHeight + 2 {
+                    throw SmokeFailure.savedHeight(saved: savedHeight, window: contentHeight)
+                }
+                for subview in splitSubviews(in: view) where subview.frame.height > contentHeight + 2 {
+                    throw SmokeFailure.savedHeight(saved: subview.frame.height, window: contentHeight)
+                }
                 let sidebarView = columnHost(in: view, minX: 0, maxX: width * 0.4) ?? view
                 let listView = columnHost(in: view, minX: width * 0.3, maxX: width * 0.75) ?? view
                 let inspectorView = columnHost(in: view, minX: width * 0.62, maxX: width) ?? view
@@ -73,7 +86,8 @@ enum DashboardSmoke {
                     "sidebar_pixels": sidebarPixels.dark,
                     "list_pixels": listPixels.dark,
                     "inspector_pixels": inspectorPixels.dark,
-                    "selected_chain": store.selectedChain?.owningAgentName ?? ""
+                    "saved_split_height": savedHeight,
+                    "content_height": contentHeight,
                 ]
                 try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                     .write(to: directory.appendingPathComponent("ui-smoke.json"), options: .atomic)
@@ -93,9 +107,18 @@ enum DashboardSmoke {
     private static func writeFixture(_ url: URL) throws {
         let encoder = JSONEncoder()
         var data = Data()
-        for record in EvidenceRecord.sampleRecords {
-            data.append(try encoder.encode(record))
-            data.append(0x0a)
+        for copy in 0..<24 {
+            for record in EvidenceRecord.sampleRecords {
+                let object = try JSONSerialization.jsonObject(with: encoder.encode(record))
+                guard var fields = object as? [String: Any] else { continue }
+                fields["id"] = UUID().uuidString
+                if copy > 0, var tree = fields["processTree"] as? [[String: Any]] {
+                    for index in tree.indices { tree[index]["id"] = UUID().uuidString }
+                    fields["processTree"] = tree
+                }
+                data.append(try JSONSerialization.data(withJSONObject: fields))
+                data.append(0x0a)
+            }
         }
         try data.write(to: url, options: .atomic)
     }
@@ -119,6 +142,51 @@ enum DashboardSmoke {
             }
         }
         return best
+    }
+
+    private static func headingIsVisible(in view: NSView, window: NSWindow) -> Bool {
+        onScreenText(in: view, window: window) { text in
+            text.localizedCaseInsensitiveContains("Runtime security") || text.contains("运行时安全")
+        }
+    }
+
+    private static func rowIsVisible(in view: NSView, window: NSWindow) -> Bool {
+        guard let content = window.contentView else { return false }
+        let visible = content.visibleRect
+        func walk(_ candidate: NSView) -> Bool {
+            if let table = candidate as? NSTableView, table.numberOfRows > 0 {
+                let row = content.convert(table.rect(ofRow: 0), from: table)
+                if row.intersects(visible), row.height > 1, row.width > 1 { return true }
+            }
+            return candidate.subviews.contains(where: walk)
+        }
+        return walk(view)
+    }
+
+    private static func inspectorHasSelection(in view: NSView, window: NSWindow) -> Bool {
+        onScreenText(in: view, window: window) { text in text.count >= 2 }
+    }
+
+    private static func onScreenText(in view: NSView, window: NSWindow, matches: (String) -> Bool) -> Bool {
+        guard let content = window.contentView else { return false }
+        let visible = content.visibleRect
+        func walk(_ candidate: NSView) -> Bool {
+            let rect = content.convert(candidate.bounds, from: candidate)
+            if rect.intersects(visible), rect.height > 2, rect.width > 2 {
+                let label = candidate.accessibilityLabel() ?? ""
+                let value = (candidate as? NSTextField)?.stringValue ?? ""
+                if matches(label) || matches(value) { return true }
+            }
+            return candidate.subviews.contains(where: walk)
+        }
+        return walk(view)
+    }
+
+    private static func splitSubviews(in view: NSView) -> [NSView] {
+        var found: [NSView] = []
+        if let split = view as? NSSplitView { found.append(contentsOf: split.subviews) }
+        for child in view.subviews { found.append(contentsOf: splitSubviews(in: child)) }
+        return found
     }
 
     private static func inspectorHasSelection(in view: NSView, minX: CGFloat) -> Bool {
@@ -157,8 +225,9 @@ enum DashboardSmoke {
 
     /// Off-screen render of this window's content. A blank column is one color.
     private static func contentPixels(_ view: NSView) throws -> Pixels {
-        let width = Int(view.bounds.width.rounded(.down))
-        let height = Int(view.bounds.height.rounded(.down))
+        let visible = view.visibleRect
+        let width = Int(visible.width.rounded(.down))
+        let height = Int(visible.height.rounded(.down))
         guard width > 40, height > 40,
               let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
                                           bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -171,10 +240,8 @@ enum DashboardSmoke {
             guard let context = NSGraphicsContext(bitmapImageRep: rep) else { return }
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = context
-            if let layer = view.layer {
-                layer.render(in: context.cgContext)
-            }
-            view.cacheDisplay(in: view.bounds, to: rep)
+            context.cgContext.translateBy(x: -visible.origin.x, y: -visible.origin.y)
+            view.cacheDisplay(in: visible, to: rep)
             NSGraphicsContext.restoreGraphicsState()
         }
         draw(into: rep)
@@ -204,17 +271,21 @@ enum DashboardSmoke {
     }
 
     private enum SmokeFailure: LocalizedError {
-        case noWindow, noBitmap, emptyFixture, emptyInspector
+        case noWindow, noBitmap, emptyFixture, emptyInspector, hiddenHeading, hiddenRows
         case noRows(column: String, count: Int)
         case blankColumn(column: String, pixels: Int)
+        case savedHeight(saved: CGFloat, window: CGFloat)
         var errorDescription: String? {
             switch self {
             case .noWindow: return "No visible dashboard window was created."
             case .noBitmap: return "The window content could not be rendered off screen."
             case .emptyFixture: return "The fixture evidence file produced no records."
             case .emptyInspector: return "Selecting a chain left the inspector without text."
+            case .hiddenHeading: return "The sidebar heading is not inside the visible window."
+            case .hiddenRows: return "No list row intersects the visible window."
             case .noRows(let column, let count): return "The \(column) has \(count) rows; a blank window must fail."
             case .blankColumn(let column, let pixels): return "The \(column) rendered \(pixels) non-background pixels."
+            case .savedHeight(let saved, let window): return "Split height \(saved) is taller than the window content \(window)."
             }
         }
     }

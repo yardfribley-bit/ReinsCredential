@@ -31,6 +31,22 @@ final class ClosurePresentationTests: XCTestCase {
         XCTAssertNil(defaults.string(forKey: "NSSplitView Subview Frames SidebarNavigationSplitView"))
         XCTAssertNil(defaults.string(forKey: "NSSplitView Subview Frames main-AppWindow-1, SidebarNavigationSplitView"))
         XCTAssertEqual(defaults.string(forKey: "NSSplitView Subview Frames Keep"), "{{0, 0}, {260, 700}}")
+        let measured = [
+            "0.000000, 0.000000, 218.000000, 5089.000000, NO, NO",
+            "0.000000, 0.000000, 898.000000, 5089.000000, NO, NO",
+            "899.000000, 0.000000, 325.000000, 5089.000000, NO, NO"
+        ]
+        let key = "NSSplitView Subview Frames main-AppWindow-1, SidebarNavigationSplitView"
+        defaults.set(measured, forKey: key)
+        defaults.set("216 54 1224 816 0 0 1440 870", forKey: "NSWindow Frame main-AppWindow-1")
+        XCTAssertEqual(SplitFrameSanitizer.subviewHeights(in: measured[0]), [5089])
+        XCTAssertEqual(SplitFrameSanitizer.savedWindowHeights(in: defaults), [816])
+        let limit = SplitFrameSanitizer.maxRestorableSubviewHeight(defaults: defaults, screenHeight: 870)
+        XCTAssertLessThan(limit, 816)
+        XCTAssertGreaterThan(limit, 700)
+        let removedTall = SplitFrameSanitizer.removeImpossibleFrames(defaults: defaults, maxSubviewHeight: limit)
+        XCTAssertEqual(removedTall, [key])
+        XCTAssertEqual(SplitFrameSanitizer.tallestSubviewHeight(in: defaults), 700)
     }
 
     func testWindowFrameIsClampedOntoTheVisibleScreen() {

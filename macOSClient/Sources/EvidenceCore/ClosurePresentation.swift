@@ -40,6 +40,51 @@ public enum SplitFrameSanitizer {
     public static func subviewHeights(in saved: String) -> [CGFloat] {
         // Both AppKit forms store x, y, width, height in that order:
         // "{{x, y}, {w, h}}" and "x, y, w, h, NO".
+        let parsed = numbers(in: saved)
+        var heights: [CGFloat] = []
+        var cursor = 3
+        while cursor < parsed.count {
+            heights.append(parsed[cursor])
+            cursor += 4
+        }
+        return heights
+    }
+
+    /// Window frame strings look like `216 54 1224 816 0 0 1440 870`. The fourth
+    /// number is the window height. A split column taller than that window is
+    /// already off the visible content, even when it is shorter than the screen.
+    public static func savedWindowHeights(in defaults: UserDefaults) -> [CGFloat] {
+        defaults.dictionaryRepresentation().compactMap { key, value in
+            guard key.contains("NSWindow Frame"), let text = value as? String else { return nil }
+            let numbers = numbers(in: text)
+            guard numbers.count >= 4, numbers[3] > 1 else { return nil }
+            return numbers[3]
+        }
+    }
+
+    /// The tallest height AppKit may restore into a split column. Prefers the
+    /// saved window height over the screen, because a 1469-point column is
+    /// already above an 816-point window on an 870-point screen.
+    public static func maxRestorableSubviewHeight(defaults: UserDefaults, screenHeight: CGFloat) -> CGFloat {
+        let windows = savedWindowHeights(in: defaults)
+        let windowLimit = windows.map { max($0 - 48, 200) }.min()
+        let screen = screenHeight > 1 ? screenHeight : 1_600
+        if let windowLimit { return min(screen, windowLimit) }
+        return screen
+    }
+
+    public static func tallestSubviewHeight(in defaults: UserDefaults) -> CGFloat {
+        let keys = defaults.dictionaryRepresentation().keys.filter { $0.contains("NSSplitView Subview Frames") }
+        var tallest: CGFloat = 0
+        for key in keys {
+            for text in frameTexts(defaults.object(forKey: key)) {
+                for height in subviewHeights(in: text) { tallest = max(tallest, height) }
+            }
+        }
+        return tallest
+    }
+
+    static func numbers(in saved: String) -> [CGFloat] {
         var numbers: [CGFloat] = []
         var index = saved.startIndex
         while index < saved.endIndex {
@@ -58,29 +103,24 @@ public enum SplitFrameSanitizer {
                 numbers.append(CGFloat(value))
             }
         }
-        var heights: [CGFloat] = []
-        var cursor = 3
-        while cursor < numbers.count {
-            heights.append(numbers[cursor])
-            cursor += 4
-        }
-        return heights
+        return numbers
     }
 
-    /// Removes saved split frames whose subviews cannot fit on a real display.
-    /// Returns the defaults keys that were deleted.
+    static func frameTexts(_ value: Any?) -> [String] {
+        if let text = value as? String { return [text] }
+        if let parts = value as? [String] { return parts }
+        if let parts = value as? [Any] { return parts.map { "\($0)" } }
+        return []
+    }
+
+    /// Removes saved split frames whose subviews are taller than the window.
+    /// Returns the defaults keys that were deleted. Accepts a single string or
+    /// the array-of-strings form AppKit writes for SidebarNavigationSplitView.
     public static func removeImpossibleFrames(defaults: UserDefaults, maxSubviewHeight: CGFloat) -> [String] {
         let keys = defaults.dictionaryRepresentation().keys.filter { $0.contains("NSSplitView Subview Frames") }
         var removed: [String] = []
         for key in keys {
-            let texts: [String]
-            if let text = defaults.string(forKey: key) {
-                texts = [text]
-            } else if let parts = defaults.array(forKey: key) as? [String] {
-                texts = parts
-            } else {
-                continue
-            }
+            let texts = frameTexts(defaults.object(forKey: key))
             if texts.contains(where: { containsImpossibleHeight($0, maxHeight: maxSubviewHeight) }) {
                 defaults.removeObject(forKey: key)
                 removed.append(key)

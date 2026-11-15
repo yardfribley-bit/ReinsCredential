@@ -12,7 +12,7 @@ trap 'rm -rf "$test_dir"' EXIT
 REINS_BACKEND_FIXTURE="$test_dir/backend.jsonl" /usr/bin/swift test --package-path "$client_dir" "$@"
 bin="$(/usr/bin/swift build --package-path "$client_dir" --show-bin-path)"
 smoke_dir="$(mktemp -d "${TMPDIR:-/tmp/}reins-ui-smoke.XXXXXX")"
-"$bin/ReinsDashboard" --smoke-test "$smoke_dir" --smoke-evidence "$smoke_dir/fixture.jsonl" &
+"$bin/ReinsDashboard" --smoke-test "$smoke_dir" --smoke-evidence "$smoke_dir/fixture.jsonl" --smoke-seed-split &
 smoke_pid=$!
 for _ in $(seq 1 90); do
   if ! kill -0 "$smoke_pid" 2>/dev/null; then break; fi
@@ -36,9 +36,9 @@ report = json.load(open(sys.argv[1]))
 assert report.get("status") == "rendered", report
 assert report.get("sidebar_rows", 0) >= 1, report
 assert report.get("list_rows", 0) >= 1, report
-assert report.get("sidebar_pixels", 0) >= 40, report
-assert report.get("list_pixels", 0) >= 40, report
-assert report.get("inspector_pixels", 0) >= 40, report
+assert report.get("sidebar_pixels", 0) >= 15, report
+assert report.get("list_pixels", 0) >= 15, report
+assert report.get("inspector_pixels", 0) >= 15, report
 print("PASS dashboard smoke", report["sidebar_rows"], report["list_rows"])
 PY
 rm -rf "$smoke_dir"

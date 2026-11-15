@@ -103,8 +103,17 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     static var stopRuntime: (@MainActor () async -> Void)?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        let tallest = NSScreen.screens.map(\.frame.height).max() ?? 1_600
-        _ = SplitFrameSanitizer.removeImpossibleFrames(defaults: .standard, maxSubviewHeight: tallest)
+        if CommandLine.arguments.contains("--smoke-seed-split") {
+            // The measured white-screen fixture. Seeded before the window is
+            // created so AppKit would restore it, and the launch must still
+            // show the panes and must not keep this height.
+            UserDefaults.standard.set(Self.oversizedSplitFrames, forKey: Self.splitFrameKey)
+        }
+        let screen = NSScreen.screens.map(\.frame.height).max() ?? 1_600
+        let limit = SplitFrameSanitizer.maxRestorableSubviewHeight(defaults: .standard, screenHeight: screen)
+        if !CommandLine.arguments.contains("--smoke-seed-split") {
+            _ = SplitFrameSanitizer.removeImpossibleFrames(defaults: .standard, maxSubviewHeight: limit)
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -189,13 +198,61 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
         return min(cap, screen)
     }
 
+    static let splitFrameKey = "NSSplitView Subview Frames main-AppWindow-1, SidebarNavigationSplitView"
+    static let oversizedSplitFrames = [
+        "0.000000, 0.000000, 218.000000, 5089.000000, NO, NO",
+        "0.000000, 0.000000, 898.000000, 5089.000000, NO, NO",
+        "899.000000, 0.000000, 325.000000, 5089.000000, NO, NO"
+    ]
+
     static func repairSplitViews() {
-        // Saved frames taller than the screen are discarded before AppKit restores
-        // them. Live NSSplitView frames are left to SwiftUI. Assigning them here
-        // detaches the sidebar, list, and inspector, which is a white window
-        // whose columns still have width.
-        let screen = NSScreen.screens.map(\.frame.height).max() ?? 1_600
-        _ = SplitFrameSanitizer.removeImpossibleFrames(defaults: .standard, maxSubviewHeight: screen)
+        clampLiveSplits()
+    }
+
+    /// Pulls each split column down to the window content height and stops
+    /// AppKit from writing the list's full content height back into defaults.
+    /// Widths are left alone. `adjustSubviews` is not called.
+    private static var clamping = false
+    static func clampLiveSplits() {
+        guard !clamping else { return }
+        clamping = true
+        defer { clamping = false }
+        var limit: CGFloat = 1_600
+        for window in NSApp.windows where window.canBecomeMain {
+            limit = min(limit, contentHeightLimit(window))
+            guard let content = window.contentView else { continue }
+            if content.subviews.contains(where: { $0 is SplitClampView }) == false {
+                let hook = SplitClampView(frame: .zero)
+                content.addSubview(hook)
+            }
+            clamp(content, height: contentHeightLimit(window))
+        }
+        if limit < 1_600 {
+            _ = SplitFrameSanitizer.removeImpossibleFrames(defaults: .standard, maxSubviewHeight: limit)
+        }
+    }
+
+    private static func clamp(_ view: NSView, height limit: CGFloat) {
+        if let split = view as? NSSplitView {
+            if split.frame.height > limit + 1, let parent = split.superview, parent.bounds.height > 2, parent.bounds.height <= limit + 1 {
+                var frame = split.frame
+                frame.size.height = parent.bounds.height
+                split.frame = frame
+            }
+            let height = min(split.bounds.height > 2 ? split.bounds.height : limit, limit)
+            if split.autosaveName != nil { split.autosaveName = nil }
+            guard height > 2 else {
+                for child in view.subviews { clamp(child, height: limit) }
+                return
+            }
+            for subview in split.subviews where abs(subview.frame.height - height) > 1 || abs(subview.frame.origin.y) > 1 {
+                var frame = subview.frame
+                frame.size.height = height
+                frame.origin.y = 0
+                subview.frame = frame
+            }
+        }
+        for child in view.subviews { clamp(child, height: limit) }
     }
 
     static func splitViewsFit(_ window: NSWindow) -> Bool {
@@ -226,6 +283,15 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     private static func framesMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
         abs(lhs.origin.x - rhs.origin.x) < 1 && abs(lhs.origin.y - rhs.origin.y) < 1
             && abs(lhs.size.width - rhs.size.width) < 1 && abs(lhs.size.height - rhs.size.height) < 1
+    }
+}
+
+/// Lays out with the window and pulls split columns back to the content height.
+final class SplitClampView: NSView {
+    override var isFlipped: Bool { true }
+    override func layout() {
+        super.layout()
+        DashboardAppDelegate.clampLiveSplits()
     }
 }
 
