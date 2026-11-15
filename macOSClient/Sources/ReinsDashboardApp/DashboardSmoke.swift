@@ -54,9 +54,13 @@ enum DashboardSmoke {
                 guard listRows >= 1 else { throw SmokeFailure.noRows(column: "list", count: listRows) }
                 DashboardAppDelegate.clampLiveSplits()
                 view.layoutSubtreeIfNeeded()
+                let before = headingHits(in: view, window: window)
                 try await Task.sleep(nanoseconds: 60_000_000_000)
                 view.layoutSubtreeIfNeeded()
-                guard headingIsVisible(in: view, window: window) else { throw SmokeFailure.hiddenHeading }
+                let after = headingHits(in: view, window: window)
+                guard !after.isEmpty else {
+                    throw SmokeFailure.hiddenHeading(before: before.count, sample: visibleTextSample(in: view, window: window))
+                }
                 guard rowIsVisible(in: view, window: window) else { throw SmokeFailure.hiddenRows }
                 guard inspectorHasSelection(in: view, window: window) else { throw SmokeFailure.emptyInspector }
                 let windowHeight = window.frame.height
@@ -185,26 +189,27 @@ enum DashboardSmoke {
         return local
     }
 
-    private static func headingIsVisible(in view: NSView, window: NSWindow) -> Bool {
+    private static func headingHits(in view: NSView, window: NSWindow) -> [String] {
+        let bounds = window.frame
+        var hits: [String] = []
         func isHeading(_ text: String) -> Bool {
             text.localizedCaseInsensitiveContains("Runtime security") || text.contains("运行时安全")
-                || text.localizedCaseInsensitiveContains("Local monitor") || text.contains("本地监控")
+                || text.localizedCaseInsensitiveContains("Local agent") || text.contains("本机 Agent")
+                || text.contains("sidebar.runtimeSecurity")
         }
-        func walk(_ object: AnyObject, depth: Int) -> Bool {
-            if depth > 14 { return false }
-            let label = object.accessibilityLabel?() ?? ""
-            let value = accessibilityValueText(object)
-            let title = object.accessibilityTitle?() ?? ""
-            let frame = screenFrame(of: object, window: window)
-            if !frame.isNull && (isHeading(label) || isHeading(value) || isHeading(title)) { return true }
-            if let children = object.accessibilityChildren?() {
-                for child in children {
-                    if walk(child as AnyObject, depth: depth + 1) { return true }
-                }
-            }
-            return false
+        func walk(_ candidate: NSView) {
+            let label = candidate.accessibilityLabel() ?? ""
+            let value = (candidate as? NSTextField)?.stringValue ?? ""
+            let title = candidate.accessibilityTitle() ?? ""
+            let text = "\(label) \(value) \(title)"
+            let screen = candidate.window?.convertToScreen(candidate.convert(candidate.bounds, to: nil)) ?? .null
+            let inside = screen.width > 1 && screen.height > 1 && screen.height <= bounds.height + 2
+                && bounds.contains(CGPoint(x: screen.midX, y: screen.midY))
+            if isHeading(text) && inside { hits.append(text) }
+            for child in candidate.subviews { walk(child) }
         }
-        return walk(view, depth: 0)
+        walk(view)
+        return hits
     }
 
     private static func rowIsVisible(in view: NSView, window: NSWindow) -> Bool {
@@ -237,6 +242,28 @@ enum DashboardSmoke {
             return candidate.subviews.contains(where: walk)
         }
         return walk(view)
+    }
+
+    private static func visibleTextSample(in view: NSView, window: NSWindow) -> String {
+        let bounds = window.frame
+        var lines: [String] = []
+        func walk(_ candidate: NSView) {
+            guard lines.count < 8 else { return }
+            let label = candidate.accessibilityLabel() ?? ""
+            let value = (candidate as? NSTextField)?.stringValue ?? ""
+            let text = "\(label) \(value)".trimmingCharacters(in: .whitespacesAndNewlines)
+            guard text.count >= 2 else {
+                for child in candidate.subviews { walk(child) }
+                return
+            }
+            let screen = candidate.window?.convertToScreen(candidate.convert(candidate.bounds, to: nil)) ?? .null
+            let inside = bounds.contains(CGPoint(x: screen.midX, y: screen.midY))
+            lines.append("\(text.prefix(32)) \(Int(screen.height))pt \(inside ? "inside" : "outside")")
+            for child in candidate.subviews { walk(child) }
+        }
+        walk(view)
+        let heights = splitSubviews(in: view).map { Int($0.frame.height) }
+        return "text=[\(lines.joined(separator: "; "))] splits=\(heights)"
     }
 
     private static func panesInsideWindow(in view: NSView, window: NSWindow) -> (sidebar: Bool, list: Bool, inspector: Bool) {
@@ -356,7 +383,8 @@ enum DashboardSmoke {
     }
 
     private enum SmokeFailure: LocalizedError {
-        case noWindow, noBitmap, emptyFixture, emptyInspector, hiddenHeading, hiddenRows
+        case noWindow, noBitmap, emptyFixture, emptyInspector, hiddenRows
+        case hiddenHeading(before: Int, sample: String)
         case noRows(column: String, count: Int)
         case blankColumn(column: String, pixels: Int)
         case savedHeight(saved: CGFloat, window: CGFloat)
@@ -368,7 +396,8 @@ enum DashboardSmoke {
             case .noBitmap: return "The window content could not be rendered off screen."
             case .emptyFixture: return "The fixture evidence file produced no records."
             case .emptyInspector: return "Selecting a chain left the inspector without text."
-            case .hiddenHeading: return "The sidebar heading is not inside the visible window."
+            case .hiddenHeading(let before, let sample):
+                return "The sidebar heading is not inside the visible window after 60 seconds (hits before the wait: \(before); \(sample))."
             case .hiddenRows: return "No list row intersects the visible window."
             case .noRows(let column, let count): return "The \(column) has \(count) rows; a blank window must fail."
             case .blankColumn(let column, let pixels): return "The \(column) rendered \(pixels) non-background pixels."
