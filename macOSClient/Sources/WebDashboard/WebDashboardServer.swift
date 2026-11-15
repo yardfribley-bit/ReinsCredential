@@ -106,6 +106,12 @@ public final class WebDashboardServer: @unchecked Sendable {
     }
 
     private func route(_ request: WebRequest) -> WebDecision {
+        if request.path == "/stop" {
+            guard request.method == "POST" else {
+                return WebDecision(status: 405, reason: "Method Not Allowed", type: "text/plain; charset=utf-8", body: "方法不被允许\n", stopAfter: false)
+            }
+            return WebDecision(status: 200, reason: "OK", type: "text/plain; charset=utf-8", body: "已停止\n", stopAfter: true)
+        }
         switch (request.method, request.path) {
         case ("GET", "/"):
             let snapshot = WebDashboardStore.load(sources)
@@ -114,8 +120,6 @@ public final class WebDashboardServer: @unchecked Sendable {
         case ("GET", "/api/snapshot"):
             let body = WebDashboardPage.snapshotJSON(WebDashboardStore.load(sources))
             return WebDecision(status: 200, reason: "OK", type: "application/json; charset=utf-8", body: body, stopAfter: false)
-        case ("POST", "/stop"):
-            return WebDecision(status: 200, reason: "OK", type: "text/plain; charset=utf-8", body: "已停止\n", stopAfter: true)
         case ("GET", _):
             return WebDecision(status: 404, reason: "Not Found", type: "text/plain; charset=utf-8", body: "未找到\n", stopAfter: false)
         default:

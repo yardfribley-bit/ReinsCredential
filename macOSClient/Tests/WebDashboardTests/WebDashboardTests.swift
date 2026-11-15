@@ -246,7 +246,7 @@ final class WebDashboardTests: XCTestCase {
         _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, timeoutLength)
         for (index, piece) in pieces.enumerated() {
             if index > 0 { Thread.sleep(forTimeInterval: pause) }
-            var bytes = WebUTF8.data(piece)
+            let bytes = WebUTF8.data(piece)
             try bytes.withUnsafeBytes { raw in
                 guard let base = raw.baseAddress else { return }
                 var sent = 0
