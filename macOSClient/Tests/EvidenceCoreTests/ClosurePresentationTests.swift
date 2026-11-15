@@ -78,6 +78,36 @@ final class ClosurePresentationTests: XCTestCase {
         XCTAssertNotNil(defaults.object(forKey: "NSSplitView Subview Frames Document"))
     }
 
+    func testDocumentHeightSplitFrameShrinksIntoTheContentRect() {
+        let content = CGRect(x: 0, y: 0, width: 1_224, height: 588)
+        XCTAssertLessThan(content.height, WindowPlacement.minimum.height)
+        XCTAssertNotEqual(content.height, WindowPlacement.minimum.height)
+        for height in [CGFloat(5089), 1469.5, 11488] {
+            let clamped = SplitFrameSanitizer.clamped(CGRect(x: 0, y: 0, width: 218, height: height), into: content)
+            XCTAssertEqual(clamped.width, 218, accuracy: 0.001, "divider width stays")
+            XCTAssertEqual(clamped.height, content.height, accuracy: 0.001)
+            XCTAssertEqual(clamped.minX, 0, accuracy: 0.001)
+            XCTAssertEqual(clamped.minY, 0, accuracy: 0.001)
+            XCTAssertLessThanOrEqual(clamped.maxY, content.maxY)
+            XCTAssertNotEqual(clamped.height, WindowPlacement.minimum.height)
+        }
+        let shifted = SplitFrameSanitizer.clamped(CGRect(x: -40, y: 2000, width: 2_000, height: 11488), into: content)
+        XCTAssertGreaterThanOrEqual(shifted.minX, content.minX)
+        XCTAssertLessThanOrEqual(shifted.maxX, content.maxX)
+        XCTAssertGreaterThanOrEqual(shifted.minY, content.minY)
+        XCTAssertLessThanOrEqual(shifted.maxY, content.maxY)
+        XCTAssertEqual(shifted.width, content.width, accuracy: 0.001)
+        XCTAssertEqual(shifted.height, content.height, accuracy: 0.001)
+        let short = SplitFrameSanitizer.clamped(CGRect(x: 4, y: 6, width: 180, height: 90), into: content)
+        XCTAssertEqual(short.height, 90, accuracy: 0.001)
+        let stacked = SplitFrameSanitizer.fittedHorizontal(CGRect(x: 12, y: 40, width: 30, height: 80), into: content)
+        XCTAssertEqual(stacked.width, content.width, accuracy: 0.001)
+        XCTAssertEqual(stacked.minX, content.minX, accuracy: 0.001)
+        XCTAssertEqual(stacked.height, 80, accuracy: 0.001)
+        XCTAssertEqual(stacked.minY, 40, accuracy: 0.001)
+        XCTAssertNotEqual(stacked.height, content.height)
+    }
+
     func testWindowFrameIsClampedOntoTheVisibleScreen() {
         let visible = CGRect(x: 0, y: 0, width: 1_440, height: 900)
         let saved = CGRect(x: -228, y: 40, width: 164, height: 164)

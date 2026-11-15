@@ -71,9 +71,9 @@ public enum SplitFrameSanitizer {
         return screenHeight > 1 ? screenHeight : 1_600
     }
 
-    /// Fits one split column into the hosting split bounds. Height follows the
-    /// bounds. Width stays unless it would extend past the bounds. `y` is moved
-    /// so `y + height` stays inside.
+    /// Fits one side-by-side column into the hosting split bounds. Height follows
+    /// the bounds and `y` is `bounds.minY`. Width stays unless it would extend
+    /// past the bounds. Saved divider widths are kept when they fit.
     public static func fitted(_ frame: CGRect, into bounds: CGRect) -> CGRect {
         guard bounds.width > 1, bounds.height > 1 else { return frame }
         var frame = frame
@@ -82,6 +82,34 @@ public enum SplitFrameSanitizer {
         if frame.size.width > bounds.width { frame.size.width = bounds.width }
         if frame.origin.x < bounds.minX { frame.origin.x = bounds.minX }
         if frame.maxX > bounds.maxX { frame.origin.x = max(bounds.minX, bounds.maxX - frame.width) }
+        return frame
+    }
+
+    /// Pulls a split, or one of its ancestors, inside the visible content rect.
+    /// A document-height frame (5089, 1469.5, 11488) shrinks. Width and height
+    /// are never increased, and the result stays inside `limit` on both axes.
+    public static func clamped(_ frame: CGRect, into limit: CGRect) -> CGRect {
+        guard limit.width > 1, limit.height > 1 else { return frame }
+        var frame = frame
+        if frame.width > limit.width { frame.size.width = limit.width }
+        if frame.height > limit.height { frame.size.height = limit.height }
+        if frame.minX < limit.minX { frame.origin.x = limit.minX }
+        if frame.minY < limit.minY { frame.origin.y = limit.minY }
+        if frame.maxX > limit.maxX { frame.origin.x = max(limit.minX, limit.maxX - frame.width) }
+        if frame.maxY > limit.maxY { frame.origin.y = max(limit.minY, limit.maxY - frame.height) }
+        return frame
+    }
+
+    /// Stacked panes of a horizontal split. Each pane fills the width. Height
+    /// stays as it is, and shrinks only when the pane is taller than `bounds`.
+    public static func fittedHorizontal(_ frame: CGRect, into bounds: CGRect) -> CGRect {
+        guard bounds.width > 1, bounds.height > 1 else { return frame }
+        var frame = frame
+        frame.size.width = bounds.width
+        frame.origin.x = bounds.minX
+        if frame.height > bounds.height { frame.size.height = bounds.height }
+        if frame.minY < bounds.minY { frame.origin.y = bounds.minY }
+        if frame.maxY > bounds.maxY { frame.origin.y = max(bounds.minY, bounds.maxY - frame.height) }
         return frame
     }
 
