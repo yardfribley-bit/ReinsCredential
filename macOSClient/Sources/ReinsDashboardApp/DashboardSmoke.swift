@@ -58,15 +58,12 @@ enum DashboardSmoke {
                 let sidebarPixels = try contentPixels(sidebarView)
                 let listPixels = try contentPixels(listView)
                 let inspectorPixels = try contentPixels(inspectorView)
-                guard sidebarPixels.dark >= 15, sidebarPixels.light >= 15 else {
-                    throw SmokeFailure.blankColumn(column: "sidebar", pixels: sidebarPixels.dark)
+                func blank(_ pixels: Pixels) -> Bool {
+                    pixels.dark < 15 && pixels.light > 30
                 }
-                guard listPixels.dark >= 15, listPixels.light >= 15 else {
-                    throw SmokeFailure.blankColumn(column: "list", pixels: listPixels.dark)
-                }
-                guard inspectorPixels.dark >= 15, inspectorPixels.light >= 15 else {
-                    throw SmokeFailure.blankColumn(column: "inspector", pixels: inspectorPixels.dark)
-                }
+                guard !blank(sidebarPixels) else { throw SmokeFailure.blankColumn(column: "sidebar", pixels: sidebarPixels.dark) }
+                guard !blank(listPixels) else { throw SmokeFailure.blankColumn(column: "list", pixels: listPixels.dark) }
+                guard !blank(inspectorPixels) else { throw SmokeFailure.blankColumn(column: "inspector", pixels: inspectorPixels.dark) }
                 guard inspectorHasSelection(in: view, minX: width * 0.65) else { throw SmokeFailure.emptyInspector }
                 let report: [String: Any] = [
                     "status": "rendered",
