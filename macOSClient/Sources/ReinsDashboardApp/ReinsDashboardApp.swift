@@ -332,7 +332,9 @@ enum SplitFrameCap {
 
     static func install() {
         guard !installed else { return }
-        guard swizzle("setFrame:", "reins_setFrame:"), swizzle("setFrameSize:", "reins_setFrameSize:") else { return }
+        guard swizzle("setFrame:", "reins_setFrame:"),
+              swizzle("setFrameSize:", "reins_setFrameSize:"),
+              swizzle("setFrameOrigin:", "reins_setFrameOrigin:") else { return }
         installed = true
     }
 
@@ -400,6 +402,13 @@ extension NSView {
         var next = frame
         next.size = size
         reins_setFrameSize(SplitFrameCap.capped(next, view: self).size)
+    }
+
+    @objc(reins_setFrameOrigin:)
+    func reins_setFrameOrigin(_ origin: NSPoint) {
+        var next = frame
+        next.origin = origin
+        reins_setFrameOrigin(SplitFrameCap.capped(next, view: self).origin)
     }
 }
 

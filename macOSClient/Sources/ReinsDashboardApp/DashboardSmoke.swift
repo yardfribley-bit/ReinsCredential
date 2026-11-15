@@ -274,7 +274,7 @@ enum DashboardSmoke {
             for child in candidate.subviews { walk(child) }
         }
         walk(view)
-        let heights = splitSubviews(in: view).map { Int($0.frame.height) }
+        let heights = splitSubviews(in: view).map { "\(Int($0.frame.height))@\(Int($0.frame.minY))" }
         return "contentY=\(Int(content.midY)) h=\(Int(content.height)) text=[\(lines.joined(separator: "; "))] splits=\(heights)"
     }
 
