@@ -99,23 +99,31 @@ def connect_tunnel(proxy_port, url, body):
 
 def https_via_proxy(proxy_port, url, body, cafile, trust):
     host, port, path = split_http(url)
-    sock = socket.create_connection(("127.0.0.1", proxy_port))
-    sock.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
-    sock.settimeout(15)
-    read_headers(sock)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    context.set_alpn_protocols(["http/1.1"])
-    if trust:
-        context.load_verify_locations(cafile)
-    else:
-        context.check_hostname = True
-        context.verify_mode = ssl.CERT_REQUIRED
-        context.load_default_certs()
-    try:
-        tls = context.wrap_socket(sock, server_hostname=host)
-    except ssl.SSLError:
-        sock.close()
-        return
+    # One handshake reset is a transport flake. A certificate failure is the
+    # pinned case and is not retried.
+    for attempt in range(2):
+        sock = socket.create_connection(("127.0.0.1", proxy_port))
+        sock.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+        sock.settimeout(15)
+        read_headers(sock)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.set_alpn_protocols(["http/1.1"])
+        if trust:
+            context.load_verify_locations(cafile)
+        else:
+            context.check_hostname = True
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.load_default_certs()
+        try:
+            tls = context.wrap_socket(sock, server_hostname=host)
+            break
+        except ssl.SSLError:
+            sock.close()
+            return
+        except ConnectionResetError:
+            sock.close()
+            if attempt == 1:
+                raise
     request = (
         f"POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n"
     ).encode() + body
