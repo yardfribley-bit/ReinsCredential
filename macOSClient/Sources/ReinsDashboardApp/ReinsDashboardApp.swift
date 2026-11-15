@@ -446,7 +446,7 @@ enum SplitFrameCap {
         return frame
     }
 
-    private static func ancestorIsSplit(_ view: NSView) -> Bool {
+    fileprivate static func ancestorIsSplit(_ view: NSView) -> Bool {
         var parent = view.superview
         while let current = parent {
             if current is NSSplitView { return true }
