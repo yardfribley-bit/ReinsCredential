@@ -10,17 +10,13 @@ void KeepCollectingDuringDisplaySleep() {
     constexpr uint64_t kOptions = 0x00FFFFFFULL | 0xFF00000000ULL;
     static id held = nullptr;
     if (held) return;
-    id pool = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend)(
-        reinterpret_cast<id>(objc_getClass("NSAutoreleasePool")), sel_registerName("new"));
+    // No autorelease pool: the returned activity must outlive this call.
     id info = reinterpret_cast<id (*)(id, SEL)>(objc_msgSend)(
         reinterpret_cast<id>(objc_getClass("NSProcessInfo")), sel_registerName("processInfo"));
-    if (info) {
-        id reason = reinterpret_cast<id (*)(id, SEL, const char*)>(objc_msgSend)(
-            reinterpret_cast<id>(objc_getClass("NSString")), sel_registerName("stringWithUTF8String:"),
-            "Watch local process opens while the display sleeps");
-        id activity = reinterpret_cast<id (*)(id, SEL, uint64_t, id)>(objc_msgSend)(
-            info, sel_registerName("beginActivityWithOptions:reason:"), kOptions, reason);
-        if (activity) held = reinterpret_cast<id (*)(id)>(objc_retain)(activity);
-    }
-    if (pool) reinterpret_cast<void (*)(id, SEL)>(objc_msgSend)(pool, sel_registerName("drain"));
+    if (!info) return;
+    id reason = reinterpret_cast<id (*)(id, SEL, const char*)>(objc_msgSend)(
+        reinterpret_cast<id>(objc_getClass("NSString")), sel_registerName("stringWithUTF8String:"),
+        "Watch local process opens while the display sleeps");
+    held = reinterpret_cast<id (*)(id, SEL, uint64_t, id)>(objc_msgSend)(
+        info, sel_registerName("beginActivityWithOptions:reason:"), kOptions, reason);
 }
