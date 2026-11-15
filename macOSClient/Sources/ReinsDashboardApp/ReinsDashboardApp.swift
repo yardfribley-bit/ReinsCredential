@@ -268,6 +268,11 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     /// Pulls a column's descendants back inside their parent. A document-sized
     /// origin here is what left the headings thousands of points above the window.
     private static func placeInside(_ view: NSView) {
+        if abs(view.bounds.origin.y) > view.bounds.height + 1 || abs(view.bounds.origin.x) > view.bounds.width + 1 {
+            var bounds = view.bounds
+            bounds.origin = .zero
+            view.bounds = bounds
+        }
         let bounds = CGRect(origin: .zero, size: view.bounds.size)
         guard bounds.height > 2, bounds.width > 2 else { return }
         for child in view.subviews {
@@ -359,7 +364,8 @@ enum SplitFrameCap {
         guard !installed else { return }
         guard swizzle("setFrame:", "reins_setFrame:"),
               swizzle("setFrameSize:", "reins_setFrameSize:"),
-              swizzle("setFrameOrigin:", "reins_setFrameOrigin:") else { return }
+              swizzle("setFrameOrigin:", "reins_setFrameOrigin:"),
+              swizzle("setBoundsOrigin:", "reins_setBoundsOrigin:") else { return }
         installed = true
     }
 
@@ -468,6 +474,16 @@ extension NSView {
         var next = frame
         next.origin = origin
         reins_setFrameOrigin(SplitFrameCap.capped(next, view: self).origin)
+    }
+
+    @objc(reins_setBoundsOrigin:)
+    func reins_setBoundsOrigin(_ origin: NSPoint) {
+        var origin = origin
+        if SplitFrameCap.ancestorIsSplit(self) {
+            if abs(origin.y) > bounds.height + 1 { origin.y = 0 }
+            if abs(origin.x) > bounds.width + 1 { origin.x = 0 }
+        }
+        reins_setBoundsOrigin(origin)
     }
 }
 
