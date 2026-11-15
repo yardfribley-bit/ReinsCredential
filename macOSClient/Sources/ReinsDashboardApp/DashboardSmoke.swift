@@ -258,12 +258,12 @@ enum DashboardSmoke {
             }
             let screen = candidate.window?.convertToScreen(candidate.convert(candidate.bounds, to: nil)) ?? .null
             let inside = bounds.contains(CGPoint(x: screen.midX, y: screen.midY))
-            lines.append("\(text.prefix(32)) \(Int(screen.height))pt \(inside ? "inside" : "outside")")
+            lines.append("\(text.prefix(28)) y=\(Int(screen.midY)) h=\(Int(screen.height)) \(inside ? "inside" : "outside")")
             for child in candidate.subviews { walk(child) }
         }
         walk(view)
         let heights = splitSubviews(in: view).map { Int($0.frame.height) }
-        return "text=[\(lines.joined(separator: "; "))] splits=\(heights)"
+        return "windowY=\(Int(bounds.midY)) h=\(Int(bounds.height)) text=[\(lines.joined(separator: "; "))] splits=\(heights)"
     }
 
     private static func panesInsideWindow(in view: NSView, window: NSWindow) -> (sidebar: Bool, list: Bool, inspector: Bool) {

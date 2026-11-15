@@ -244,24 +244,70 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
 
     private static func clamp(_ view: NSView, height limit: CGFloat) {
         if let split = view as? NSSplitView {
-            if split.frame.height > limit + 1 {
-                var frame = split.frame
-                let parentHeight = split.superview?.bounds.height ?? limit
-                frame.size.height = min(limit, parentHeight > 2 ? parentHeight : limit)
-                if frame.origin.y < 0 || frame.maxY > parentHeight + 1 { frame.origin.y = 0 }
-                split.frame = frame
+            pin(split, limit: limit)
+            var ancestor = split.superview
+            while let host = ancestor, host !== host.window?.contentView {
+                pin(host, limit: limit)
+                ancestor = host.superview
             }
             let height = min(split.bounds.height > 2 ? split.bounds.height : limit, limit)
             if height > 2 {
-                for subview in split.subviews where subview.frame.height > height + 1 || abs(subview.frame.origin.y) > 1 {
-                    var frame = subview.frame
-                    frame.size.height = height
-                    frame.origin.y = 0
-                    subview.frame = frame
+                for subview in split.subviews {
+                    pin(subview, limit: height)
+                    revealTop(subview)
                 }
             }
         }
         for child in view.subviews { clamp(child, height: limit) }
+    }
+
+    /// Puts a split column inside its parent and no taller than the window.
+    private static func pin(_ view: NSView, limit: CGFloat) {
+        var frame = view.frame
+        var changed = false
+        if frame.height > limit + 1 {
+            frame.size.height = limit
+            changed = true
+        }
+        if let parent = view.superview, parent.bounds.height > 2 {
+            if frame.height > parent.bounds.height + 1 {
+                frame.size.height = parent.bounds.height
+                changed = true
+            }
+            let inside = frame.minY >= parent.bounds.minY - 1 && frame.maxY <= parent.bounds.maxY + 1
+            if !inside {
+                frame.origin.y = parent.bounds.minY
+                changed = true
+            }
+        }
+        if changed { view.frame = frame }
+    }
+
+    /// Scrolls a column so its topmost text sits in the visible bounds. The
+    /// column height is already the window; the text was still laid out at the
+    /// old document offset.
+    private static func revealTop(_ column: NSView) {
+        var top: CGFloat?
+        func walk(_ candidate: NSView) {
+            let label = (candidate.accessibilityLabel() ?? "") + ((candidate as? NSTextField)?.stringValue ?? "")
+            if label.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 {
+                let rect = column.convert(candidate.bounds, from: candidate)
+                let edge = column.isFlipped ? rect.minY : rect.maxY
+                if column.isFlipped {
+                    top = min(top ?? edge, edge)
+                } else {
+                    top = max(top ?? edge, edge)
+                }
+            }
+            for child in candidate.subviews { walk(child) }
+        }
+        walk(column)
+        guard let top else { return }
+        var bounds = column.bounds
+        let origin = column.isFlipped ? top : top - bounds.height
+        guard abs(origin - bounds.origin.y) > 1 else { return }
+        bounds.origin.y = origin
+        column.bounds = bounds
     }
 
     static func splitViewsFit(_ window: NSWindow) -> Bool {
@@ -364,9 +410,14 @@ enum SplitFrameCap {
         guard let window, window.canBecomeMain, window.frame.height > 2 else { return frame }
         let content = window.contentLayoutRect.height
         let limit = min(window.frame.height, content > 2 ? content : window.frame.height)
-        guard frame.height > limit + 1 else { return frame }
+        guard frame.height > limit + 1 || frame.minY < -1 else { return frame }
         var frame = frame
-        frame.size.height = limit
+        if frame.height > limit + 1 { frame.size.height = limit }
+        if frame.minY < -1 { frame.origin.y = 0 }
+        if let parent = view.superview, parent.bounds.height > 2,
+           frame.minY > parent.bounds.maxY || frame.maxY < parent.bounds.minY {
+            frame.origin.y = parent.bounds.minY
+        }
         return frame
     }
 }
