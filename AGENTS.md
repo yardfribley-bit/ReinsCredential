@@ -34,6 +34,7 @@ mean complete agent discovery or exfiltration detection has been achieved.
 | Explicit content channel | `ContentGateway.cpp`, `ContentMatcher.cpp`: opt-in delivery/transfer evidence |
 | Launched-tree egress | `EgressProxy.cpp`, `EgressVerdict.cpp`, `TlsIntercept.cpp`: local HTTP proxy, optional HTTPS inspection, live-agent watching, fingerprints, honest upload verdicts |
 | Evidence-chain export | `macOSClient/Sources/ChainExport/main.swift`: JSONL to the dashboard's evidence-chain JSON |
+| Local web dashboard | `macOSClient/Sources/WebDashboard`: loopback-only read-only page over EvidenceCore. `http://127.0.0.1:8790/`. Does not start collection |
 | Real-agent acceptance | `scripts/acceptance/real_agents.sh`: fake secrets, local sink, chain checks. Does not install or edit agent configs |
 | Native client | `macOSClient/Package.swift`: EvidenceCore / RuntimeCore / ReinsDashboardApp / ReinsRuntime |
 | Client model | `macOSClient/Sources/EvidenceCore/Models/Evidence.swift`: backend-to-UI decoding |
@@ -77,8 +78,13 @@ make
 make check
 make integration
 
-# Client: C++ serializer interoperability + Swift model/import/store tests
+# Client: C++ serializer interoperability, Swift tests, and the web-dashboard executable
 macOSClient/scripts/check.sh
+
+# Local web dashboard. Loopback only. Does not start the collector.
+# http://127.0.0.1:8790/
+swift run --package-path macOSClient web-dashboard
+swift run --package-path macOSClient web-dashboard stop
 
 # Local ad-hoc signed app (no Developer ID/notarization)
 macOSClient/scripts/build-app.sh

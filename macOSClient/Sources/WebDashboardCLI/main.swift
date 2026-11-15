@@ -1,0 +1,3 @@
+import WebDashboard
+
+WebDashboardCommand.main()

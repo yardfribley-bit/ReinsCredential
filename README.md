@@ -116,6 +116,27 @@ make integration
 
 `make acceptance` stays a strict gate and can return non-zero while known misses remain. Do not weaken it to make a report green.
 
+## Local web dashboard
+
+The Mac app remains the installed dashboard. When that window is not usable, a loopback page shows the same evidence chains, event list, and detail pane. It only reads logs. It does not start the collector, change policy, or write evidence.
+
+```sh
+swift run --package-path macOSClient web-dashboard
+```
+
+Open [http://127.0.0.1:8790/](http://127.0.0.1:8790/). The process listens on `127.0.0.1` only. Port 8787 is left for ReinsAARM. The page is in Chinese, refreshes every 2 seconds, and reads:
+
+- `~/Library/Application Support/ReinsCredential/runtime/evidence.jsonl`
+- `~/Library/Application Support/ReinsCredential/runtime/egress.jsonl`
+
+Both files must be mode `0600`, owned by the current user, and not a symlink. A looser file is refused and its bytes are not shown. Stop the page with Ctrl-C, or from another terminal:
+
+```sh
+swift run --package-path macOSClient web-dashboard stop
+```
+
+`--log PATH` reads that private file instead of the runtime logs. Repeat it for more than one file. `--port` chooses a port other than 8787. The same evidence-chain JSON the Mac app exports is at [http://127.0.0.1:8790/api/snapshot](http://127.0.0.1:8790/api/snapshot). Assignment-style secrets, cookies, and bearer values are omitted.
+
 ## Privacy and security guarantees
 
 ReinsCredential runs on the Mac where it is installed. It does not upload evidence, configuration, or file contents. Local data is under `~/Library/Application Support/ReinsCredential` (directory mode `0700`, logs mode `0600`).
@@ -124,6 +145,7 @@ ReinsCredential runs on the Mac where it is installed. It does not upload eviden
 - The app does not read or write the login keychain, and it does not install a certificate authority there. An optional TLS CA is a file the operator passes to the proxy. It is not installed.
 - It does not edit other apps' MCP or client configuration, and it does not set a system-wide proxy.
 - The egress proxy listens on `127.0.0.1`. `--launch` sets proxy variables only on the process tree it starts. TLS that did not enter that proxy is not decrypted.
+- The local web dashboard listens on `127.0.0.1:8790` and only reads the evidence logs. It does not bind other interfaces.
 - A `flow_txbytes` or `flow_txbytes_udp` close is a local send-byte count on the process tree that held the file. It is not a decrypted body and not a receipt from the remote server. UDP and QUIC payloads are not read. A measured datagram count can still close as `uploaded` when it falls in the size window. An unmeasured UDP or QUIC channel stays `not_visible`.
 
 Details: [PRIVACY.md](PRIVACY.md) ([简体中文](PRIVACY.zh-CN.md)).

@@ -116,6 +116,27 @@ make integration
 
 `make acceptance` 仍是严格门槛，已知漏报存在时会返回非零。不要为了让报告变绿而放宽它。
 
+## 本机网页控制台
+
+Mac 应用仍是安装后的仪表盘。窗口不可用时，可以用只监听回环地址的网页看同样的证据链、事件列表和详情。它只读日志，不启动采集，不改策略，也不写证据。
+
+```sh
+swift run --package-path macOSClient web-dashboard
+```
+
+打开 [http://127.0.0.1:8790/](http://127.0.0.1:8790/)。进程只绑定 `127.0.0.1`。8787 留给 ReinsAARM。页面是中文，每 2 秒刷新，默认读取：
+
+- `~/Library/Application Support/ReinsCredential/runtime/evidence.jsonl`
+- `~/Library/Application Support/ReinsCredential/runtime/egress.jsonl`
+
+两个文件都必须是当前用户拥有的、mode `0600` 的普通文件，不能是符号链接。权限更宽的文件会被拒绝，内容不会显示。Ctrl-C 停止，或另开一个终端：
+
+```sh
+swift run --package-path macOSClient web-dashboard stop
+```
+
+`--log PATH` 改为读取这个私有文件，可以重复。`--port` 选择 8787 以外的端口。与 Mac 应用相同的证据链 JSON 在 [http://127.0.0.1:8790/api/snapshot](http://127.0.0.1:8790/api/snapshot)。赋值形式的密钥、cookie 和 bearer 值会被省略。
+
 ## 隐私与安全保证
 
 ReinsCredential 只在安装它的这台 Mac 上运行。它不上传证据、配置或文件内容。本地数据在 `~/Library/Application Support/ReinsCredential`（目录 `0700`，日志 `0600`）。
@@ -124,6 +145,7 @@ ReinsCredential 只在安装它的这台 Mac 上运行。它不上传证据、�
 - 应用不读、不写登录钥匙串，也不在那里安装证书颁发机构。可选的 TLS CA 只是操作者传给代理的文件，不会被安装。
 - 它不修改其它应用的 MCP 或客户端配置，也不设置系统级代理。
 - 出口代理只监听 `127.0.0.1`。`--launch` 只给它启动的进程树设置代理变量。没有进入这个代理的 TLS 不会被解密。
+- 本机网页控制台只监听 `127.0.0.1:8790`，只读证据日志，不绑定其它网卡。
 - `flow_txbytes` 或 `flow_txbytes_udp` 的收口，是持有该文件的进程树上的本机发送字节数。它不是解密后的正文，也不是远端服务器的回执。UDP 和 QUIC 的载荷不会被读取。测到的数据报字节数如果落在大小窗口里，仍然可以收成 `uploaded`。没测到字节数的 UDP 或 QUIC 通道保持 `not_visible`。
 
 细节：[PRIVACY.zh-CN.md](PRIVACY.zh-CN.md)（[English](PRIVACY.md)）。
