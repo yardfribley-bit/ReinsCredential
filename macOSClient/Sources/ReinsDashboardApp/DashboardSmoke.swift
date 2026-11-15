@@ -145,9 +145,27 @@ enum DashboardSmoke {
     }
 
     private static func headingIsVisible(in view: NSView, window: NSWindow) -> Bool {
-        onScreenText(in: view, window: window) { text in
+        let screenWindow = window.frame
+        func isHeading(_ text: String) -> Bool {
             text.localizedCaseInsensitiveContains("Runtime security") || text.contains("运行时安全")
+                || text.localizedCaseInsensitiveContains("Local monitor") || text.contains("本地监控")
         }
+        func walk(_ object: AnyObject, depth: Int) -> Bool {
+            if depth > 14 { return false }
+            let label = object.accessibilityLabel?() ?? ""
+            let value = (object.accessibilityValue?() as? String) ?? ""
+            let title = object.accessibilityTitle?() ?? ""
+            let frame = object.accessibilityFrame?() ?? .null
+            let onScreen = !frame.isNull && frame.intersects(screenWindow) && frame.width > 1 && frame.height > 1
+            if onScreen && (isHeading(label) || isHeading(value) || isHeading(title)) { return true }
+            if let children = object.accessibilityChildren?() {
+                for child in children {
+                    if walk(child as AnyObject, depth: depth + 1) { return true }
+                }
+            }
+            return false
+        }
+        return walk(view, depth: 0)
     }
 
     private static func rowIsVisible(in view: NSView, window: NSWindow) -> Bool {
