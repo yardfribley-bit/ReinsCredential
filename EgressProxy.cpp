@@ -1291,16 +1291,23 @@ struct Session {
         if (count <= 0) return;
         const auto listed = std::min(pids.size(), static_cast<size_t>(count));
         std::vector<pid_t> fresh;
+        std::vector<pid_t> young;
         fresh.reserve(32);
         for (size_t index = 0; index < listed; ++index) {
             const auto pid = pids[index];
             if (pid <= 1 || WatchingPid(pid)) continue;
             if (!first_seen.count(pid)) first_seen[pid] = now;
-            // New pids are snapshotted on the birth thread. This pass only
-            // remembers pids the birth window already closed.
+            const bool newborn = now - first_seen[pid] < std::chrono::milliseconds(2500);
             const auto seen = inspected_at.find(pid);
-            if (seen == inspected_at.end() && now - first_seen[pid] >= std::chrono::milliseconds(400))
-                fresh.push_back(pid);
+            if (newborn) young.push_back(pid);
+            else if (seen == inspected_at.end()) fresh.push_back(pid);
+        }
+        std::sort(young.begin(), young.end(), [](pid_t left, pid_t right) { return left > right; });
+        size_t young_budget = 4;
+        for (const auto pid : young) {
+            if (!young_budget || watched.size() >= 64) break;
+            --young_budget;
+            ConsiderPid(pid);
         }
         const bool background_due = last_sweep.time_since_epoch().count() == 0 ||
             now - last_sweep >= std::chrono::milliseconds(200);
