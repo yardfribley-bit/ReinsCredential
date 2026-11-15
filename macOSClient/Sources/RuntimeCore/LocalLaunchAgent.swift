@@ -55,7 +55,7 @@ public struct LocalLaunchAgent: Sendable {
         }
         let values: [String: Any] = ["Label": Self.label, "ProgramArguments": [helper.path],
             "RunAtLoad": true, "KeepAlive": true, "ThrottleInterval": 30, "ExitTimeOut": 15,
-            "ProcessType": "Background", "ReinsCredentialManaged": true]
+            "ProcessType": "Standard", "ReinsCredentialManaged": true]
         let data = try PropertyListSerialization.data(fromPropertyList: values, format: .xml, options: 0)
         // The temp file is private before it has content; publish by rename.
         var template = Array(directory.appendingPathComponent(".reins-agent-XXXXXX").path.utf8CString)

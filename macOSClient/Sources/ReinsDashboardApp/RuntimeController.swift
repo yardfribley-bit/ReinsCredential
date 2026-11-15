@@ -1,5 +1,4 @@
 import AppKit
-import CoreGraphics
 import EvidenceCore
 import Foundation
 import RuntimeCore
@@ -97,6 +96,10 @@ final class RuntimeController: ObservableObject {
     private var lastNotification: Date = .distantPast
     private let requiresBundle: Bool
     private var awaitingStatusSince: Date?
+    private var notedLogs = false
+    private var seenEvidenceSize: Int64 = -1
+    private var seenEgressSize: Int64 = -1
+    private var seenStatusMtime: Int64 = -1
 
     init(paths: RuntimePaths = RuntimePaths(), service: BackgroundServiceManaging? = nil,
          bundleURL: URL = Bundle.main.bundleURL, defaults: UserDefaults = .standard,
@@ -119,24 +122,13 @@ final class RuntimeController: ObservableObject {
                 self?.watchedPaths = configuration.sensitivePaths
             }
             while !Task.isCancelled {
-                let quiet = Self.interfaceQuiet
-                if !quiet { await self?.refreshNow() }
-                try? await Task.sleep(nanoseconds: quiet ? 5_000_000_000 : 1_000_000_000)
+                await self?.refreshNow()
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
     }
     func endPolling() { polling?.cancel(); polling = nil }
 
-    /// No periodic file read or view update while the window is hidden or the display is asleep.
-    static var interfaceQuiet: Bool {
-        if !NSApp.occlusionState.contains(.visible) { return true }
-        if !NSApp.windows.contains(where: { $0.isVisible && !$0.isMiniaturized && $0.canBecomeMain }) { return true }
-        var ids = [CGDirectDisplayID](repeating: 0, count: 8)
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(8, &ids, &count) == .success, count > 0 else { return false }
-        for index in 0..<Int(count) where CGDisplayIsAsleep(ids[index]) != 0 { return true }
-        return false
-    }
     func refresh() { Task { await refreshNow() } }
     func startIfNeeded() {
         guard !DashboardAppDelegate.isQuitting else { return }
@@ -253,6 +245,8 @@ final class RuntimeController: ObservableObject {
         guard !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
+        if notedLogs && !logsDiffer() { return }
+        defer { noteLogs() }
         do {
             let batch = try await reader.poll(url: paths.evidenceURL)
             let egressRecords = (try? await egressReader.poll(url: paths.egressEvidenceURL).records) ?? []
@@ -392,6 +386,32 @@ final class RuntimeController: ObservableObject {
         guard lhs.count == rhs.count else { return false }
         for index in lhs.indices where lhs[index].id != rhs[index].id { return false }
         return true
+    }
+
+    /// Display sleep does not gate collection or this refresh. A poll is skipped
+    /// only when the evidence files and the status file are unchanged, so a wake
+    /// does not decode a backlog and an unchanged screen does not redraw.
+    private func logsDiffer() -> Bool {
+        let evidence = Self.fileStamp(paths.evidenceURL)
+        let egress = Self.fileStamp(paths.egressEvidenceURL)
+        let status = Self.fileStamp(paths.statusURL)
+        return evidence.size != seenEvidenceSize || egress.size != seenEgressSize || status.mtime != seenStatusMtime
+    }
+
+    private func noteLogs() {
+        let evidence = Self.fileStamp(paths.evidenceURL)
+        let egress = Self.fileStamp(paths.egressEvidenceURL)
+        let status = Self.fileStamp(paths.statusURL)
+        seenEvidenceSize = evidence.size
+        seenEgressSize = egress.size
+        seenStatusMtime = status.mtime
+        notedLogs = true
+    }
+
+    private static func fileStamp(_ url: URL) -> (size: Int64, mtime: Int64) {
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return (-1, -1) }
+        return (Int64(info.st_size), info.st_mtimespec.tv_sec * 1_000_000_000 + info.st_mtimespec.tv_nsec)
     }
 
     private func publish(state nextState: RuntimeUIState, status: String) {

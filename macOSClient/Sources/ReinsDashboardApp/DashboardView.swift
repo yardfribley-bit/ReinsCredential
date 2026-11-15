@@ -24,10 +24,9 @@ struct DashboardView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let width = proxy.size.width > 2 ? proxy.size.width : WindowPlacement.minimum.width
-            let height = proxy.size.height > 2 ? proxy.size.height : WindowPlacement.minimum.height
             split
-                .frame(width: width, height: height)
+                .frame(maxWidth: proxy.size.width > 2 ? proxy.size.width : WindowPlacement.minimum.width,
+                       maxHeight: proxy.size.height > 2 ? proxy.size.height : WindowPlacement.minimum.height)
         }
         .navigationTitle("ReinsCredential")
         .background(Color(nsColor: .windowBackgroundColor))
@@ -126,6 +125,7 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var detailColumn: some View {
+        Group {
         switch boardMode {
         case .chains:
             if let chain = store.selectedChain {
@@ -144,6 +144,9 @@ struct DashboardView: View {
                                   message: L10n.tr("empty.selectRecordBody"))
             }
         }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityIdentifier("reins.inspector")
     }
 
     private var windowExportSheet: some View {
@@ -310,6 +313,7 @@ struct DashboardView: View {
             .fixedSize(horizontal: false, vertical: true)
         }
         .background(.ultraThinMaterial)
+        .accessibilityIdentifier("reins.sidebar")
     }
 
     private var evidenceContent: some View {

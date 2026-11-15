@@ -42,6 +42,9 @@ enum DashboardSmoke {
                     guard DashboardAppDelegate.splitViewsFit(window) else {
                         throw SmokeFailure.splitUnbounded
                     }
+                    guard DashboardAppDelegate.panesHaveContent(window) else {
+                        throw SmokeFailure.blankPanes
+                    }
                     let output = directory.appendingPathComponent("dashboard-\(name).png")
                     // AppKit cacheDisplay misses compositor-rendered glass and
                     // sidebar content on recent macOS. Capture the actual window
@@ -95,12 +98,13 @@ enum DashboardSmoke {
     }
 
     private enum SmokeFailure: LocalizedError {
-        case noWindow, noBitmap, captureTimeout, splitUnbounded
+        case noWindow, noBitmap, captureTimeout, splitUnbounded, blankPanes
         case captureFailed(status: Int32, reason: String)
         var errorDescription: String? {
             switch self {
             case .noWindow: return "No visible dashboard window was created."
             case .splitUnbounded: return "The main split view is blank or taller than the window."
+            case .blankPanes: return "The sidebar or the inspector has no readable content."
             case .noBitmap: return "Window capture did not produce a valid PNG."
             case .captureTimeout: return "Own-window screencapture timed out after 10 seconds. No desktop fallback was attempted."
             case .captureFailed(let status, let reason):

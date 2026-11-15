@@ -176,6 +176,15 @@ inline bool FastTreeSampleDue(bool sensitive_file_open, bool within_close_tail, 
 // only for a process that is already being watched.
 inline bool SubscribeEveryProcessFlow() noexcept { return false; }
 
+// How many brand-new pids to vnode-check before the next sleep. The newest
+// come first, so a short-lived process is in this pass even when a display
+// wake makes many pids appear at once. Display and session state are not
+// inputs and must not change the count.
+inline int BirthInspectBudget(int unseen_new) noexcept {
+    if (unseen_new <= 0) return 0;
+    return unseen_new < 24 ? unseen_new : 24;
+}
+
 // The fast discovery pass does not re-inspect a process it already saw.
 // A new pid or a newly hot pid is the only fast-path inspect. Already-watched
 // trees are sampled on their own cadence, not by this pass.

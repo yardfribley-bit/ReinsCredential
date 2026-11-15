@@ -436,6 +436,11 @@ int main() {
     assert(!FastTreeSampleDue(false, false, false));
     assert(FastTreeSampleDue(false, false, true));
     assert(!SubscribeEveryProcessFlow());
+    assert(BirthInspectBudget(0) == 0);
+    assert(BirthInspectBudget(1) == 1);
+    assert(BirthInspectBudget(40) == 24);
+    // Newest-first: index 0 is the short agent and is inside the same pass.
+    assert(BirthInspectBudget(40) > 0);
     // A real application-data record still closes uploaded. 2085 is 1024+37+1024.
     const auto app_record = record(23, 2085);
     const auto app_records = ClassifyTlsRecords(app_record.data(), app_record.size());

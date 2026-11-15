@@ -85,7 +85,7 @@ cat > "$app_dir/Contents/Library/LaunchAgents/io.github.yardfribley-bit.ReinsCre
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>
   <key>ExitTimeOut</key><integer>15</integer>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>Standard</string>
 </dict></plist>
 PLIST
 /usr/bin/codesign --force --sign "$signing_identity" "$app_dir/Contents/Helpers/agent-monitor"

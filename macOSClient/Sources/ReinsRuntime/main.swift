@@ -321,7 +321,10 @@ private func runSupervisor(_ options: Options) throws {
             try RuntimeStatus(state: state, supervisorPID: getpid(), monitorPID: monitorChild?.isRunning == true ? monitorChild?.processIdentifier : nil,
                               monitorStartedAt: monitorStarted, message: message, sessionID: session).save(to: paths.statusURL)
         }
-        defer { stopChildren() }
+        let awake = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+            reason: "Watch local process opens while the display sleeps")
+        defer { ProcessInfo.processInfo.endActivity(awake); stopChildren() }
         try publish(.starting)
         while !stop.isRequested {
             do {

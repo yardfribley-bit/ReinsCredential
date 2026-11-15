@@ -4,6 +4,7 @@
 #include "EvidenceStore.h"
 #include "ProcessCache.h"
 #include "TlsIntercept.h"
+#include "WatchPriority.h"
 #include <arpa/inet.h>
 #include <libproc.h>
 #include <netdb.h>
@@ -1232,7 +1233,11 @@ struct Session {
                     }
                 }
                 std::vector<BirthSnapshot> found;
-                int budget = 4;
+                int unseen = 0;
+                for (const auto& item : recent) {
+                    if (!item.saw_file && now >= item.next) ++unseen;
+                }
+                int budget = BirthInspectBudget(unseen);
                 for (auto it = recent.begin(); it != recent.end(); ) {
                     const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->born).count();
                     if (!alive.count(it->pid) || age > (it->saw_file ? 1500 : 2500)) {
@@ -1268,10 +1273,11 @@ struct Session {
                     if (births.size() < 512) births.insert(births.end(), found.begin(), found.end());
                 }
             }
-            // A new pid is checked often enough to see a 100 ms hold. An empty
-            // list is not. Only a process holding a sensitive file is followed closely.
+            // A new pid is inspected in this pass, before the sleep, so a 100 ms
+            // hold is not waiting on the next wake. The sleep does not grow
+            // when the display is asleep or the session locks.
             const bool pending = !recent.empty();
-            std::this_thread::sleep_for(std::chrono::milliseconds(busy ? 15 : pending ? 40 : 120));
+            std::this_thread::sleep_for(std::chrono::milliseconds(busy ? 15 : pending ? 25 : 40));
         }
     }
     void DiscoverHolders() {
@@ -1296,7 +1302,7 @@ struct Session {
         const bool active = started_at.time_since_epoch().count() == 0 ||
             now - started_at < std::chrono::seconds(2) ||
             (last_sensitive_at.time_since_epoch().count() != 0 && now - last_sensitive_at < std::chrono::seconds(3));
-        if (!active && last_list.time_since_epoch().count() != 0 && now - last_list < std::chrono::milliseconds(100))
+        if (!active && last_list.time_since_epoch().count() != 0 && now - last_list < std::chrono::milliseconds(40))
             return;
         last_list = now;
         int estimate = proc_listallpids(nullptr, 0);
@@ -1321,7 +1327,7 @@ struct Session {
         // Vnode check only. A full socket walk happens once a sensitive file
         // is actually open. The first moments after startup look further, so
         // an agent that is already running is not hidden behind two newer pids.
-        size_t young_budget = active && now - started_at < std::chrono::seconds(2) ? 8 : 3;
+        size_t young_budget = active && now - started_at < std::chrono::seconds(2) ? 16 : 8;
         for (const auto pid : young) {
             if (!young_budget || watched.size() >= 64) break;
             const auto seen = inspected_at.find(pid);
@@ -1909,6 +1915,7 @@ std::vector<std::string> ProxyEnvironment(uint16_t port) {
 } // namespace
 
 int main(int argc, char** argv) {
+    KeepCollectingDuringDisplaySleep();
     using namespace agentsec;
     try {
         std::string log, port_file, tls_cert, tls_key;
