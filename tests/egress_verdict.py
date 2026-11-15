@@ -884,12 +884,189 @@ def live_idle_reposts(directory, binary, secret):
     return "uploaded"
 
 
+def _dest_port(destination):
+    text = destination or ""
+    if text.startswith("["):
+        mark = text.rfind("]:")
+        tail = text[mark + 2:] if mark >= 0 else ""
+    else:
+        tail = text.rsplit(":", 1)[-1] if ":" in text else ""
+    digits = []
+    for char in tail:
+        if char.isdigit():
+            digits.append(char)
+        else:
+            break
+    return int("".join(digits)) if digits else 0
+
+
+def _closes_on(records, port):
+    return [record for record in records
+            if record.get("type") == "sensitive_access_closed" and _dest_port(record.get("destination")) == port]
+
+
+def live_field_rounds(directory, binary, secret, ca):
+    """Two rounds after a minute idle: refused, loopback, two short posts, TLS body, TLS hello.
+
+    Gaps span the old 3 s teardown and several tens of seconds. Each case is its own process.
+    """
+    host = routable_ip()
+    if not host:
+        return "skipped"
+    http_server = Server(accept_timeout=400, bind_host="0.0.0.0", accepts=4)
+    loop_server = Server(accept_timeout=400, bind_host="127.0.0.1", accepts=2)
+    refused = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    refused.bind((host, 0))
+    refused_port = refused.getsockname()[1]
+    refused.close()
+    tls_body_port = _tls_port(ca, 2)
+    tls_hello_port = _tls_port(ca, 2)
+    log = directory / "field-rounds.jsonl"
+    script = directory / "field_case.py"
+    script.write_text(FIELD_CASE)
+    os.chmod(script, 0o700)
+    proc = subprocess.Popen(
+        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "420",
+         "--sample-ms", "40"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    gaps = [1, 5, 12, 30, 50]
+    try:
+        time.sleep(60)
+        for _round in range(2):
+            steps = [
+                ("refused", [str(binary), "refused-short", str(secret), host, str(refused_port), str(directory / "go")], "attempted"),
+                ("loopback", [str(binary), "short", str(secret), "127.0.0.1", str(loop_server.port), str(directory / "go")], "not_found"),
+                ("post-a", [str(binary), "short", str(secret), host, str(http_server.port), str(directory / "go")], "uploaded"),
+                ("post-b", [str(binary), "short", str(secret), host, str(http_server.port), str(directory / "go")], "uploaded"),
+                ("tls-body", [sys.executable, str(script), str(secret), host, str(tls_body_port), "tls-body"], "uploaded"),
+                ("tls-hello", [sys.executable, str(script), str(secret), host, str(tls_hello_port), "tls-hello"], "not_visible"),
+            ]
+            for index, (name, command, _kind) in enumerate(steps):
+                ready = directory / "go"
+                ready.write_text("go\n")
+                before = log.read_text() if log.exists() else ""
+                agent = subprocess.Popen(command)
+                try:
+                    agent.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    agent.kill()
+                deadline = time.time() + 8
+                while time.time() < deadline:
+                    text = log.read_text() if log.exists() else ""
+                    added = text[len(before):] if text.startswith(before) else text
+                    if "sensitive_access_closed" in added:
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise SystemExit(f"field round case {name} produced no closure")
+                if index < len(gaps):
+                    time.sleep(gaps[index])
+            time.sleep(8)
+        records = load_records(log)
+        posts = [record for record in _closes_on(records, http_server.port)
+                 if record.get("upload_verdict") == "uploaded" and record.get("evidence_basis") == "flow_txbytes"]
+        if len(posts) != 4:
+            raise SystemExit(f"field rounds uploaded {len(posts)} short posts, want 4")
+        refused_closes = [record for record in _closes_on(records, refused_port)
+                          if record.get("upload_verdict") == "attempted" and record.get("evidence_basis") == "flow_attempt"]
+        if len(refused_closes) != 2:
+            raise SystemExit(f"field rounds attempted {len(refused_closes)} refused connects, want 2")
+        loops = [record for record in _closes_on(records, loop_server.port)
+                 if record.get("upload_verdict") == "not_found" and "loopback_not_off_host" in (record.get("transfer_outcome") or "")]
+        if len(loops) != 2:
+            raise SystemExit(f"field rounds loopback closures {len(loops)}, want 2")
+        bodies = [record for record in _closes_on(records, tls_body_port) if record.get("upload_verdict") == "uploaded"]
+        if len(bodies) != 2:
+            raise SystemExit(f"field rounds tls body uploads {len(bodies)}, want 2")
+        hellos = [record for record in _closes_on(records, tls_hello_port)
+                  if record.get("upload_verdict") == "not_visible" and "tls_handshake_body_not_visible" in (record.get("transfer_outcome") or "")]
+        if len(hellos) != 2:
+            raise SystemExit(f"field rounds tls handshakes {len(hellos)}, want 2")
+        if any(record.get("upload_verdict") == "uploaded" for record in _closes_on(records, tls_hello_port)):
+            raise SystemExit("field rounds counted a handshake as uploaded")
+        if any(record.get("upload_verdict") == "not_found" and "tls_handshake" in (record.get("transfer_outcome") or "") for record in records):
+            raise SystemExit("field rounds rewrote a handshake as not_found")
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    http_server.join()
+    loop_server.join()
+    return "ok"
+
+
+FIELD_CASE = """import os, socket, ssl, sys, time
+path, host, port_text, kind = sys.argv[1:]
+port = int(port_text)
+held = os.open(path, os.O_RDONLY)
+try:
+    body = open(path, "rb").read()
+    raw = socket.create_connection((host, port), timeout=5)
+    if kind == "tls-hello":
+        tls = ssl._create_unverified_context().wrap_socket(raw, server_hostname=host)
+        time.sleep(0.15)
+        tls.close()
+    elif kind == "tls-body":
+        tls = ssl._create_unverified_context().wrap_socket(raw, server_hostname=host)
+        payload = body if len(body) >= 4096 else body + b"B" * (4096 - len(body))
+        tls.sendall(payload[:4096])
+        time.sleep(0.15)
+        tls.close()
+    else:
+        raw.close()
+finally:
+    os.close(held)
+"""
+
+
+def _tls_port(ca, accepts):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", 0))
+    sock.listen(max(accepts, 1))
+    port = sock.getsockname()[1]
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(ca[2]), str(ca[3]))
+
+    def run():
+        sock.settimeout(400)
+        for _ in range(accepts):
+            try:
+                conn, _addr = sock.accept()
+            except OSError:
+                break
+            try:
+                tls = context.wrap_socket(conn, server_side=True)
+                tls.settimeout(2)
+                while True:
+                    block = tls.recv(8192)
+                    if not block:
+                        break
+            except (OSError, ssl.SSLError):
+                pass
+            try:
+                conn.close()
+            except OSError:
+                pass
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+    threading.Thread(target=run, daemon=True).start()
+    return port
+
+
 def main():
     if not PROXY.exists():
         raise SystemExit("agent-egress is not built")
     upload_tp = attempted_tp = tn = fp = fn = 0
     content_unseen = 0
     after_canary = "skipped"
+    rounds = "skipped"
     with tempfile.TemporaryDirectory(prefix="reins-egress-") as temporary:
         directory = Path(temporary)
         os.chmod(directory, 0o700)
@@ -954,6 +1131,16 @@ def main():
                 tn += 1
             else:
                 fn += 1
+        rounds = live_field_rounds(directory, binary, secret, ca)
+        if rounds == "skipped":
+            print("SKIP live-field-rounds no routable address")
+        elif rounds == "ok":
+            upload_tp += 6
+            attempted_tp += 2
+            tn += 2
+            content_unseen += 2
+        else:
+            fn += 1
         reposts = live_idle_reposts(directory, binary, secret)
         if reposts == "skipped":
             print("SKIP live-idle-reposts no routable address")
@@ -989,6 +1176,19 @@ def main():
         raise SystemExit(f"missing cpu samples idle={len(idle_cpu)} active={len(active_cpu)}")
     counted = dict(LAUNCHED_VERDICTS)
     counted.update({mode: verdict for mode, verdict in LIVE_VERDICTS.items() if mode not in skipped})
+    if rounds == "ok":
+        counted["field-post-1"] = "uploaded"
+        counted["field-post-2"] = "uploaded"
+        counted["field-post-3"] = "uploaded"
+        counted["field-post-4"] = "uploaded"
+        counted["field-tls-body-1"] = "uploaded"
+        counted["field-tls-body-2"] = "uploaded"
+        counted["field-refused-1"] = "attempted"
+        counted["field-refused-2"] = "attempted"
+        counted["field-loop-1"] = "not_found"
+        counted["field-loop-2"] = "not_found"
+        counted["field-hello-1"] = "not_visible"
+        counted["field-hello-2"] = "not_visible"
     if reposts == "uploaded":
         counted["live-idle-repost-1"] = "uploaded"
         counted["live-idle-repost-2"] = "uploaded"

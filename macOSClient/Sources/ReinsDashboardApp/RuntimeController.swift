@@ -126,10 +126,12 @@ final class RuntimeController: ObservableObject {
     func endPolling() { polling?.cancel(); polling = nil }
     func refresh() { Task { await refreshNow() } }
     func startIfNeeded() {
+        guard !DashboardAppDelegate.isQuitting else { return }
         if !defaults.bool(forKey: "monitoringDisabledByUser") { start() }
     }
 
     func start() {
+        guard !DashboardAppDelegate.isQuitting else { return }
         guard !isBusy else { return }
         isBusy = true
         errorMessage = nil
@@ -147,6 +149,12 @@ final class RuntimeController: ObservableObject {
                 awaitingStatusSince = Date()
                 statusMessage = L10n.tr("status.startingWait")
                 try await service.register()
+                if DashboardAppDelegate.isQuitting {
+                    try? await service.unregister()
+                    defaults.set(true, forKey: "monitoringDisabledByUser")
+                    state = .stopped
+                    return
+                }
                 await refreshNow()
             } catch {
                 if service.registration == .requiresApproval {
@@ -155,6 +163,15 @@ final class RuntimeController: ObservableObject {
                 } else { fail(error) }
             }
         }
+    }
+
+    func stopForQuit() async {
+        DashboardAppDelegate.isQuitting = true
+        defaults.set(true, forKey: "monitoringDisabledByUser")
+        try? await service.unregister()
+        state = .stopped
+        statusMessage = L10n.tr("status.stoppedKeep")
+        isBusy = false
     }
 
     func stop() {

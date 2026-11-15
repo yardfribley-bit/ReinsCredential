@@ -587,6 +587,7 @@ struct Session {
     MonoClock::time_point last_slow_inspect{};
     MonoClock::time_point last_launched_sample{};
     MonoClock::time_point started_at = MonoClock::now();
+    MonoClock::time_point last_sensitive_at{};
     size_t rescan_cursor = 0;
     uint16_t proxy_port = 0;
     bool tree_truncated = false;
@@ -619,7 +620,7 @@ struct Session {
         record.detail = "descriptor_observed;bytes_read_unproven;not_an_upload";
         record.event_id = NewUuid();
         accesses.emplace(path, Access{record.event_id, path, actor});
-        std::cerr << "egress access " << path << "\n";
+        std::cerr << "egress access observed\n";
         Emit(std::move(record));
     }
     bool LaunchedActor(const ActorProcess& actor) const {
@@ -893,7 +894,7 @@ struct Session {
             std::set<std::string> retained_seen;
             MergeRetained(proc, retained_seen, OpenWindowUpper(proc));
             roots_with_file.insert(proc.root);
-            if (!proc.inspection_complete && proc.samples < 2 && !finishing) continue;
+            if (!proc.inspection_complete && proc.samples < 2 && !finishing && !proc.exited) continue;
             LiveAccessView shared;
             shared.agent_visible = true;
             shared.inspection_complete = proc.inspection_complete;
@@ -1092,6 +1093,19 @@ struct Session {
         for (const auto& root : watched) if (root.pid == pid) return true;
         return false;
     }
+    void MarkExited(const ProcessIdentity& identity) {
+        const auto now = MonoClock::now();
+        for (auto& item : live_procs) {
+            if (item.second.root != identity && item.first != identity) continue;
+            item.second.exited = true;
+            for (auto& file : item.second.files) {
+                if (!file.second.open_now && file.second.saw_close) continue;
+                file.second.open_now = false;
+                file.second.saw_close = true;
+                if (file.second.closed_at.time_since_epoch().count() == 0) file.second.closed_at = now;
+            }
+        }
+    }
     bool ConsiderPid(pid_t pid) {
         inspected_at[pid] = MonoClock::now();
         if (watched.size() >= 64) { tree_truncated = true; return false; }
@@ -1100,11 +1114,21 @@ struct Session {
         if (!node || IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) return false;
         auto activity = source.Inspect(*node, roots, false);
         if (activity.sensitive_files.empty()) return false;
-        // The open was just observed. Subscribe and re-read sockets in this call.
-        source.WatchFlows(pid);
-        source.PollFlowCounts();
+        // Record the open before subscribing. A short-lived process can exit
+        // while the kernel socket is reopened, and that open must still close.
         activity = source.Inspect(*node, roots, true);
         auto actor = Describe(source, *node);
+        for (const auto& path : activity.sensitive_files) NoteAccess(actor, path);
+        ObserveLive(*node, actor, activity, node->identity);
+        last_sensitive_at = MonoClock::now();
+        source.WatchFlows(pid);
+        auto again = source.Lookup(pid);
+        if (again) {
+            auto refreshed = source.Inspect(*again, roots, true);
+            ObserveLive(*again, actor, refreshed, again->identity);
+        } else {
+            MarkExited(node->identity);
+        }
         std::string label = node->name.empty() ? node->executable : node->name;
         if (actor.owning_agent && !actor.owning_agent->bundle.empty()) label = actor.owning_agent->bundle;
         Root root{node->identity, node->identity.pid, false};
@@ -1200,6 +1224,9 @@ struct Session {
         for (auto& root : watched) {
             if (root.launched && !sample_launched) continue;
             if (!root.launched && !source.Lookup(root.pid)) {
+                // The process is gone. Keep the kernel socket; closing it here
+                // drops the next short-lived open. Still emit this tree's close.
+                MarkExited(root.identity);
                 source.UnwatchFlows(root.pid);
                 finished.push_back(root.identity);
                 continue;
@@ -1222,17 +1249,28 @@ struct Session {
             const bool peers = file_open || grace;
             SampleTree(root.pid, root.identity, root.launched, peers);
             root.last_sample = now;
-            if (FileOpenNow(root.identity)) root.last_file = now;
-            if (!root.launched && !source.Lookup(root.pid)) finished.push_back(root.identity);
+            if (FileOpenNow(root.identity)) {
+                root.last_file = now;
+                last_sensitive_at = now;
+            }
+            if (!root.launched && !source.Lookup(root.pid)) {
+                MarkExited(root.identity);
+                finished.push_back(root.identity);
+            }
         }
         if (!finished.empty()) {
             watched.erase(std::remove_if(watched.begin(), watched.end(), [&](const Root& root) {
                 return std::find(finished.begin(), finished.end(), root.identity) != finished.end();
             }), watched.end());
-            bool any_live = false;
-            for (const auto& root : watched) if (!root.launched) any_live = true;
-            if (IdleWatchTeardownDue(any_live, true)) source.ReleaseIdleWatch();
         }
+        bool sensitive_now = false;
+        for (const auto& root : watched) {
+            if (!root.launched && FileOpenNow(root.identity)) sensitive_now = true;
+        }
+        const auto since_sensitive = last_sensitive_at.time_since_epoch().count() == 0
+            ? std::chrono::duration_cast<std::chrono::milliseconds>(now - started_at).count()
+            : std::chrono::duration_cast<std::chrono::milliseconds>(now - last_sensitive_at).count();
+        if (!sensitive_now && !SubscriptionHoldActive(since_sensitive)) source.ReleaseIdleWatch();
         FlushLive();
     }
     std::optional<ActorProcess> AttributeOne(uint16_t client_port, pid_t root, const ProcessIdentity& identity) {
@@ -1846,7 +1884,8 @@ int main(int argc, char** argv) {
             if (child.pid > 0 && child.Exited()) break;
             if (command.empty() && duration && MonoClock::now() - started >= std::chrono::seconds(duration)) break;
             pollfd pending{listener->value, POLLIN, 0};
-            auto result = poll(&pending, 1, sample_ms);
+            const int wait_ms = watch_live ? std::min(sample_ms, 20) : sample_ms;
+            auto result = poll(&pending, 1, wait_ms);
             if (result < 0 && errno == EINTR) continue;
             Require(result >= 0, "poll failed");
             if (result > 0 && (pending.revents & POLLIN)) {

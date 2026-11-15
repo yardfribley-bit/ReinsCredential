@@ -424,6 +424,7 @@ public:
         Drain(20);
     }
     void ReleaseSocketLocked() {
+        ++socket_generation_;
         if (fd_ >= 0) ::close(fd_);
         fd_ = -1;
         failed_ = false;
@@ -436,14 +437,14 @@ public:
     void Unwatch(pid_t pid) {
         std::lock_guard<std::mutex> lock(mu_);
         watch_.erase(pid);
+        // Allow the same pid number to be subscribed again after reuse.
+        // Do not close the control socket: the next short-lived open arrives
+        // while that socket would be down.
         subscribed_.erase(pid);
-        if (watch_.empty()) {
-            ReleaseSocketLocked();
-            PayloadHints::Shared().Quiesce();
-        }
     }
     void ReleaseIdle() {
         std::lock_guard<std::mutex> lock(mu_);
+        if (fd_ < 0 && watch_.empty()) return;
         watch_.clear();
         ReleaseSocketLocked();
         PayloadHints::Shared().Quiesce();
@@ -867,9 +868,11 @@ private:
         }
         while (!stop_.load()) {
             int fd = -1;
+            uint64_t generation = 0;
             {
                 std::lock_guard<std::mutex> lock(mu_);
                 fd = fd_;
+                generation = socket_generation_;
             }
             int ready = 0;
             if (fd >= 0) {
@@ -883,8 +886,10 @@ private:
             if (stop_.load()) break;
             if (ready > 0) {
                 std::lock_guard<std::mutex> lock(mu_);
+                if (fd_ != fd || socket_generation_ != generation) continue;
                 query_budget_ = 8;
                 DrainNonblock();
+                if (fd_ != fd || socket_generation_ != generation) continue;
                 Pump(4);
             }
         }
@@ -902,6 +907,7 @@ private:
     }
     mutable std::mutex mu_;
     int fd_ = -1;
+    uint64_t socket_generation_ = 0;
     bool failed_ = false;
     bool announced_ = false;
     std::atomic<bool> stop_{false};

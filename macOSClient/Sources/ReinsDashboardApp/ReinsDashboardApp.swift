@@ -68,6 +68,7 @@ private struct DashboardRoot: View {
             .onOpenURL { store.importLog(from: $0) }
             .onAppear {
                 MainWindowOpener.shared.open = { openWindow(id: "main") }
+                DashboardAppDelegate.stopRuntime = { await runtime.stopForQuit() }
                 DashboardAppDelegate.restoreWindows()
                 guard !didStartSession else { return }
                 didStartSession = true
@@ -98,6 +99,9 @@ final class MainWindowOpener {
 }
 
 final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
+    static var isQuitting = false
+    static var stopRuntime: (@MainActor () async -> Void)?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async { Self.restoreWindows() }
     }
@@ -107,25 +111,43 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Self.restoreWindows(createIfMissing: true)
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
-        Self.clampAndFront(activate: false)
+        DispatchQueue.main.async { Self.orderFront() }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Self.isQuitting = true
+        let waiter = DispatchSemaphore(value: 0)
+        Task { @MainActor in
+            await Self.stopRuntime?()
+            waiter.signal()
+        }
+        let deadline = Date().addingTimeInterval(4)
+        while waiter.wait(timeout: .now()) == .timedOut && Date() < deadline {
+            RunLoop.current.run(mode: .common, before: Date().addingTimeInterval(0.05))
+        }
     }
 
     static func restoreWindows(createIfMissing: Bool = false) {
         NSApp.unhide(nil)
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         let mains = NSApp.windows.filter { $0.canBecomeMain && $0.frame.width > 1 }
         if mains.isEmpty && createIfMissing {
             MainWindowOpener.shared.open?()
-            DispatchQueue.main.async { clampAndFront(activate: true) }
-            return
         }
-        clampAndFront(activate: true)
+        DispatchQueue.main.async { orderFront() }
     }
 
-    static func clampAndFront(activate: Bool = true) {
-        if activate {
-            NSApp.activate(ignoringOtherApps: true)
-        }
+    static func orderFront() {
         for window in NSApp.windows where window.canBecomeMain {
             let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
                 ?? CGRect(x: 0, y: 0, width: WindowPlacement.preferred.width, height: WindowPlacement.preferred.height)

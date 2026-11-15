@@ -149,14 +149,19 @@ TlsRecordView ClassifyTlsRecords(const uint8_t* data, size_t size) noexcept;
 LiveClose CloseLiveAccess(const LiveAccessView& view);
 std::string LiveVerdictSummary(const LiveClose& close, const std::string& process, const std::string& path);
 
-// A tree with a sensitive file open, or inside the grace window after it
-// closes, is sampled every pass. After that grace an idle tree is not a
-// reason to stay subscribed.
+// A tree with a sensitive file open, or inside the short grace after it
+// closes, is sampled every pass. The kernel subscription itself stays up
+// much longer: tearing it down when a short-lived process exits drops the
+// next open that arrives while the socket is being created again.
 inline constexpr int64_t kFlowGraceMs = 3000;
+inline constexpr int64_t kSubscriptionHoldMs = 90000;
 inline bool FlowGraceActive(bool file_open, bool have_close_stamp, int64_t since_close_ms, int64_t grace_ms = kFlowGraceMs) noexcept {
     if (file_open) return true;
     if (!have_close_stamp || since_close_ms < 0) return false;
     return since_close_ms < grace_ms;
+}
+inline bool SubscriptionHoldActive(int64_t since_last_sensitive_ms, int64_t hold_ms = kSubscriptionHoldMs) noexcept {
+    return since_last_sensitive_ms >= 0 && since_last_sensitive_ms < hold_ms;
 }
 inline bool IdleWatchTeardownDue(bool any_grace, bool any_subscription) noexcept {
     return !any_grace && any_subscription;
