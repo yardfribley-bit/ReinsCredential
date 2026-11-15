@@ -1058,6 +1058,7 @@ def _tls_port(ca, accepts):
     sock.listen(max(accepts, 1))
     port = sock.getsockname()[1]
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.options |= ssl.OP_NO_TICKET
     context.load_cert_chain(str(ca[2]), str(ca[3]))
 
     def run():

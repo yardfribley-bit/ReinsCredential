@@ -340,6 +340,15 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
             !InUnparsedHandshakeBand(view.file_bytes, flow.tx_previous)) {
             if (!view.window_settled) { defer_unparsed_handshake = true; continue; }
         }
+        // A short counter can be the start of a handshake. Do not commit it as
+        // an upload until the session has finished and the counter stayed
+        // HTTP-sized. The acceptance POST is still an upload once it ends.
+        if (flow.kind == LiveFlowKind::TcpMeasured && flow.established && !flow.plaintext_http &&
+            !(flow.tls_app_data && flow.tls_app_bytes > 0) && !flow.preexisting &&
+            delta > 0 && delta <= view.file_bytes + kHttpFraming && !view.window_settled) {
+            defer_unparsed_handshake = true;
+            continue;
+        }
         if (flow.kind == LiveFlowKind::UdpOrQuic) {
             udp_sum += delta;
             if (!upload_peer && delta > 0) upload_peer = &flow;

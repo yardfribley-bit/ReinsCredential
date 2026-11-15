@@ -257,6 +257,9 @@ int main() {
     assert(InitialFlowBaseline(false, 0, upper) == 0);
     assert(InitialFlowBaseline(false, upper + 1, upper) == upper + 1);
     assert(InitialFlowBaseline(true, upper + 1, upper) == 0);
+    auto early_post = Seen(canary, {Tcp("192.168.1.11:53429", 0, 180, true)});
+    early_post.window_settled = false;
+    assert(CloseLiveAccess(early_post).defer);
     const auto posted = CloseLiveAccess(Seen(canary, {Tcp("192.168.1.11:53429", 0, 180, true)}));
     assert(posted.verdict == UploadVerdict::Uploaded);
     assert(posted.verdict != UploadVerdict::NotFound);
