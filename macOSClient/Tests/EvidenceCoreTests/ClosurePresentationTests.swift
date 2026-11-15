@@ -11,6 +11,20 @@ final class ClosurePresentationTests: XCTestCase {
         XCTAssertTrue(counts.notVisibleReasonKeys.isEmpty)
     }
 
+    func testImpossibleSplitFramesAreDiscarded() {
+        let saved = "{{0, 0}, {260, 3510}}{{0, 0}, {680, 3509.5}}{{0, 0}, {380, 1497}}"
+        XCTAssertTrue(SplitFrameSanitizer.containsImpossibleHeight(saved, maxHeight: 900))
+        XCTAssertEqual(SplitFrameSanitizer.subviewHeights(in: saved), [3510, 3509.5, 1497])
+        XCTAssertFalse(SplitFrameSanitizer.containsImpossibleHeight("{{0, 0}, {260, 800}}", maxHeight: 900))
+        let defaults = UserDefaults(suiteName: "reins-split-\(UUID().uuidString)")!
+        defaults.set(saved, forKey: "NSSplitView Subview Frames SidebarNavigationSplitView")
+        defaults.set("{{0, 0}, {260, 700}}", forKey: "NSSplitView Subview Frames Keep")
+        let removed = SplitFrameSanitizer.removeImpossibleFrames(defaults: defaults, maxSubviewHeight: 900)
+        XCTAssertEqual(removed, ["NSSplitView Subview Frames SidebarNavigationSplitView"])
+        XCTAssertNil(defaults.string(forKey: "NSSplitView Subview Frames SidebarNavigationSplitView"))
+        XCTAssertEqual(defaults.string(forKey: "NSSplitView Subview Frames Keep"), "{{0, 0}, {260, 700}}")
+    }
+
     func testWindowFrameIsClampedOntoTheVisibleScreen() {
         let visible = CGRect(x: 0, y: 0, width: 1_440, height: 900)
         let saved = CGRect(x: -228, y: 40, width: 164, height: 164)

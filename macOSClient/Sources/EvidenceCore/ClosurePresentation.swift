@@ -29,6 +29,76 @@ public enum WindowPlacement {
     }
 }
 
+/// Saved NSSplitView frames. A subview taller than the screen is not a real
+/// layout; restoring it leaves the visible window blank and keeps laying out.
+public enum SplitFrameSanitizer {
+    public static func containsImpossibleHeight(_ saved: String, maxHeight: CGFloat) -> Bool {
+        guard maxHeight > 1 else { return false }
+        return subviewHeights(in: saved).contains { $0 > maxHeight }
+    }
+
+    public static func subviewHeights(in saved: String) -> [CGFloat] {
+        var heights: [CGFloat] = []
+        let chars = Array(saved)
+        var index = 0
+        func skipSpace() {
+            while index < chars.count, chars[index] == " " || chars[index] == "\n" || chars[index] == "\t" { index += 1 }
+        }
+        func parseNumber() -> CGFloat? {
+            skipSpace()
+            let start = index
+            if index < chars.count, chars[index] == "-" || chars[index] == "+" { index += 1 }
+            var saw = false
+            while index < chars.count, chars[index].isNumber || chars[index] == "." {
+                saw = true
+                index += 1
+            }
+            guard saw, let value = Double(String(chars[start..<index])), value.isFinite else { return nil }
+            return CGFloat(value)
+        }
+        while index < chars.count {
+            if chars[index] == "{", index + 1 < chars.count, chars[index + 1] == "{" {
+                index += 2
+                guard parseNumber() != nil else { continue }
+                skipSpace()
+                if index < chars.count, chars[index] == "," { index += 1 }
+                guard parseNumber() != nil else { continue }
+                while index < chars.count, chars[index] != "{" { index += 1 }
+                if index < chars.count, chars[index] == "{" { index += 1 }
+                guard parseNumber() != nil else { continue }
+                skipSpace()
+                if index < chars.count, chars[index] == "," { index += 1 }
+                if let height = parseNumber() { heights.append(height) }
+            } else {
+                index += 1
+            }
+        }
+        return heights
+    }
+
+    /// Removes saved split frames whose subviews cannot fit on a real display.
+    /// Returns the defaults keys that were deleted.
+    public static func removeImpossibleFrames(defaults: UserDefaults, maxSubviewHeight: CGFloat) -> [String] {
+        let keys = defaults.dictionaryRepresentation().keys.filter { $0.contains("NSSplitView Subview Frames") }
+        var removed: [String] = []
+        for key in keys {
+            let texts: [String]
+            if let text = defaults.string(forKey: key) {
+                texts = [text]
+            } else if let parts = defaults.array(forKey: key) as? [String] {
+                texts = parts
+            } else {
+                continue
+            }
+            if texts.contains(where: { containsImpossibleHeight($0, maxHeight: maxSubviewHeight) }) {
+                defaults.removeObject(forKey: key)
+                removed.append(key)
+            }
+        }
+        return removed.sorted()
+    }
+}
+
 public enum ClosureScope: String, CaseIterable, Identifiable, Sendable {
     case currentRun
     case history

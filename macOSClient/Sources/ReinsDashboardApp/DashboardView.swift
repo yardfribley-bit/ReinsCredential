@@ -23,19 +23,13 @@ struct DashboardView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 260)
-        } content: {
-            evidenceContent
-                .navigationSplitViewColumnWidth(min: 450, ideal: 680)
-        } detail: {
-            detailColumn
-                .navigationSplitViewColumnWidth(min: 300, ideal: 380)
+        GeometryReader { proxy in
+            let width = proxy.size.width > 2 ? proxy.size.width : WindowPlacement.minimum.width
+            let height = proxy.size.height > 2 ? proxy.size.height : WindowPlacement.minimum.height
+            split
+                .frame(width: width, height: height)
         }
-        .navigationSplitViewStyle(.balanced)
         .navigationTitle("ReinsCredential")
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .toolbar {
             ToolbarItemGroup {
@@ -114,6 +108,20 @@ struct DashboardView: View {
         }
         .fileExporter(isPresented: $exportPresented, document: exportDocument, contentType: exportType, defaultFilename: exportName) { _ in }
         .sheet(isPresented: $windowSheet) { windowExportSheet }
+    }
+
+    private var split: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            sidebar
+                .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 260)
+        } content: {
+            evidenceContent
+                .navigationSplitViewColumnWidth(min: 450, ideal: 680, max: 1_200)
+        } detail: {
+            detailColumn
+                .navigationSplitViewColumnWidth(min: 280, ideal: 360, max: 520)
+        }
+        .navigationSplitViewStyle(.balanced)
     }
 
     @ViewBuilder

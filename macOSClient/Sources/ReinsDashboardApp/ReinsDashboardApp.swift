@@ -102,6 +102,11 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     static var isQuitting = false
     static var stopRuntime: (@MainActor () async -> Void)?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        let tallest = NSScreen.screens.map(\.frame.height).max() ?? 1_600
+        _ = SplitFrameSanitizer.removeImpossibleFrames(defaults: .standard, maxSubviewHeight: tallest)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async { Self.restoreWindows() }
     }
@@ -112,11 +117,14 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
+        _ = (application, urls)
         Self.restoreWindows(createIfMissing: true)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        DispatchQueue.main.async { Self.orderFront() }
+        // Already active. Resizing or activating again starts another display
+        // cycle, which lays the split view out forever.
+        DispatchQueue.main.async { Self.orderFront(allowResize: false) }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -144,17 +152,84 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
         if mains.isEmpty && createIfMissing {
             MainWindowOpener.shared.open?()
         }
-        DispatchQueue.main.async { orderFront() }
+        DispatchQueue.main.async {
+            orderFront(allowResize: true)
+            repairSplitViews()
+        }
     }
 
-    static func orderFront() {
+    /// Brings a main window forward. `allowResize` is only for the explicit
+    /// open/reopen path, and only when the saved frame is actually off screen.
+    private static var orderingFront = false
+
+    static func orderFront(allowResize: Bool) {
+        guard !orderingFront else { return }
+        orderingFront = true
+        defer { orderingFront = false }
         for window in NSApp.windows where window.canBecomeMain {
-            let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
-                ?? CGRect(x: 0, y: 0, width: WindowPlacement.preferred.width, height: WindowPlacement.preferred.height)
-            window.setFrame(WindowPlacement.clamped(saved: window.frame, visible: visible), display: true)
-            window.makeKeyAndOrderFront(nil)
-            window.orderFrontRegardless()
+            if allowResize, let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+                let clamped = WindowPlacement.clamped(saved: window.frame, visible: visible)
+                if !framesMatch(window.frame, clamped) {
+                    window.setFrame(clamped, display: false)
+                }
+            }
+            if !window.isKeyWindow || window.isMiniaturized {
+                window.makeKeyAndOrderFront(nil)
+                window.orderFrontRegardless()
+            }
         }
+        repairSplitViews()
+    }
+
+    static func repairSplitViews() {
+        for window in NSApp.windows where window.canBecomeMain {
+            guard let content = window.contentView else { continue }
+            constrainSplits(content, limit: content.bounds.height)
+        }
+    }
+
+    static func splitViewsFit(_ window: NSWindow) -> Bool {
+        guard let content = window.contentView, content.bounds.height > 2 else { return false }
+        let limit = content.bounds.height + 8
+        var found = false
+        var fits = true
+        func walk(_ view: NSView) {
+            if let split = view as? NSSplitView, split.subviews.count >= 2 {
+                found = true
+                for subview in split.subviews {
+                    if subview.frame.height > limit || subview.frame.height < 1 || subview.frame.width < 1 {
+                        fits = false
+                    }
+                }
+            }
+            for child in view.subviews { walk(child) }
+        }
+        walk(content)
+        return found && fits
+    }
+
+    private static func constrainSplits(_ view: NSView, limit: CGFloat) {
+        if let split = view as? NSSplitView, split.bounds.height > 2 {
+            let cap = min(limit, split.bounds.height) + 1
+            let tooTall = split.subviews.contains { $0.frame.height > cap || $0.frame.height < 1 }
+            if tooTall {
+                let height = split.bounds.height
+                for subview in split.subviews {
+                    var frame = subview.frame
+                    frame.size.height = height
+                    frame.origin.y = 0
+                    subview.frame = frame
+                }
+                split.adjustSubviews()
+            }
+        }
+        let childLimit = view.bounds.height > 2 ? view.bounds.height : limit
+        for child in view.subviews { constrainSplits(child, limit: childLimit) }
+    }
+
+    private static func framesMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.origin.x - rhs.origin.x) < 1 && abs(lhs.origin.y - rhs.origin.y) < 1
+            && abs(lhs.size.width - rhs.size.width) < 1 && abs(lhs.size.height - rhs.size.height) < 1
     }
 }
 
