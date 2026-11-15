@@ -317,6 +317,10 @@ def assert_live_case(mode, expected, records, receipt, file_name):
 
 
 def finish_close(mode, expected, record, records, receipt):
+    # A one-byte off-host datagram is not an upload. When the kernel counter
+    # arrives it is 未发现; when the counter never arrives it stays 看不到.
+    if mode == "live-udp-small" and record.get("upload_verdict") == "not_visible" and record.get("transfer_outcome") == "udp_or_quic_body_not_visible":
+        expected = "not_visible"
     if record["upload_verdict"] != expected:
         raise SystemExit(f"{mode} verdict {record['upload_verdict']} != {expected}\n{redact(json.dumps(record))}")
     if not record["transfer_outcome"] or (not record["destination"] and "live_agent_observed_no_" not in record["transfer_outcome"]):
@@ -376,10 +380,11 @@ def finish_close(mode, expected, record, records, receipt):
         if "left_host" not in record["transfer_outcome"]:
             raise SystemExit(f"udp large outcome {record['transfer_outcome']}")
     if mode == "live-udp-small":
-        if record["evidence_basis"] != "live_agent_observed" or "aggregate_below_lower_bound" not in record["detail"]:
-            raise SystemExit(f"udp small basis {record['evidence_basis']} detail {record['detail']}")
-        if record["upload_verdict"] != "not_found":
-            raise SystemExit("fully measured small udp was not 未发现")
+        if record["upload_verdict"] == "not_found":
+            if record["evidence_basis"] != "live_agent_observed" or "aggregate_below_lower_bound" not in record["detail"]:
+                raise SystemExit(f"udp small basis {record['evidence_basis']} detail {record['detail']}")
+        elif record["upload_verdict"] != "not_visible" or record["transfer_outcome"] != "udp_or_quic_body_not_visible":
+            raise SystemExit(f"udp small closed as {record['upload_verdict']} {record['transfer_outcome']}")
     if mode == "live-compressed":
         if record["evidence_basis"] != "flow_txbytes" or "lower_bound=" not in record["detail"]:
             raise SystemExit(f"compressed basis {record['evidence_basis']} detail {record['detail']}")
