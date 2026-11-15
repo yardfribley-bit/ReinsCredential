@@ -21,9 +21,15 @@ done
 if kill -0 "$smoke_pid" 2>/dev/null; then
   kill "$smoke_pid" 2>/dev/null || true
   echo "dashboard smoke timed out" >&2
+  if [[ -f "$smoke_dir/ui-smoke.json" ]]; then cat "$smoke_dir/ui-smoke.json" >&2; fi
   exit 1
 fi
+set +e
 wait "$smoke_pid"
+smoke_code=$?
+set -e
+if [[ -f "$smoke_dir/ui-smoke.json" ]]; then cat "$smoke_dir/ui-smoke.json" >&2; fi
+if [[ "$smoke_code" -ne 0 ]]; then exit "$smoke_code"; fi
 python3 - "$smoke_dir/ui-smoke.json" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1]))

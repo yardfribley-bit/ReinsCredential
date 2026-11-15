@@ -53,24 +53,32 @@ enum DashboardSmoke {
                 guard sidebarRows >= 1 else { throw SmokeFailure.noRows(column: "sidebar", count: sidebarRows) }
                 guard listRows >= 1 else { throw SmokeFailure.noRows(column: "list", count: listRows) }
                 let pixels = try contentPixels(view)
-                guard pixels.sidebar >= 40 else { throw SmokeFailure.blankColumn(column: "sidebar", pixels: pixels.sidebar) }
-                guard pixels.list >= 40 else { throw SmokeFailure.blankColumn(column: "list", pixels: pixels.list) }
-                guard pixels.inspector >= 40 else { throw SmokeFailure.blankColumn(column: "inspector", pixels: pixels.inspector) }
+                guard pixels.sidebarDark >= 30, pixels.sidebarLight >= 30 else {
+                    throw SmokeFailure.blankColumn(column: "sidebar", pixels: pixels.sidebarDark)
+                }
+                guard pixels.listDark >= 30, pixels.listLight >= 30 else {
+                    throw SmokeFailure.blankColumn(column: "list", pixels: pixels.listDark)
+                }
+                guard pixels.inspectorDark >= 30, pixels.inspectorLight >= 30 else {
+                    throw SmokeFailure.blankColumn(column: "inspector", pixels: pixels.inspectorDark)
+                }
                 guard inspectorHasSelection(in: view, minX: width * 0.65) else { throw SmokeFailure.emptyInspector }
                 let report: [String: Any] = [
                     "status": "rendered",
                     "fixture_records": store.records.count,
                     "sidebar_rows": sidebarRows,
                     "list_rows": listRows,
-                    "sidebar_pixels": pixels.sidebar,
-                    "list_pixels": pixels.list,
-                    "inspector_pixels": pixels.inspector,
+                    "sidebar_pixels": pixels.sidebarDark,
+                    "list_pixels": pixels.listDark,
+                    "inspector_pixels": pixels.inspectorDark,
                     "selected_chain": store.selectedChain?.owningAgentName ?? ""
                 ]
                 try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                     .write(to: directory.appendingPathComponent("ui-smoke.json"), options: .atomic)
             } catch {
                 failed = true
+            let message = "dashboard smoke failed: \(error.localizedDescription)\n"
+            try? FileHandle.standardError.write(Data(message.utf8))
                 let report: [String: Any] = ["status": "failed", "error": error.localizedDescription]
                 if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
                     try? data.write(to: directory.appendingPathComponent("ui-smoke.json"), options: .atomic)
@@ -121,7 +129,11 @@ enum DashboardSmoke {
         return view.subviews.contains { inspectorHasSelection(in: $0, minX: minX) }
     }
 
-    private struct Pixels { var sidebar = 0, list = 0, inspector = 0 }
+    private struct Pixels {
+        var sidebarDark = 0, sidebarLight = 0
+        var listDark = 0, listLight = 0
+        var inspectorDark = 0, inspectorLight = 0
+    }
 
     /// Off-screen render of this window's content. A blank column is one color.
     private static func contentPixels(_ view: NSView) throws -> Pixels {
@@ -143,8 +155,9 @@ enum DashboardSmoke {
         NSGraphicsContext.restoreGraphicsState()
         guard let data = rep.bitmapData else { throw SmokeFailure.noBitmap }
         let rowBytes = rep.bytesPerRow
-        func ink(_ x0: Int, _ x1: Int) -> Int {
-            var count = 0
+        func ink(_ x0: Int, _ x1: Int) -> (dark: Int, light: Int) {
+            var dark = 0
+            var light = 0
             var y = 16
             while y < height - 16 {
                 var x = x0
@@ -153,18 +166,22 @@ enum DashboardSmoke {
                     let red = Int(data[index])
                     let green = Int(data[index + 1])
                     let blue = Int(data[index + 2])
-                    let nearWhite = red > 248 && green > 248 && blue > 248
-                    let flatGrey = abs(red - green) < 4 && abs(green - blue) < 4 && red > 220
-                    if !nearWhite && !flatGrey { count += 1 }
+                    if red < 90 && green < 90 && blue < 90 { dark += 1 }
+                    else if red > 200 && green > 200 && blue > 200 { light += 1 }
                     x += 4
                 }
                 y += 4
             }
-            return count
+            return (dark, light)
         }
         let side = max(40, width / 5)
         let inspect = max(40, width / 4)
-        return Pixels(sidebar: ink(4, side), list: ink(side + 8, width - inspect), inspector: ink(width - inspect + 8, width - 4))
+        let sidebar = ink(4, side)
+        let list = ink(side + 8, width - inspect)
+        let inspector = ink(width - inspect + 8, width - 4)
+        return Pixels(sidebarDark: sidebar.dark, sidebarLight: sidebar.light,
+                      listDark: list.dark, listLight: list.light,
+                      inspectorDark: inspector.dark, inspectorLight: inspector.light)
     }
 
     private enum SmokeFailure: LocalizedError {
