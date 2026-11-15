@@ -411,7 +411,9 @@ final class RuntimeController: ObservableObject {
     private static func fileStamp(_ url: URL) -> (size: Int64, mtime: Int64) {
         var info = stat()
         guard stat(url.path, &info) == 0 else { return (-1, -1) }
-        return (Int64(info.st_size), info.st_mtimespec.tv_sec * 1_000_000_000 + info.st_mtimespec.tv_nsec)
+        let seconds = Int64(info.st_mtimespec.tv_sec)
+        let nanos = Int64(info.st_mtimespec.tv_nsec)
+        return (Int64(info.st_size), seconds * 1_000_000_000 + nanos)
     }
 
     private func publish(state nextState: RuntimeUIState, status: String) {
