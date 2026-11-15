@@ -179,19 +179,47 @@ public final class WebDashboardServer: @unchecked Sendable {
         return String(cString: buffer)
     }
 
+    /// One `read` often returns only a prefix of the request. Curl and other
+    /// clients write the request line and the headers separately, and the
+    /// accepted socket can be non-blocking because the listener is. Keep
+    /// reading until the header terminator, the byte cap, EOF, or the deadline.
     private static func readHeaders(_ fd: Int32) -> Data {
+        let flags = fcntl(fd, F_GETFL)
+        if flags >= 0 { _ = fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) }
         var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 2048)
-        var marker = Data()
-        marker.append(contentsOf: [UInt8(13), 10, 13, 10])
-        while data.count < 8192 {
-            let count = Darwin.read(fd, &buffer, min(buffer.count, 8192 - data.count))
-            if count < 0 && errno == EINTR { continue }
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        let deadline = Date().addingTimeInterval(2)
+        while data.count < headerByteCap, !headerIsComplete(data) {
+            let remaining = Int32(deadline.timeIntervalSinceNow * 1000)
+            if remaining <= 0 { break }
+            var pollSet = pollfd()
+            pollSet.fd = fd
+            pollSet.events = Int16(POLLIN)
+            let waited = poll(&pollSet, nfds_t(1), remaining)
+            if waited < 0 && errno == EINTR { continue }
+            if waited <= 0 { break }
+            let count = Darwin.read(fd, &buffer, min(buffer.count, headerByteCap - data.count))
+            if count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) { continue }
             if count <= 0 { break }
             data.append(buffer, count: count)
-            if data.range(of: marker) != nil { break }
         }
         return data
+    }
+
+    private static let headerByteCap = 8192
+
+    private static func headerIsComplete(_ data: Data) -> Bool {
+        guard data.count >= 4 else { return false }
+        return data.withUnsafeBytes { raw in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            guard let base = bytes.baseAddress else { return false }
+            for index in 0...(bytes.count - 4) {
+                if base[index] == 13, base[index + 1] == 10, base[index + 2] == 13, base[index + 3] == 10 {
+                    return true
+                }
+            }
+            return false
+        }
     }
 
     private static func writeAll(_ fd: Int32, _ data: Data) {

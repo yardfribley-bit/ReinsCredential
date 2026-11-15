@@ -11,6 +11,32 @@ final class WebDashboardTests: XCTestCase {
     private let bearer = "raw-token-value"
     private let synthetic = "SYNTHETIC_EGRESS_SECRET_v2_0123456789abcdef"
 
+    func testHeaderSplitAcrossWritesStillReturns200() throws {
+        let server = try start(WebDashboardSources(evidenceFiles: [], presentsLiveRuntime: true))
+        let pieces = [
+            "GET / HTTP/1.1\r\nHo",
+            "st: 127.0.0.1:\(server.boundPort)\r\nConnection: close\r",
+            "\n\r",
+            "\n"
+        ]
+        let response = try sendPieces(port: server.boundPort, pieces: pieces, pause: 0.05)
+        XCTAssertEqual(response.status, 200)
+        XCTAssertTrue(response.body.contains("ReinsCredential"))
+        XCTAssertTrue(response.body.contains("证据链"))
+        XCTAssertFalse(response.body.contains("无法解析请求"))
+    }
+
+    func testRepeatedLoopbackRequestsAllReturn200() throws {
+        let server = try start(WebDashboardSources(evidenceFiles: [], presentsLiveRuntime: true))
+        for index in 0..<20 {
+            let response = try WebDashboardHTTP.exchange(port: server.boundPort, method: "GET", path: "/",
+                                                        hostHeader: "127.0.0.1:\(server.boundPort)")
+            XCTAssertEqual(response.status, 200, "request \(index)")
+            XCTAssertTrue(response.body.contains("ReinsCredential"), "request \(index)")
+            XCTAssertFalse(response.body.contains("无法解析请求"), "request \(index)")
+        }
+    }
+
     func testLoopbackBareURLShowsEmptyLiveDashboard() throws {
         let missing = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("reins-web-missing-\(UUID().uuidString)/evidence.jsonl")
@@ -193,6 +219,61 @@ final class WebDashboardTests: XCTestCase {
         for secret in [secret, cookie, assignmentToken, bearer, synthetic] {
             XCTAssertFalse(body.contains(secret), secret, file: file, line: line)
         }
+    }
+
+    private func sendPieces(port: UInt16, pieces: [String], pause: TimeInterval) throws -> WebDashboardHTTP.Response {
+        let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw WebDashboardError.socket("socket", errno) }
+        defer { Darwin.close(fd) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        guard inet_pton(AF_INET, "127.0.0.1", &address.sin_addr) == 1 else {
+            throw WebDashboardError.refusedBindHost
+        }
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard connected == 0 else { throw WebDashboardError.socket("connect", errno) }
+        var timeout = timeval()
+        timeout.tv_sec = 3
+        timeout.tv_usec = 0
+        let timeoutLength = socklen_t(MemoryLayout<timeval>.size)
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, timeoutLength)
+        _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, timeoutLength)
+        for (index, piece) in pieces.enumerated() {
+            if index > 0 { Thread.sleep(forTimeInterval: pause) }
+            var bytes = WebUTF8.data(piece)
+            try bytes.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress else { return }
+                var sent = 0
+                while sent < raw.count {
+                    let count = Darwin.write(fd, base.advanced(by: sent), raw.count - sent)
+                    if count < 0 && errno == EINTR { continue }
+                    if count <= 0 { throw WebDashboardError.socket("write", errno) }
+                    sent += count
+                }
+            }
+        }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 8192)
+        while data.count < 8_000_000 {
+            let count = Darwin.read(fd, &buffer, buffer.count)
+            if count < 0 && errno == EINTR { continue }
+            if count < 0 { throw WebDashboardError.socket("read", errno) }
+            if count == 0 { break }
+            data.append(buffer, count: count)
+        }
+        guard let text = String(data: data, encoding: .utf8), let marker = text.range(of: "\r\n\r\n") else {
+            throw WebDashboardError.malformedResponse
+        }
+        let statusLine = text[..<marker.lowerBound].split(separator: "\r\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+        let fields = statusLine.split(separator: " ")
+        guard fields.count >= 2, let status = Int(fields[1]) else { throw WebDashboardError.malformedResponse }
+        return WebDashboardHTTP.Response(status: status, body: String(text[marker.upperBound...]))
     }
 
     private func start(_ sources: WebDashboardSources) throws -> WebDashboardServer {
