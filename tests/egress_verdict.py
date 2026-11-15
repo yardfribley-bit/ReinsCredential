@@ -926,12 +926,21 @@ def live_field_rounds(directory, binary, secret, ca):
     script.write_text(FIELD_CASE)
     os.chmod(script, 0o700)
     proc = subprocess.Popen(
-        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "420",
+        [str(PROXY), "--log", str(log), "--sensitive-file", str(secret), "--watch-live", "--duration", "0",
          "--sample-ms", "40"],
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     gaps = [1, 5, 12, 30, 50]
     try:
-        time.sleep(60)
+        time.sleep(0.5)
+        if proc.poll() is not None:
+            err = proc.stderr.read() if proc.stderr else ""
+            detail = ""
+            for line in redact(err).splitlines():
+                if "duration" in line or "egress_proxy_fatal" in line or "unknown option" in line:
+                    detail = line[:240]
+                    break
+            raise SystemExit(f"field proxy exited early code {proc.returncode} {detail}")
+        time.sleep(59.5)
         for _round in range(2):
             steps = [
                 ("refused", [str(binary), "refused-short", str(secret), host, str(refused_port), str(directory / "go")], "attempted"),
