@@ -10,3 +10,35 @@ trap 'rm -rf "$test_dir"' EXIT
   "$repo_dir/EvidenceStore.cpp" -framework CoreServices -o "$test_dir/emit-evidence"
 "$test_dir/emit-evidence" > "$test_dir/backend.jsonl"
 REINS_BACKEND_FIXTURE="$test_dir/backend.jsonl" /usr/bin/swift test --package-path "$client_dir" "$@"
+bin="$(/usr/bin/swift build --package-path "$client_dir" --show-bin-path)"
+smoke_dir="$(mktemp -d "${TMPDIR:-/tmp/}reins-ui-smoke.XXXXXX")"
+"$bin/ReinsDashboard" --smoke-test "$smoke_dir" --smoke-evidence "$smoke_dir/fixture.jsonl" --smoke-seed-split &
+smoke_pid=$!
+for _ in $(seq 1 180); do
+  if ! kill -0 "$smoke_pid" 2>/dev/null; then break; fi
+  sleep 1
+done
+if kill -0 "$smoke_pid" 2>/dev/null; then
+  kill "$smoke_pid" 2>/dev/null || true
+  echo "dashboard smoke timed out" >&2
+  if [[ -f "$smoke_dir/ui-smoke.json" ]]; then cat "$smoke_dir/ui-smoke.json" >&2; fi
+  exit 1
+fi
+set +e
+wait "$smoke_pid"
+smoke_code=$?
+set -e
+if [[ -f "$smoke_dir/ui-smoke.json" ]]; then cat "$smoke_dir/ui-smoke.json" >&2; fi
+if [[ "$smoke_code" -ne 0 ]]; then exit "$smoke_code"; fi
+python3 - "$smoke_dir/ui-smoke.json" <<'PY'
+import json, sys
+report = json.load(open(sys.argv[1]))
+assert report.get("status") == "rendered", report
+assert report.get("sidebar_rows", 0) >= 1, report
+assert report.get("list_rows", 0) >= 1, report
+assert report.get("sidebar_pixels", 0) >= 15, report
+assert report.get("list_pixels", 0) >= 15, report
+assert report.get("inspector_pixels", 0) >= 15, report
+print("PASS dashboard smoke", report["sidebar_rows"], report["list_rows"])
+PY
+rm -rf "$smoke_dir"

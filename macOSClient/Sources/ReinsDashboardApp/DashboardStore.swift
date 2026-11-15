@@ -90,6 +90,9 @@ final class DashboardStore: ObservableObject {
     }
 
     @Published private(set) var records: [EvidenceRecord] = []
+    /// Closures and the records chains are built from. Separate from `records`.
+    @Published private(set) var chainRecords: [EvidenceRecord] = []
+    private var cachedChains: [EvidenceChain] = []
     @Published var riskFilter: RiskFilter = .all
     @Published var agentFilter: AgentFilter = .all
     @Published var searchText = ""
@@ -107,9 +110,9 @@ final class DashboardStore: ObservableObject {
 
     /// Live updates cannot overwrite an imported snapshot or synthetic demo.
     /// Keep selection and filters stable as new records arrive.
-    func applyLive(records: [EvidenceRecord]) {
+    func applyLive(records: [EvidenceRecord], chainRecords: [EvidenceRecord]? = nil) {
         guard mode == .live, !isLoading else { return }
-        self.records = records
+        storeDataset(records: records, chainRecords: chainRecords)
         reconcileSelection()
     }
 
@@ -126,7 +129,10 @@ final class DashboardStore: ObservableObject {
         applyLive(records: records)
     }
 
-    var chains: [EvidenceChain] { EvidenceChainBuilder.chains(from: records) }
+    var chains: [EvidenceChain] { cachedChains }
+
+    /// Chain detail looks up members here, including closures the events window has dropped.
+    var recordsForChains: [EvidenceRecord] { chainRecords.isEmpty ? records : chainRecords }
 
     var chainsMatchingRiskAndSearch: [EvidenceChain] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -202,7 +208,7 @@ final class DashboardStore: ObservableObject {
 
     func showSamples() {
         guard !isLoading else { return }
-        records = EvidenceRecord.sampleRecords
+        storeDataset(records: EvidenceRecord.sampleRecords)
         importedURL = nil
         rejectedLines = []
         incompleteTail = false
@@ -231,7 +237,7 @@ final class DashboardStore: ObservableObject {
                     throw ImportFailure.noUsableRecords(rejected: result.rejectedLines.count,
                                                         incomplete: result.incompleteTail)
                 }
-                records = result.records // Reader supplies timestamp + UUID ordering.
+                storeDataset(records: result.records) // Reader supplies timestamp + UUID ordering.
                 rejectedLines = result.rejectedLines
                 incompleteTail = result.incompleteTail
                 importedURL = url
@@ -245,6 +251,17 @@ final class DashboardStore: ObservableObject {
                 // A failed import never replaces the last usable dataset.
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    private func storeDataset(records: [EvidenceRecord], chainRecords explicitChain: [EvidenceRecord]? = nil) {
+        let chain = explicitChain ?? records
+        let chainChanged = chain.count != chainRecords.count
+            || zip(chain, chainRecords).contains { $0.id != $1.id }
+        self.records = records
+        if chainChanged || (cachedChains.isEmpty && !chain.isEmpty) {
+            chainRecords = chain
+            cachedChains = EvidenceChainBuilder.chains(from: chain)
         }
     }
 

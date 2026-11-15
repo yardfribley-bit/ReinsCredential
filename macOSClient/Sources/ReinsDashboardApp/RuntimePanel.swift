@@ -53,6 +53,15 @@ struct RuntimeStatusPanel: View {
                 }
                 .disabled(runtime.isBusy)
             }
+            if !runtime.coverageKeys.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(runtime.coverageKeys, id: \.self) { key in
+                        Text(L10n.tr(key))
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
             if runtime.state == .approvalRequired {
                 Button(L10n.tr("runtime.openSettings"), action: runtime.openBackgroundSettings)
                     .buttonStyle(.link)

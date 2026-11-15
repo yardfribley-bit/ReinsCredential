@@ -2,6 +2,7 @@
 #include "FileMonitor.h"
 #include "SensitiveDefaults.h"
 #include "SubtreeWatcher.h"
+#include "WatchPriority.h"
 #include <climits>
 #include <algorithm>
 #include <csignal>
@@ -58,6 +59,7 @@ void Health(agentsec::ProcessCache& cache, agentsec::FileMonitor& files, agentse
 }
 } // namespace
 int main(int argc, char** argv) {
+    KeepCollectingDuringDisplaySleep();
     using namespace agentsec;
     try {
         std::string log = "evidence.jsonl";

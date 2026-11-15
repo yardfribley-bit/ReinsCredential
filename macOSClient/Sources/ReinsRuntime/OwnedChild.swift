@@ -42,6 +42,9 @@ final class OwnedChild {
         try check(posix_spawnattr_setsigdefault(&attributes, &defaults), "Reset child signal handlers")
         try check(posix_spawnattr_setsigmask(&attributes, &mask), "Block stop signals until the child is ready")
         try check(posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT)), "Set child spawn flags")
+        // A background QoS class is what macOS defers across display sleep.
+        // User-initiated keeps the 100 ms file window on the same cadence.
+        posix_spawnattr_set_qos_class_np(&attributes, QOS_CLASS_USER_INITIATED)
         let values = [executable.path] + arguments
         let strings = values.map { strdup($0) }
         defer { for pointer in strings { free(pointer) } }

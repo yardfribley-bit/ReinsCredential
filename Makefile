@@ -1,7 +1,7 @@
 CXX := clang++
 CXXFLAGS := -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror -pthread
-LDLIBS := -framework CoreServices -lz
-CORE := ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp EgressVerdict.cpp
+LDLIBS := -framework CoreServices -framework Foundation -lz
+CORE := ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp EgressVerdict.cpp WatchPriority.cpp
 HEADERS := $(wildcard *.h)
 
 .PHONY: all check audit-check audit-native shutdown-probe integration acceptance clean live-flow-verdict
