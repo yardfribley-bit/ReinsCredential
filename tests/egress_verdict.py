@@ -1321,8 +1321,11 @@ def main():
         subprocess.check_call(["/usr/bin/clang", "-O2", "-o", str(unknown), str(ROOT / "tests/live_agent.c")])
         os.chmod(unknown, 0o755)
         skipped = set()
+        udp_small = None
         for mode in LIVE_VERDICTS:
             kind = live_case(directory, mode, unknown if mode == "live-unknown-app" else binary, secret)
+            if mode == "live-udp-small" and kind in ("not_found", "not_visible"):
+                udp_small = kind
             if kind == "skipped":
                 skipped.add(mode)
                 print(f"SKIP {mode} no routable address")
@@ -1397,6 +1400,8 @@ def main():
         raise SystemExit(f"missing cpu samples idle={len(idle_cpu)} active={len(active_cpu)}")
     counted = dict(LAUNCHED_VERDICTS)
     counted.update({mode: verdict for mode, verdict in LIVE_VERDICTS.items() if mode not in skipped})
+    if udp_small in ("not_found", "not_visible"):
+        counted["live-udp-small"] = udp_small
     if triplet == "ok":
         for index in range(12):
             counted[f"round-post-{index}"] = "uploaded"

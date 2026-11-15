@@ -65,7 +65,7 @@ enum DashboardSmoke {
                     "sidebar_pixels": pixels.sidebar,
                     "list_pixels": pixels.list,
                     "inspector_pixels": pixels.inspector,
-                    "selected_chain": store.selectedChain?.processName ?? ""
+                    "selected_chain": store.selectedChain?.owningAgentName ?? ""
                 ]
                 try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                     .write(to: directory.appendingPathComponent("ui-smoke.json"), options: .atomic)
