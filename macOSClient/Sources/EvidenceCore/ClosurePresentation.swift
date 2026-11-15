@@ -71,9 +71,24 @@ public enum SplitFrameSanitizer {
         return screenHeight > 1 ? screenHeight : 1_600
     }
 
-    /// Rewrites split-frame text so every subview height is at most `maxHeight`.
-    /// Widths and the YES/NO flags stay. This is what a defaults write must store.
-    public static func clampFrameText(_ saved: String, maxHeight: CGFloat) -> String {
+    /// Fits one split column into the hosting split bounds. Height follows the
+    /// bounds. Width stays unless it would extend past the bounds. `y` is moved
+    /// so `y + height` stays inside.
+    public static func fitted(_ frame: CGRect, into bounds: CGRect) -> CGRect {
+        guard bounds.width > 1, bounds.height > 1 else { return frame }
+        var frame = frame
+        frame.size.height = bounds.height
+        frame.origin.y = bounds.minY
+        if frame.size.width > bounds.width { frame.size.width = bounds.width }
+        if frame.origin.x < bounds.minX { frame.origin.x = bounds.minX }
+        if frame.maxX > bounds.maxX { frame.origin.x = max(bounds.minX, bounds.maxX - frame.width) }
+        return frame
+    }
+
+    /// Rewrites saved split frames so each column fills `bounds` and keeps its
+    /// divider width. The key is not deleted.
+    public static func clampFrameText(_ saved: String, bounds: CGRect) -> String {
+        guard bounds.width > 1, bounds.height > 1 else { return saved }
         var ranges: [Range<String.Index>] = []
         var values: [CGFloat] = []
         var index = saved.startIndex
@@ -93,40 +108,51 @@ public enum SplitFrameSanitizer {
             ranges.append(start..<index)
             values.append(CGFloat(value))
         }
-        var result = saved
-        var heightIndex = 3
         var replacements: [(Range<String.Index>, String)] = []
-        while heightIndex < values.count {
-            if values[heightIndex] > maxHeight {
-                replacements.append((ranges[heightIndex], String(format: "%.6f", Double(maxHeight))))
+        var cursor = 0
+        while cursor + 3 < values.count {
+            let raw = CGRect(x: values[cursor], y: values[cursor + 1], width: values[cursor + 2], height: values[cursor + 3])
+            let fitted = fitted(raw, into: bounds)
+            let next = [fitted.origin.x, fitted.origin.y, fitted.width, fitted.height]
+            for offset in 0..<4 where abs(next[offset] - values[cursor + offset]) > 0.001 {
+                replacements.append((ranges[cursor + offset], String(format: "%.6f", Double(next[offset]))))
             }
-            heightIndex += 4
+            cursor += 4
         }
+        var result = saved
         for (range, text) in replacements.reversed() {
             result.replaceSubrange(range, with: text)
         }
         return result
     }
 
+    public static func framesFit(_ value: Any?, bounds: CGRect) -> Bool {
+        guard bounds.width > 1, bounds.height > 1 else { return false }
+        let texts = frameTexts(value)
+        guard !texts.isEmpty else { return false }
+        return texts.allSatisfy { clampFrameText($0, bounds: bounds) == $0 }
+    }
+
     /// Corrects a defaults value in place. Returns the value to store, and whether it changed.
-    public static func correcting(_ value: Any?, maxHeight: CGFloat) -> (stored: Any, changed: Bool) {
+    public static func correcting(_ value: Any?, bounds: CGRect) -> (stored: Any, changed: Bool) {
         let texts = frameTexts(value)
         guard !texts.isEmpty else { return (0, false) }
-        let fixed = texts.map { clampFrameText($0, maxHeight: maxHeight) }
+        let fixed = texts.map { clampFrameText($0, bounds: bounds) }
         let changed = fixed != texts
         if value is String { return (fixed[0], changed) }
         return (fixed, changed)
     }
 
-    /// Rewrites every saved split frame taller than the window. The key stays;
-    /// its height becomes the window height. Widths are unchanged.
+    /// Rewrites every saved split frame into `bounds`. The key stays. Column
+    /// height becomes `bounds.height`; divider widths stay when they fit.
     @discardableResult
-    public static func correctSavedFrames(defaults: UserDefaults, maxSubviewHeight: CGFloat) -> [String] {
+    public static func correctSavedFrames(defaults: UserDefaults, bounds: CGRect) -> [String] {
+        guard bounds.width > 1, bounds.height > 1 else { return [] }
         let keys = defaults.dictionaryRepresentation().keys.filter { $0.contains("NSSplitView Subview Frames") }
         var changed: [String] = []
         for key in keys {
             let original = defaults.object(forKey: key)
-            let result = correcting(original, maxHeight: maxSubviewHeight)
+            let result = correcting(original, bounds: bounds)
             if result.changed {
                 defaults.set(result.stored, forKey: key)
                 changed.append(key)

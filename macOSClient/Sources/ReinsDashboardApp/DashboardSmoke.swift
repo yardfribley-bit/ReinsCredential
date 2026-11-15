@@ -63,23 +63,30 @@ enum DashboardSmoke {
                 }
                 guard rowIsVisible(in: view, window: window) else { throw SmokeFailure.hiddenRows }
                 guard inspectorHasSelection(in: view, window: window) else { throw SmokeFailure.emptyInspector }
-                let windowHeight = window.frame.height
+                let contentRect = CGRect(origin: .zero, size: window.contentLayoutRect.size)
+                let persisted = SplitFrameCap.hostingBounds(in: window)
+                guard persisted.height > 2, persisted.height <= contentRect.height + 1 else {
+                    throw SmokeFailure.savedHeight(saved: persisted.height, window: contentRect.height)
+                }
                 let savedHeight = SplitFrameSanitizer.tallestSubviewHeight(in: .standard)
-                if savedHeight > windowHeight {
-                    throw SmokeFailure.savedHeight(saved: savedHeight, window: windowHeight)
+                if savedHeight > contentRect.height + 1 {
+                    throw SmokeFailure.savedHeight(saved: savedHeight, window: contentRect.height)
                 }
                 let seeded = [
                     "NSSplitView Subview Frames main-AppWindow-1, SidebarNavigationSplitView",
                     "NSSplitView Subview Frames main-AppWindow-1, ListRewrite",
-                    "NSSplitView Subview Frames SidebarNavigationSplitView"
+                    "NSSplitView Subview Frames SidebarNavigationSplitView",
+                    "NSSplitView Subview Frames main-AppWindow-1, DocumentHeight"
                 ]
                 for key in seeded {
                     guard let stored = UserDefaults.standard.object(forKey: key) else { throw SmokeFailure.missingSplitKey(key) }
-                    let height = SplitFrameSanitizer.tallestHeight(of: stored)
-                    if height > windowHeight { throw SmokeFailure.savedHeight(saved: height, window: windowHeight) }
+                    if !SplitFrameSanitizer.framesFit(stored, bounds: persisted) {
+                        throw SmokeFailure.savedHeight(saved: SplitFrameSanitizer.tallestHeight(of: stored), window: persisted.height)
+                    }
                 }
-                for subview in splitSubviews(in: view) where subview.frame.height > windowHeight {
-                    throw SmokeFailure.savedHeight(saved: subview.frame.height, window: windowHeight)
+                for subview in splitSubviews(in: view) where subview.frame.height > persisted.height + 1
+                    || subview.frame.minY < -1 || subview.frame.maxY > persisted.height + 1 {
+                    throw SmokeFailure.savedHeight(saved: subview.frame.height, window: contentRect.height)
                 }
                 let panes = panesInsideWindow(in: view, window: window)
                 guard panes.sidebar else { throw SmokeFailure.paneOutside(column: "sidebar") }
@@ -108,7 +115,7 @@ enum DashboardSmoke {
                     "list_pixels": listPixels.dark,
                     "inspector_pixels": inspectorPixels.dark,
                     "saved_split_height": savedHeight,
-                    "window_height": windowHeight,
+                    "window_height": window.frame.height,
                     "content_height": contentHeight,
                     "panes_inside_window": panes.sidebar && panes.list && panes.inspector,
                 ]
@@ -178,22 +185,29 @@ enum DashboardSmoke {
 
     private static func screenFrame(of object: AnyObject, window: NSWindow) -> NSRect {
         let reported = object.accessibilityFrame?() ?? .null
-        if !reported.isNull, reported.width > 1, reported.height > 1, reported.height <= window.frame.height + 2,
-           window.frame.contains(CGPoint(x: reported.midX, y: reported.midY)) {
-            return reported
-        }
+        if contentContains(reported, window: window) { return reported }
         guard let view = object as? NSView, let host = view.window else { return .null }
         let local = host.convertToScreen(view.convert(view.bounds, to: nil))
-        guard local.width > 1, local.height > 1, local.height <= window.frame.height + 2,
-              window.frame.contains(CGPoint(x: local.midX, y: local.midY)) else { return .null }
+        guard contentContains(local, window: window) else { return .null }
         return local
     }
 
+    private static func contentScreenRect(_ window: NSWindow) -> NSRect {
+        window.convertToScreen(window.contentLayoutRect)
+    }
+
+    private static func contentContains(_ frame: NSRect, window: NSWindow) -> Bool {
+        let content = contentScreenRect(window)
+        guard frame.width > 1, frame.height > 1, frame.height <= content.height + 2 else { return false }
+        return frame.minY >= content.minY - 1 && frame.maxY <= content.maxY + 1
+            && frame.minX >= content.minX - 1 && frame.maxX <= content.maxX + 1
+    }
+
     private static func headingHits(in view: NSView, window: NSWindow) -> [String] {
-        let bounds = window.frame
         var hits: [String] = []
         func isHeading(_ text: String) -> Bool {
             text.localizedCaseInsensitiveContains("Runtime security") || text.contains("运行时安全")
+                || text.localizedCaseInsensitiveContains("All evidence") || text.contains("全部证据")
                 || text.localizedCaseInsensitiveContains("Local agent") || text.contains("本机 Agent")
                 || text.contains("sidebar.runtimeSecurity")
         }
@@ -203,9 +217,7 @@ enum DashboardSmoke {
             let title = candidate.accessibilityTitle() ?? ""
             let text = "\(label) \(value) \(title)"
             let screen = candidate.window?.convertToScreen(candidate.convert(candidate.bounds, to: nil)) ?? .null
-            let inside = screen.width > 1 && screen.height > 1 && screen.height <= bounds.height + 2
-                && bounds.contains(CGPoint(x: screen.midX, y: screen.midY))
-            if isHeading(text) && inside { hits.append(text) }
+            if isHeading(text) && contentContains(screen, window: window) { hits.append(text) }
             for child in candidate.subviews { walk(child) }
         }
         walk(view)
@@ -245,7 +257,7 @@ enum DashboardSmoke {
     }
 
     private static func visibleTextSample(in view: NSView, window: NSWindow) -> String {
-        let bounds = window.frame
+        let content = contentScreenRect(window)
         var lines: [String] = []
         func walk(_ candidate: NSView) {
             guard lines.count < 8 else { return }
@@ -257,13 +269,13 @@ enum DashboardSmoke {
                 return
             }
             let screen = candidate.window?.convertToScreen(candidate.convert(candidate.bounds, to: nil)) ?? .null
-            let inside = bounds.contains(CGPoint(x: screen.midX, y: screen.midY))
+            let inside = contentContains(screen, window: window)
             lines.append("\(text.prefix(28)) y=\(Int(screen.midY)) h=\(Int(screen.height)) \(inside ? "inside" : "outside")")
             for child in candidate.subviews { walk(child) }
         }
         walk(view)
         let heights = splitSubviews(in: view).map { Int($0.frame.height) }
-        return "windowY=\(Int(bounds.midY)) h=\(Int(bounds.height)) text=[\(lines.joined(separator: "; "))] splits=\(heights)"
+        return "contentY=\(Int(content.midY)) h=\(Int(content.height)) text=[\(lines.joined(separator: "; "))] splits=\(heights)"
     }
 
     private static func panesInsideWindow(in view: NSView, window: NSWindow) -> (sidebar: Bool, list: Bool, inspector: Bool) {

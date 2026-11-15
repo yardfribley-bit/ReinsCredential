@@ -114,15 +114,16 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(
                 "0.000000, 0.000000, 211.000000, 6161.000000, NO, 211.000000, 0.000000, 680.000000, 6161.000000, NO",
                 forKey: "NSSplitView Subview Frames SidebarNavigationSplitView")
+            UserDefaults.standard.set(
+                ["0.000000, 2000.000000, 218.000000, 11488.000000, NO, NO"],
+                forKey: "NSSplitView Subview Frames main-AppWindow-1, DocumentHeight")
         }
         SplitWriteGuard.install()
         SplitFrameCap.install()
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        let screen = NSScreen.screens.map(\.frame.height).max() ?? 1_600
-        let limit = SplitFrameSanitizer.maxRestorableSubviewHeight(defaults: .standard, screenHeight: screen)
-        _ = SplitFrameSanitizer.correctSavedFrames(defaults: .standard, maxSubviewHeight: limit)
+        Self.repairSplitViews()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -218,96 +219,42 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
         clampLiveSplits()
     }
 
-    /// Pulls each split column down to the window content height and stops
-    /// AppKit from writing the list's full content height back into defaults.
-    /// Widths are left alone. `adjustSubviews` is not called.
+    /// Fits each split column into its split view. Height follows that bounds,
+    /// or the window content rect when the split is still the document height.
+    /// Divider widths stay. The saved key keeps those widths and that height.
     private static var clamping = false
     static func clampLiveSplits() {
         guard !clamping else { return }
         clamping = true
         defer { clamping = false }
-        var limit: CGFloat = 1_600
+        var hosting = CGRect.null
         for window in NSApp.windows where window.canBecomeMain {
-            limit = min(limit, contentHeightLimit(window))
             guard let content = window.contentView else { continue }
             if content.subviews.contains(where: { $0 is SplitClampView }) == false {
                 let hook = SplitClampView(frame: .zero)
                 content.addSubview(hook)
             }
-            clamp(content, height: min(contentHeightLimit(window), window.frame.height))
+            clamp(content, window: window)
+            content.layoutSubtreeIfNeeded()
+            let bounds = SplitFrameCap.hostingBounds(in: window)
+            if bounds.height > 2 { hosting = bounds }
         }
-        let windowHeight = NSApp.windows.filter { $0.canBecomeMain && $0.frame.height > 2 }.map(\.frame.height).min()
-            ?? SplitFrameSanitizer.savedWindowHeights(in: .standard).min()
-            ?? limit
-        _ = SplitFrameSanitizer.correctSavedFrames(defaults: .standard, maxSubviewHeight: windowHeight)
+        if hosting.height > 2 {
+            _ = SplitFrameSanitizer.correctSavedFrames(defaults: .standard, bounds: hosting)
+        }
     }
 
-    private static func clamp(_ view: NSView, height limit: CGFloat) {
+    private static func clamp(_ view: NSView, window: NSWindow) {
         if let split = view as? NSSplitView {
-            pin(split, limit: limit)
-            var ancestor = split.superview
-            while let host = ancestor, host !== host.window?.contentView {
-                pin(host, limit: limit)
-                ancestor = host.superview
-            }
-            let height = min(split.bounds.height > 2 ? split.bounds.height : limit, limit)
-            if height > 2 {
+            let bounds = SplitFrameCap.columnBounds(split, window: window)
+            if bounds.height > 2 {
                 for subview in split.subviews {
-                    pin(subview, limit: height)
-                    revealTop(subview)
+                    let fitted = SplitFrameSanitizer.fitted(subview.frame, into: bounds)
+                    if !framesMatch(subview.frame, fitted) { subview.frame = fitted }
                 }
             }
         }
-        for child in view.subviews { clamp(child, height: limit) }
-    }
-
-    /// Puts a split column inside its parent and no taller than the window.
-    private static func pin(_ view: NSView, limit: CGFloat) {
-        var frame = view.frame
-        var changed = false
-        if frame.height > limit + 1 {
-            frame.size.height = limit
-            changed = true
-        }
-        if let parent = view.superview, parent.bounds.height > 2 {
-            if frame.height > parent.bounds.height + 1 {
-                frame.size.height = parent.bounds.height
-                changed = true
-            }
-            let inside = frame.minY >= parent.bounds.minY - 1 && frame.maxY <= parent.bounds.maxY + 1
-            if !inside {
-                frame.origin.y = parent.bounds.minY
-                changed = true
-            }
-        }
-        if changed { view.frame = frame }
-    }
-
-    /// Scrolls a column so its topmost text sits in the visible bounds. The
-    /// column height is already the window; the text was still laid out at the
-    /// old document offset.
-    private static func revealTop(_ column: NSView) {
-        var top: CGFloat?
-        func walk(_ candidate: NSView) {
-            let label = (candidate.accessibilityLabel() ?? "") + ((candidate as? NSTextField)?.stringValue ?? "")
-            if label.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 {
-                let rect = column.convert(candidate.bounds, from: candidate)
-                let edge = column.isFlipped ? rect.minY : rect.maxY
-                if column.isFlipped {
-                    top = min(top ?? edge, edge)
-                } else {
-                    top = max(top ?? edge, edge)
-                }
-            }
-            for child in candidate.subviews { walk(child) }
-        }
-        walk(column)
-        guard let top else { return }
-        var bounds = column.bounds
-        let origin = column.isFlipped ? top : top - bounds.height
-        guard abs(origin - bounds.origin.y) > 1 else { return }
-        bounds.origin.y = origin
-        column.bounds = bounds
+        for child in view.subviews { clamp(child, window: window) }
     }
 
     static func splitViewsFit(_ window: NSWindow) -> Bool {
@@ -364,20 +311,14 @@ enum SplitWriteGuard {
         installed = true
     }
 
-    static func limit() -> CGFloat {
-        let live = NSApp.windows.filter { $0.canBecomeMain && $0.frame.height > 2 }.map(\.frame.height)
-        if let height = live.min() { return height }
-        if let saved = SplitFrameSanitizer.savedWindowHeights(in: .standard).filter({ $0 > 1 }).min() { return saved }
-        return NSScreen.screens.map(\.frame.height).max() ?? 800
-    }
 }
 
 extension UserDefaults {
     @objc(reins_setObject:forKey:)
     func reins_setObject(_ value: Any?, forKey key: String) {
         var stored = value
-        if key.contains("NSSplitView Subview Frames") {
-            let result = SplitFrameSanitizer.correcting(value, maxHeight: SplitWriteGuard.limit())
+        if key.contains("NSSplitView Subview Frames"), let bounds = SplitFrameCap.hostingBounds() {
+            let result = SplitFrameSanitizer.correcting(value, bounds: bounds)
             if result.changed { stored = result.stored }
         }
         reins_setObject(stored, forKey: key)
@@ -403,22 +344,48 @@ enum SplitFrameCap {
         return true
     }
 
-    static func capped(_ frame: NSRect, view: NSView) -> NSRect {
-        let inSplit = view is NSSplitView || view.superview is NSSplitView
-        guard inSplit else { return frame }
-        let window = view.window ?? view.superview?.window
-        guard let window, window.canBecomeMain, window.frame.height > 2 else { return frame }
-        let content = window.contentLayoutRect.height
-        let limit = min(window.frame.height, content > 2 ? content : window.frame.height)
-        guard frame.height > limit + 1 || frame.minY < -1 else { return frame }
-        var frame = frame
-        if frame.height > limit + 1 { frame.size.height = limit }
-        if frame.minY < -1 { frame.origin.y = 0 }
-        if let parent = view.superview, parent.bounds.height > 2,
-           frame.minY > parent.bounds.maxY || frame.maxY < parent.bounds.minY {
-            frame.origin.y = parent.bounds.minY
+    /// The rect a column must fill. A split that is taller than the content
+    /// area is still the document height, so the content rect is used instead.
+    static func columnBounds(_ split: NSSplitView, window: NSWindow) -> CGRect {
+        let content = window.contentLayoutRect
+        if split.bounds.height > 2, split.bounds.width > 2,
+           content.height <= 2 || split.bounds.height <= content.height + 1 {
+            return CGRect(origin: .zero, size: split.bounds.size)
         }
-        return frame
+        guard content.width > 2, content.height > 2 else { return .zero }
+        return CGRect(origin: .zero, size: content.size)
+    }
+
+    static func hostingBounds(in window: NSWindow) -> CGRect {
+        guard let content = window.contentView else { return .zero }
+        var found = CGRect.null
+        func walk(_ view: NSView) {
+            if let split = view as? NSSplitView {
+                let bounds = columnBounds(split, window: window)
+                if bounds.height > 2 { found = bounds }
+            }
+            for child in view.subviews { walk(child) }
+        }
+        walk(content)
+        if found.height > 2 { return found }
+        let layout = window.contentLayoutRect
+        guard layout.width > 2, layout.height > 2 else { return .zero }
+        return CGRect(origin: .zero, size: layout.size)
+    }
+
+    static func hostingBounds() -> CGRect? {
+        let bounds = NSApp.windows.filter(\.canBecomeMain).map { hostingBounds(in: $0) }.filter { $0.height > 2 }
+        guard let height = bounds.map(\.height).min(), let match = bounds.first(where: { abs($0.height - height) < 0.5 }) else { return nil }
+        return match
+    }
+
+    static func capped(_ frame: NSRect, view: NSView) -> NSRect {
+        guard let split = view.superview as? NSSplitView else { return frame }
+        let window = view.window ?? split.window
+        guard let window, window.canBecomeMain else { return frame }
+        let bounds = columnBounds(split, window: window)
+        guard bounds.height > 2 else { return frame }
+        return SplitFrameSanitizer.fitted(frame, into: bounds)
     }
 }
 

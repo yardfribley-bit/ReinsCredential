@@ -52,16 +52,30 @@ final class ClosurePresentationTests: XCTestCase {
         defaults.set(measured, forKey: key)
         defaults.set(["0.000000, 0.000000, 898.000000, 1469.500000, NO, NO"], forKey: "NSSplitView Subview Frames Rewrite")
         defaults.set(autosaved, forKey: "NSSplitView Subview Frames Comma")
-        let corrected = SplitFrameSanitizer.correctSavedFrames(defaults: defaults, maxSubviewHeight: limit)
+        defaults.set("0.000000, 2000.000000, 218.000000, 11488.000000, NO, NO", forKey: "NSSplitView Subview Frames Document")
+        let content = CGRect(x: 0, y: 0, width: 1_224, height: 588)
+        XCTAssertLessThan(content.height, WindowPlacement.minimum.height)
+        XCTAssertLessThan(content.height, limit)
+        let corrected = SplitFrameSanitizer.correctSavedFrames(defaults: defaults, bounds: content)
         XCTAssertEqual(corrected, [
             "NSSplitView Subview Frames Comma",
+            "NSSplitView Subview Frames Document",
+            "NSSplitView Subview Frames Keep",
             "NSSplitView Subview Frames Rewrite",
             key
         ])
-        XCTAssertEqual(SplitFrameSanitizer.tallestHeight(of: defaults.object(forKey: key)), 816)
-        XCTAssertEqual(SplitFrameSanitizer.tallestHeight(of: defaults.object(forKey: "NSSplitView Subview Frames Rewrite")), 816)
-        XCTAssertEqual(SplitFrameSanitizer.subviewHeights(in: defaults.string(forKey: "NSSplitView Subview Frames Comma") ?? ""), [816, 816])
+        XCTAssertEqual(SplitFrameSanitizer.tallestHeight(of: defaults.object(forKey: key)), 588)
+        XCTAssertEqual(SplitFrameSanitizer.tallestHeight(of: defaults.object(forKey: "NSSplitView Subview Frames Rewrite")), 588)
+        XCTAssertEqual(SplitFrameSanitizer.tallestHeight(of: defaults.object(forKey: "NSSplitView Subview Frames Document")), 588)
+        XCTAssertEqual(SplitFrameSanitizer.subviewHeights(in: defaults.string(forKey: "NSSplitView Subview Frames Comma") ?? ""), [588, 588])
+        XCTAssertTrue(SplitFrameSanitizer.framesFit(defaults.object(forKey: key), bounds: content))
+        XCTAssertTrue(SplitFrameSanitizer.framesFit(defaults.object(forKey: "NSSplitView Subview Frames Document"), bounds: content))
+        XCTAssertEqual(
+            SplitFrameSanitizer.clampFrameText("0.000000, 2000.000000, 218.000000, 11488.000000, NO, NO", bounds: content),
+            "0.000000, 0.000000, 218.000000, 588.000000, NO, NO"
+        )
         XCTAssertNotNil(defaults.object(forKey: key))
+        XCTAssertNotNil(defaults.object(forKey: "NSSplitView Subview Frames Document"))
     }
 
     func testWindowFrameIsClampedOntoTheVisibleScreen() {
