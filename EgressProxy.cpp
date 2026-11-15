@@ -1205,6 +1205,7 @@ struct Session {
         };
         std::vector<Item> recent;
         std::set<pid_t> known;
+        bool seeded = false;
         while (!birth_stop.load()) {
             int estimate = proc_listallpids(nullptr, 0);
             bool busy = false;
@@ -1215,6 +1216,11 @@ struct Session {
                 std::set<pid_t> alive;
                 const auto listed = count > 0 ? std::min(pids.size(), static_cast<size_t>(count)) : 0;
                 for (size_t index = 0; index < listed; ++index) if (pids[index] > 1) alive.insert(pids[index]);
+                if (!seeded) {
+                    // The process table at startup is not a burst of new agents.
+                    known.insert(alive.begin(), alive.end());
+                    seeded = true;
+                }
                 for (auto it = alive.rbegin(); it != alive.rend(); ++it) {
                     if (!known.insert(*it).second) continue;
                     recent.insert(recent.begin(), Item{*it, now, now, false});
@@ -1287,8 +1293,9 @@ struct Session {
             }
         }
         if (!later.empty()) source.RestoreHotPids(later);
-        const bool active = last_sensitive_at.time_since_epoch().count() != 0 &&
-            now - last_sensitive_at < std::chrono::seconds(3);
+        const bool active = started_at.time_since_epoch().count() == 0 ||
+            now - started_at < std::chrono::seconds(2) ||
+            (last_sensitive_at.time_since_epoch().count() != 0 && now - last_sensitive_at < std::chrono::seconds(3));
         if (!active && last_list.time_since_epoch().count() != 0 && now - last_list < std::chrono::milliseconds(100))
             return;
         last_list = now;
@@ -1311,9 +1318,10 @@ struct Session {
             else if (seen == inspected_at.end()) fresh.push_back(pid);
         }
         std::sort(young.begin(), young.end(), [](pid_t left, pid_t right) { return left > right; });
-        // Vnode check only, and not the same pid every sample. A full socket
-        // walk happens once a sensitive file is actually open.
-        size_t young_budget = 2;
+        // Vnode check only. A full socket walk happens once a sensitive file
+        // is actually open. The first moments after startup look further, so
+        // an agent that is already running is not hidden behind two newer pids.
+        size_t young_budget = active && now - started_at < std::chrono::seconds(2) ? 8 : 3;
         for (const auto pid : young) {
             if (!young_budget || watched.size() >= 64) break;
             const auto seen = inspected_at.find(pid);
