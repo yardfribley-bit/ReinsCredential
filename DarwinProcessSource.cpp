@@ -417,11 +417,14 @@ public:
     }
     void PollWatched() {
         std::lock_guard<std::mutex> lock(mu_);
+        const auto now = MonoClock::now();
+        if (polled_.time_since_epoch().count() != 0 && now - polled_ < std::chrono::milliseconds(80)) return;
+        polled_ = now;
         if (!Open()) return;
-        Drain(20);
-        Pump(64);
-        Request(1004, ~uint64_t{0});
-        Drain(20);
+        Drain(8);
+        Pump(8);
+        if (!watch_.empty()) Request(1004, ~uint64_t{0});
+        Drain(8);
     }
     void ReleaseSocketLocked() {
         ++socket_generation_;
@@ -884,14 +887,22 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
             if (stop_.load()) break;
+            bool watching = false;
             if (ready > 0) {
                 std::lock_guard<std::mutex> lock(mu_);
                 if (fd_ != fd || socket_generation_ != generation) continue;
-                query_budget_ = 8;
+                watching = !watch_.empty();
+                // A global UDP subscription stays readable. Draining it in a
+                // tight loop is the post-activity CPU spike. Bound the work,
+                // and do not ask for more flows when nobody is being watched.
                 DrainNonblock();
                 if (fd_ != fd || socket_generation_ != generation) continue;
-                Pump(4);
+                if (watching) {
+                    query_budget_ = 4;
+                    Pump(2);
+                }
             }
+            if (ready > 0) std::this_thread::sleep_for(std::chrono::milliseconds(watching ? 40 : 150));
         }
     }
     void Refresh() {
@@ -915,6 +926,7 @@ private:
     std::once_flag start_;
     std::thread thread_;
     MonoClock::time_point refreshed_{};
+    MonoClock::time_point polled_{};
     std::set<pid_t> watch_;
     std::set<pid_t> subscribed_;
     bool udp_subscribed_ = false;

@@ -599,6 +599,7 @@ struct Session {
     MonoClock::time_point started_at = MonoClock::now();
     MonoClock::time_point last_sensitive_at{};
     MonoClock::time_point last_sweep{};
+    MonoClock::time_point last_list{};
     size_t rescan_cursor = 0;
     uint16_t proxy_port = 0;
     bool tree_truncated = false;
@@ -1248,11 +1249,11 @@ struct Session {
                     }
                     if (!activity.sensitive_files.empty()) {
                         it->saw_file = true;
-                        it->next = now + std::chrono::milliseconds(8);
+                        it->next = now + std::chrono::milliseconds(20);
                         busy = true;
                         found.push_back(BirthSnapshot{*node, std::move(activity)});
                     } else {
-                        it->next = now + std::chrono::milliseconds(30);
+                        it->next = now + std::chrono::milliseconds(40);
                     }
                     ++it;
                 }
@@ -1260,9 +1261,11 @@ struct Session {
                     std::lock_guard<std::mutex> lock(birth_mu);
                     if (births.size() < 512) births.insert(births.end(), found.begin(), found.end());
                 }
-                if (!recent.empty()) busy = true;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(busy ? 8 : 40));
+            // A new pid is checked often enough to see a 100 ms hold. An empty
+            // list is not. Only a process holding a sensitive file is followed closely.
+            const bool pending = !recent.empty();
+            std::this_thread::sleep_for(std::chrono::milliseconds(busy ? 15 : pending ? 40 : 120));
         }
     }
     void DiscoverHolders() {
@@ -1284,6 +1287,11 @@ struct Session {
             }
         }
         if (!later.empty()) source.RestoreHotPids(later);
+        const bool active = last_sensitive_at.time_since_epoch().count() != 0 &&
+            now - last_sensitive_at < std::chrono::seconds(3);
+        if (!active && last_list.time_since_epoch().count() != 0 && now - last_list < std::chrono::milliseconds(100))
+            return;
+        last_list = now;
         int estimate = proc_listallpids(nullptr, 0);
         if (estimate <= 0) return;
         std::vector<pid_t> pids(static_cast<size_t>(estimate) + 64);
@@ -1303,11 +1311,22 @@ struct Session {
             else if (seen == inspected_at.end()) fresh.push_back(pid);
         }
         std::sort(young.begin(), young.end(), [](pid_t left, pid_t right) { return left > right; });
-        size_t young_budget = 4;
+        // Vnode check only, and not the same pid every sample. A full socket
+        // walk happens once a sensitive file is actually open.
+        size_t young_budget = 2;
         for (const auto pid : young) {
             if (!young_budget || watched.size() >= 64) break;
+            const auto seen = inspected_at.find(pid);
+            if (seen != inspected_at.end() && now - seen->second < std::chrono::milliseconds(40)) continue;
             --young_budget;
-            ConsiderPid(pid);
+            auto node = source.Lookup(pid);
+            if (!node || IsCollectorProcess(*node) || IsAppleSystemDaemon(*node)) {
+                inspected_at[pid] = now;
+                continue;
+            }
+            auto activity = source.Inspect(*node, roots, false);
+            inspected_at[pid] = now;
+            if (!activity.sensitive_files.empty()) ConsiderPid(pid);
         }
         const bool background_due = last_sweep.time_since_epoch().count() == 0 ||
             now - last_sweep >= std::chrono::milliseconds(200);

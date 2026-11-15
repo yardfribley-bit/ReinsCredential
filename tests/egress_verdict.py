@@ -917,6 +917,37 @@ def _uploaded_flow_count(path):
     return count
 
 
+def _cpu_seconds(pid):
+    text = subprocess.check_output(["ps", "-p", str(pid), "-o", "time="], text=True).strip()
+    days = 0
+    if "-" in text:
+        day_text, text = text.split("-", 1)
+        days = int(day_text)
+    parts = text.split(":")
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+    elif len(parts) == 2:
+        hours, minutes, seconds = "0", parts[0], parts[1]
+    else:
+        raise SystemExit(f"unparsed cpu time {text!r}")
+    return days * 86400 + int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def _assert_idle_cpu(pid):
+    """After the closes, egress must not stay hot. A 100% tail fails this bound."""
+    time.sleep(2)
+    if subprocess.run(["ps", "-p", str(pid)], stdout=subprocess.DEVNULL).returncode != 0:
+        return
+    started = _cpu_seconds(pid)
+    window = 20
+    time.sleep(window)
+    if subprocess.run(["ps", "-p", str(pid)], stdout=subprocess.DEVNULL).returncode != 0:
+        return
+    percent = (_cpu_seconds(pid) - started) / window * 100
+    if percent > 15:
+        raise SystemExit(f"egress idle CPU {percent:.1f}% over {window}s exceeds 15%")
+
+
 def live_a2_short_burst(directory, binary, secret):
     """A 2s POST exits, then a ~100ms POST starts immediately. Repeat. None may be missed."""
     host = routable_ip()
@@ -964,6 +995,7 @@ def live_a2_short_burst(directory, binary, secret):
                     f"a2-short missed a close at {index}: have {_uploaded_flow_count(log) - base}, want 2")
         if _uploaded_flow_count(log) < 40:
             raise SystemExit(f"a2-short uploaded {_uploaded_flow_count(log)}, want 40")
+        _assert_idle_cpu(proc.pid)
     finally:
         if proc.poll() is None:
             proc.terminate()

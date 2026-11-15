@@ -609,7 +609,10 @@ void AgentMonitor::Scan() {
                 }
             }
             seen.touched_sensitive = !activity.sensitive_files.empty() || (previous != seen_.end() && previous->second.touched_sensitive);
-            seen.idle_skips = seen.touched_sensitive ? 0 : 3;
+            // A process that has not opened a sensitive file is walked about
+            // once every few seconds. A new pid is still scanned the pass it
+            // appears, and one that has touched a file stays due.
+            seen.idle_skips = seen.touched_sensitive ? 0 : 8;
             next.emplace(identity, std::move(seen));
         }
         for (const auto& pair : seen_) if (!next.count(pair.first)) {

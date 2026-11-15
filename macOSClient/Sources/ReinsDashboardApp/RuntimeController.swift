@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import EvidenceCore
 import Foundation
 import RuntimeCore
@@ -118,12 +119,24 @@ final class RuntimeController: ObservableObject {
                 self?.watchedPaths = configuration.sensitivePaths
             }
             while !Task.isCancelled {
-                await self?.refreshNow()
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let quiet = Self.interfaceQuiet
+                if !quiet { await self?.refreshNow() }
+                try? await Task.sleep(nanoseconds: quiet ? 5_000_000_000 : 1_000_000_000)
             }
         }
     }
     func endPolling() { polling?.cancel(); polling = nil }
+
+    /// No periodic file read or view update while the window is hidden or the display is asleep.
+    static var interfaceQuiet: Bool {
+        if !NSApp.occlusionState.contains(.visible) { return true }
+        if !NSApp.windows.contains(where: { $0.isVisible && !$0.isMiniaturized && $0.canBecomeMain }) { return true }
+        var ids = [CGDirectDisplayID](repeating: 0, count: 8)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(8, &ids, &count) == .success, count > 0 else { return false }
+        for index in 0..<Int(count) where CGDisplayIsAsleep(ids[index]) != 0 { return true }
+        return false
+    }
     func refresh() { Task { await refreshNow() } }
     func startIfNeeded() {
         guard !DashboardAppDelegate.isQuitting else { return }

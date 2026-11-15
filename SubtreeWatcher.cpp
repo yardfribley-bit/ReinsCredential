@@ -112,7 +112,9 @@ void SubtreeWatcher::Start() {
             };
             for (const auto& identity : focus) arm(identity.pid, identity);
             struct kevent events[64];
-            timespec timeout{0, 5 * 1000 * 1000};
+            // Fork, exec, and exit still wake this wait immediately. The
+            // timeout is only the idle backup sweep.
+            timespec timeout{0, 50 * 1000 * 1000};
             int ready = ::kevent(queue_, changes.empty() ? nullptr : changes.data(), static_cast<int>(changes.size()),
                 events, 64, &timeout);
             if (ready < 0 && errno == EINTR) continue;
