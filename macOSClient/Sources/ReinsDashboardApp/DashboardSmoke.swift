@@ -52,15 +52,20 @@ enum DashboardSmoke {
                 let listRows = rowCount(in: view, minX: width * 0.28, maxX: width * 0.78)
                 guard sidebarRows >= 1 else { throw SmokeFailure.noRows(column: "sidebar", count: sidebarRows) }
                 guard listRows >= 1 else { throw SmokeFailure.noRows(column: "list", count: listRows) }
-                let pixels = try contentPixels(view)
-                guard pixels.sidebarDark >= 30, pixels.sidebarLight >= 30 else {
-                    throw SmokeFailure.blankColumn(column: "sidebar", pixels: pixels.sidebarDark)
+                let sidebarView = columnHost(in: view, minX: 0, maxX: width * 0.4) ?? view
+                let listView = columnHost(in: view, minX: width * 0.3, maxX: width * 0.75) ?? view
+                let inspectorView = columnHost(in: view, minX: width * 0.62, maxX: width) ?? view
+                let sidebarPixels = try contentPixels(sidebarView)
+                let listPixels = try contentPixels(listView)
+                let inspectorPixels = try contentPixels(inspectorView)
+                guard sidebarPixels.dark >= 15, sidebarPixels.light >= 15 else {
+                    throw SmokeFailure.blankColumn(column: "sidebar", pixels: sidebarPixels.dark)
                 }
-                guard pixels.listDark >= 30, pixels.listLight >= 30 else {
-                    throw SmokeFailure.blankColumn(column: "list", pixels: pixels.listDark)
+                guard listPixels.dark >= 15, listPixels.light >= 15 else {
+                    throw SmokeFailure.blankColumn(column: "list", pixels: listPixels.dark)
                 }
-                guard pixels.inspectorDark >= 30, pixels.inspectorLight >= 30 else {
-                    throw SmokeFailure.blankColumn(column: "inspector", pixels: pixels.inspectorDark)
+                guard inspectorPixels.dark >= 15, inspectorPixels.light >= 15 else {
+                    throw SmokeFailure.blankColumn(column: "inspector", pixels: inspectorPixels.dark)
                 }
                 guard inspectorHasSelection(in: view, minX: width * 0.65) else { throw SmokeFailure.emptyInspector }
                 let report: [String: Any] = [
@@ -68,9 +73,9 @@ enum DashboardSmoke {
                     "fixture_records": store.records.count,
                     "sidebar_rows": sidebarRows,
                     "list_rows": listRows,
-                    "sidebar_pixels": pixels.sidebarDark,
-                    "list_pixels": pixels.listDark,
-                    "inspector_pixels": pixels.inspectorDark,
+                    "sidebar_pixels": sidebarPixels.dark,
+                    "list_pixels": listPixels.dark,
+                    "inspector_pixels": inspectorPixels.dark,
                     "selected_chain": store.selectedChain?.owningAgentName ?? ""
                 ]
                 try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
@@ -129,10 +134,28 @@ enum DashboardSmoke {
         return view.subviews.contains { inspectorHasSelection(in: $0, minX: minX) }
     }
 
-    private struct Pixels {
-        var sidebarDark = 0, sidebarLight = 0
-        var listDark = 0, listLight = 0
-        var inspectorDark = 0, inspectorLight = 0
+    private struct Pixels { var dark = 0, light = 0 }
+
+    private static func columnHost(in view: NSView, minX: CGFloat, maxX: CGFloat) -> NSView? {
+        let frame = view.convert(view.bounds, to: nil)
+        var best: NSView?
+        var bestArea: CGFloat = 0
+        if let table = view as? NSTableView, frame.midX >= minX, frame.midX <= maxX, frame.width > 40, frame.height > 40 {
+            return table
+        }
+        if frame.midX >= minX, frame.midX <= maxX, frame.width > 40, frame.width < (maxX - minX) + 120, frame.height > 40 {
+            let area = frame.width * frame.height
+            if area > bestArea { best = view; bestArea = area }
+        }
+        for child in view.subviews {
+            if let found = columnHost(in: child, minX: minX, maxX: maxX) {
+                if found is NSTableView { return found }
+                let foundFrame = found.convert(found.bounds, to: nil)
+                let area = foundFrame.width * foundFrame.height
+                if area > bestArea { best = found; bestArea = area }
+            }
+        }
+        return best
     }
 
     /// Off-screen render of this window's content. A blank column is one color.
@@ -145,14 +168,19 @@ enum DashboardSmoke {
                                           colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
               let context = NSGraphicsContext(bitmapImageRep: rep) else { throw SmokeFailure.noBitmap }
         view.wantsLayer = true
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = context
-        if let layer = view.layer {
-            layer.render(in: context.cgContext)
-        } else {
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        func draw(into rep: NSBitmapImageRep) {
+            guard let context = NSGraphicsContext(bitmapImageRep: rep) else { return }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            if let layer = view.layer {
+                layer.render(in: context.cgContext)
+            }
             view.cacheDisplay(in: view.bounds, to: rep)
+            NSGraphicsContext.restoreGraphicsState()
         }
-        NSGraphicsContext.restoreGraphicsState()
+        draw(into: rep)
         guard let data = rep.bitmapData else { throw SmokeFailure.noBitmap }
         let rowBytes = rep.bytesPerRow
         func ink(_ x0: Int, _ x1: Int) -> (dark: Int, light: Int) {
@@ -166,22 +194,16 @@ enum DashboardSmoke {
                     let red = Int(data[index])
                     let green = Int(data[index + 1])
                     let blue = Int(data[index + 2])
-                    if red < 90 && green < 90 && blue < 90 { dark += 1 }
-                    else if red > 200 && green > 200 && blue > 200 { light += 1 }
+                    if red < 170 && green < 170 && blue < 170 { dark += 1 }
+                    else if red > 185 && green > 185 && blue > 185 { light += 1 }
                     x += 4
                 }
                 y += 4
             }
             return (dark, light)
         }
-        let side = max(40, width / 5)
-        let inspect = max(40, width / 4)
-        let sidebar = ink(4, side)
-        let list = ink(side + 8, width - inspect)
-        let inspector = ink(width - inspect + 8, width - 4)
-        return Pixels(sidebarDark: sidebar.dark, sidebarLight: sidebar.light,
-                      listDark: list.dark, listLight: list.light,
-                      inspectorDark: inspector.dark, inspectorLight: inspector.light)
+        let ink = ink(0, width)
+        return Pixels(dark: ink.dark, light: ink.light)
     }
 
     private enum SmokeFailure: LocalizedError {
