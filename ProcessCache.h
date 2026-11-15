@@ -24,9 +24,18 @@ struct SocketFlow {
     bool udp = false;
     bool bytes_known = false;
     uint64_t tx_bytes = 0;
+    // The last smaller counter seen for this flow. A later reading can be
+    // handshake plus body; this keeps the earlier flight.
+    uint64_t tx_prior = 0;
     int tcp_state = -1;
     std::string sni;
+    bool tls_handshake = false;
+    bool tls_app_data = false;
+    bool plaintext_http = false;
+    uint64_t tls_app_bytes = 0;
 };
+// Re-read the capture cache. A handshake record can arrive after the first socket sample.
+void AttachCapturedPayload(SocketFlow& flow);
 struct ActivitySample {
     bool identity_validated = false, descriptors_complete = true;
     std::set<std::string> sensitive_files, socket_peers;
@@ -48,8 +57,17 @@ public:
     virtual std::vector<SocketFlow> RetainedFlows(pid_t pid) const { (void)pid; return {}; }
     // Pids that opened or closed a flow since the previous call.
     virtual std::vector<pid_t> TakeHotPids() { return {}; }
+    // Put back pids the caller did not have time to inspect.
+    virtual void RestoreHotPids(const std::vector<pid_t>& pids) { (void)pids; }
     // Egress asks for kernel flow notifications. The monitor does not.
     virtual void WatchFlows(pid_t pid) { (void)pid; }
+    // Read kernel counters for processes already being watched. UDP has no pcb byte count.
+    virtual void PollFlowCounts() {}
+    // Drop kernel flow subscriptions once nothing is in the post-close grace window.
+    virtual void ReleaseIdleWatch() {}
+    virtual void UnwatchFlows(pid_t pid) { (void)pid; }
+    // Start flow retention before the first sensitive file is seen.
+    virtual void StartFlowWatch() {}
 };
 std::shared_ptr<IProcessSource> MakeDarwinProcessSource();
 struct ProcessSnapshot {

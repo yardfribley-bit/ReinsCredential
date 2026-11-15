@@ -206,6 +206,20 @@ int main(int argc, char** argv) {
         else sleep(4);
         if (tcp >= 0) close(tcp);
         if (udp >= 0) close(udp);
+    } else if (strcmp(mode, "delay-short") == 0 && (argc == 5 || argc == 6)) {
+        wait_ready(argc == 6 ? argv[5] : NULL);
+        sleep(2);
+        int fd = connect_ip(argv[3], atoi(argv[4]));
+        if (fd < 0) rc = 5;
+        else {
+            char header[512];
+            int header_len = snprintf(header, sizeof(header),
+                "POST /upload HTTP/1.1\r\nHost: %s:%s\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
+                argv[3], argv[4], body_len);
+            if (header_len < 0 || send_all(fd, header, (size_t)header_len) || send_all(fd, body, body_len)) rc = 6;
+            else usleep(100000);
+            close(fd);
+        }
     } else if (strcmp(mode, "short") == 0 && (argc == 5 || argc == 6)) {
         wait_ready(argc == 6 ? argv[5] : NULL);
         int fd = connect_ip(argv[3], atoi(argv[4]));

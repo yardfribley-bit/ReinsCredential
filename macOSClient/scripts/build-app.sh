@@ -40,15 +40,15 @@ cp "$client_dir/Sources/ReinsDashboardApp/Resources/ReinsCredential-Logo-rounded
   echo "Chinese catalog was not copied into the app" >&2
   exit 1
 }
-core=(ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp EgressVerdict.cpp)
+core=(ProcessCache.cpp DarwinProcessSource.cpp EvidenceStore.cpp FileMonitor.cpp AgentMonitor.cpp ContentMatcher.cpp SubtreeWatcher.cpp EgressVerdict.cpp WatchPriority.cpp)
 monitor_sources=(main.cpp "${core[@]}")
 egress_sources=(EgressProxy.cpp TlsIntercept.cpp "${core[@]}")
 for ((i=0; i<${#monitor_sources[@]}; i++)); do monitor_sources[i]="$repo_dir/${monitor_sources[i]}"; done
 for ((i=0; i<${#egress_sources[@]}; i++)); do egress_sources[i]="$repo_dir/${egress_sources[i]}"; done
 /usr/bin/clang++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread -mmacosx-version-min=13.0 \
-  ${cxx_arch[@]+"${cxx_arch[@]}"} "${monitor_sources[@]}" -framework CoreServices -lz -o "$app_dir/Contents/Helpers/agent-monitor"
+  ${cxx_arch[@]+"${cxx_arch[@]}"} "${monitor_sources[@]}" -framework CoreServices -framework Foundation -lz -o "$app_dir/Contents/Helpers/agent-monitor"
 /usr/bin/clang++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread -mmacosx-version-min=13.0 \
-  ${cxx_arch[@]+"${cxx_arch[@]}"} "${egress_sources[@]}" -framework CoreServices -lz -framework Security -framework CoreFoundation -o "$app_dir/Contents/Helpers/agent-egress"
+  ${cxx_arch[@]+"${cxx_arch[@]}"} "${egress_sources[@]}" -framework CoreServices -framework Foundation -lz -framework Security -framework CoreFoundation -o "$app_dir/Contents/Helpers/agent-egress"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -85,7 +85,7 @@ cat > "$app_dir/Contents/Library/LaunchAgents/io.github.yardfribley-bit.ReinsCre
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>
   <key>ExitTimeOut</key><integer>15</integer>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>Standard</string>
 </dict></plist>
 PLIST
 /usr/bin/codesign --force --sign "$signing_identity" "$app_dir/Contents/Helpers/agent-monitor"

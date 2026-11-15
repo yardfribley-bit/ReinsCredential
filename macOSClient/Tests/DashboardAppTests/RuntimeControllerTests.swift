@@ -75,4 +75,14 @@ final class RuntimeControllerTests: XCTestCase {
         XCTAssertEqual(service.unregistrations, 1); XCTAssertEqual(controller.state, .stopped)
         controller.startIfNeeded(); XCTAssertEqual(service.registrations, 0)
     }
+    @MainActor func testQuitUnloadsTheAgentAndDoesNotStartAgain() async throws {
+        defer { DashboardAppDelegate.isQuitting = false }
+        let (_, service, controller) = try setup()
+        await controller.stopForQuit()
+        XCTAssertEqual(service.unregistrations, 1)
+        XCTAssertEqual(controller.state, .stopped)
+        controller.start()
+        XCTAssertEqual(service.registrations, 0)
+        DashboardAppDelegate.isQuitting = false
+    }
 }
