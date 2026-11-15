@@ -190,10 +190,10 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func repairSplitViews() {
-        for window in NSApp.windows where window.canBecomeMain {
-            guard let content = window.contentView else { continue }
-            constrainSplits(content, limit: contentHeightLimit(window))
-        }
+        // Saved frames taller than the screen are discarded before AppKit restores
+        // them. Live NSSplitView frames are left to SwiftUI. Assigning them here
+        // detaches the sidebar, list, and inspector, which is a white window
+        // whose columns still have width.
         let screen = NSScreen.screens.map(\.frame.height).max() ?? 1_600
         _ = SplitFrameSanitizer.removeImpossibleFrames(defaults: .standard, maxSubviewHeight: screen)
     }
@@ -221,90 +221,6 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
         }
         walk(content)
         return found && fits
-    }
-
-    /// Sidebar and inspector each contain readable text. A column that is only a
-    /// blank hosting view does not pass.
-    static func panesHaveContent(_ window: NSWindow) -> Bool {
-        guard let content = window.contentView else { return false }
-        func text(_ view: NSView) -> Bool {
-            if view.bounds.width > 8, view.bounds.height > 8 {
-                if let label = view.accessibilityLabel(), !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
-                if let field = view as? NSTextField, !field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
-            }
-            return view.subviews.contains(where: text)
-        }
-        func find(_ identifier: String, in view: NSView) -> NSView? {
-            if view.accessibilityIdentifier() == identifier { return view }
-            for child in view.subviews {
-                if let found = find(identifier, in: child) { return found }
-            }
-            return nil
-        }
-        if let sidebar = find("reins.sidebar", in: content), let inspector = find("reins.inspector", in: content),
-           sidebar.bounds.width >= 140, sidebar.bounds.height >= 80, text(sidebar),
-           inspector.bounds.width >= 200, inspector.bounds.height >= 80, text(inspector) {
-            return true
-        }
-        var splits: [NSSplitView] = []
-        func collect(_ view: NSView) {
-            if let split = view as? NSSplitView, split.subviews.count >= 3 { splits.append(split) }
-            for child in view.subviews { collect(child) }
-        }
-        collect(content)
-        guard let split = splits.max(by: { $0.bounds.width < $1.bounds.width }) else { return false }
-        let sidebar = split.subviews[0]
-        let inspector = split.subviews[split.subviews.count - 1]
-        return sidebar.frame.width >= 140 && sidebar.frame.height >= 80 && text(sidebar)
-            && inspector.frame.width >= 200 && inspector.frame.height >= 80 && text(inspector)
-    }
-
-    private static func constrainSplits(_ view: NSView, limit: CGFloat) {
-        if let split = view as? NSSplitView, limit > 2 {
-            if split.frame.height > limit + 1 {
-                var frame = split.frame
-                frame.size.height = limit
-                split.frame = frame
-            }
-            let height = min(split.bounds.height > 2 ? split.bounds.height : limit, limit)
-            let tooTall = split.subviews.contains { $0.frame.height > height + 1 || $0.frame.height < 1 }
-            let narrowSides = split.subviews.count >= 3 &&
-                (split.subviews[0].frame.width < 140 || split.subviews[split.subviews.count - 1].frame.width < 200)
-            if tooTall || narrowSides {
-                if split.subviews.count >= 3, split.bounds.width > 400 {
-                    let sidebar: CGFloat = 210
-                    let detail: CGFloat = 340
-                    let content = max(400, split.bounds.width - sidebar - detail)
-                    var x: CGFloat = 0
-                    for (index, width) in [sidebar, content, detail].enumerated() where index < split.subviews.count {
-                        split.subviews[index].frame = CGRect(x: x, y: 0, width: width, height: height)
-                        x += width
-                    }
-                } else {
-                    for subview in split.subviews {
-                        var frame = subview.frame
-                        frame.size.height = height
-                        frame.origin.y = 0
-                        subview.frame = frame
-                    }
-                }
-                split.adjustSubviews()
-                if split.subviews.count >= 3, split.bounds.width > 400 {
-                    let sidebar: CGFloat = 210
-                    let detail: CGFloat = 340
-                    let contentWidth = max(400, split.bounds.width - sidebar - detail)
-                    var x: CGFloat = 0
-                    for (index, width) in [sidebar, contentWidth, detail].enumerated() where index < split.subviews.count {
-                        split.subviews[index].frame = CGRect(x: x, y: 0, width: width, height: height)
-                        x += width
-                    }
-                }
-                // Only forget autosave after correcting a frame that cannot be shown.
-                if tooTall { split.autosaveName = nil }
-            }
-        }
-        let childLimit = view.bounds.height > 2 ? min(view.bounds.height, limit) : limit
-        for child in view.subviews { constrainSplits(child, limit: childLimit) }
     }
 
     private static func framesMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {

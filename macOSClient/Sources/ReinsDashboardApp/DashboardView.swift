@@ -23,11 +23,8 @@ struct DashboardView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        GeometryReader { proxy in
-            split
-                .frame(maxWidth: proxy.size.width > 2 ? proxy.size.width : WindowPlacement.minimum.width,
-                       maxHeight: proxy.size.height > 2 ? proxy.size.height : WindowPlacement.minimum.height)
-        }
+        split
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("ReinsCredential")
         .background(Color(nsColor: .windowBackgroundColor))
         .toolbar {
@@ -296,6 +293,7 @@ struct DashboardView: View {
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
             .frame(maxHeight: .infinity)
+            .accessibilityIdentifier("reins.sidebar.rows")
             VStack(alignment: .leading, spacing: 7) {
                 Label(store.mode.title, systemImage: store.mode == .live ? "waveform.path.ecg" : "doc.text")
                     .font(.caption.weight(.semibold))

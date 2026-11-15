@@ -76,6 +76,7 @@ struct EvidenceChainList: View {
             }
         }
         .listStyle(.inset)
+        .accessibilityIdentifier("reins.chain.rows")
         .accessibilityLabel(L10n.tr("chain.a11y"))
     }
 }

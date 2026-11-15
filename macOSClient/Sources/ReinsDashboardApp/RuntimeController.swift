@@ -250,20 +250,41 @@ final class RuntimeController: ObservableObject {
         if !force && notedLogs && !logsDiffer() { return }
         defer { noteLogs() }
         do {
-            let batch = try await reader.poll(url: paths.evidenceURL)
-            let egressRecords = (try? await egressReader.poll(url: paths.egressEvidenceURL).records) ?? []
+            let firstLoad = records.isEmpty && chainRecords.isEmpty
+            var batch = try await reader.poll(url: paths.evidenceURL)
+            var egressBatch = try? await egressReader.poll(url: paths.egressEvidenceURL)
+            var egressRecords = egressBatch?.records ?? []
+            var egressBacklog = egressBatch?.hasBacklog ?? false
+            var passes = 1
+            func absorb(_ batch: LiveEvidenceBatch, _ egressRecords: [EvidenceRecord]) {
+                let incoming = batch.records + egressRecords
+                if !incoming.isEmpty || monitorStartedAt != nil {
+                    let merged = LiveRecordWindow.merge(events: records, chain: chainRecords, incoming: incoming)
+                    if !sameIDs(records, merged.events) { records = merged.events }
+                    if !sameIDs(chainRecords, merged.chain) { chainRecords = merged.chain }
+                    if !incoming.isEmpty { notifyIfNeeded(incoming, now: now) }
+                }
+                if rejectedCount != batch.rejectedCount { rejectedCount = batch.rejectedCount }
+                if lastUpdate != batch.latestCoverage?.timestamp { lastUpdate = batch.latestCoverage?.timestamp }
+            }
+            absorb(batch, egressRecords)
+            // A cold launch of a multi-megabyte log must fill the lists. Later
+            // polls stay one chunk so an idle window does not re-decode the file.
+            while firstLoad && (batch.hasBacklog || egressBacklog) && passes < 40 {
+                if batch.hasBacklog { batch = try await reader.poll(url: paths.evidenceURL) }
+                if egressBacklog, let next = try? await egressReader.poll(url: paths.egressEvidenceURL) {
+                    egressRecords = next.records
+                    egressBacklog = next.hasBacklog
+                } else {
+                    egressRecords = []
+                    egressBacklog = false
+                }
+                absorb(batch, egressRecords)
+                passes += 1
+            }
             let statusURL = paths.statusURL
             let status = try? await Task.detached { try RuntimeStatus.load(from: statusURL) }.value
             if let started = status?.monitorStartedAt, monitorStartedAt != started { monitorStartedAt = started }
-            let incoming = batch.records + egressRecords
-            if !incoming.isEmpty || monitorStartedAt != nil {
-                let merged = LiveRecordWindow.merge(events: records, chain: chainRecords, incoming: incoming)
-                if !sameIDs(records, merged.events) { records = merged.events }
-                if !sameIDs(chainRecords, merged.chain) { chainRecords = merged.chain }
-                if !incoming.isEmpty { notifyIfNeeded(incoming, now: now) }
-            }
-            if rejectedCount != batch.rejectedCount { rejectedCount = batch.rejectedCount }
-            if lastUpdate != batch.latestCoverage?.timestamp { lastUpdate = batch.latestCoverage?.timestamp }
             switch service.registration {
             case .requiresApproval:
                 publish(state: .approvalRequired, status: L10n.tr("status.notAllowed"))
