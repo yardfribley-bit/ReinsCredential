@@ -74,6 +74,20 @@ public enum SplitFrameSanitizer {
     /// Fits one split column into the hosting split bounds. Height follows the
     /// bounds. Width stays unless it would extend past the bounds. `y` is moved
     /// so `y + height` stays inside.
+    /// Moves a frame into `bounds` without forcing a small label to the column height.
+    public static func placed(_ frame: CGRect, into bounds: CGRect) -> CGRect {
+        guard bounds.width > 1, bounds.height > 1 else { return frame }
+        var frame = frame
+        if frame.width > bounds.width { frame.size.width = bounds.width }
+        if frame.height > bounds.height { frame.size.height = bounds.height }
+        if frame.minX < bounds.minX { frame.origin.x = bounds.minX }
+        if frame.maxX > bounds.maxX { frame.origin.x = max(bounds.minX, bounds.maxX - frame.width) }
+        if frame.minY < bounds.minY { frame.origin.y = bounds.minY }
+        if frame.maxY > bounds.maxY { frame.origin.y = max(bounds.minY, bounds.maxY - frame.height) }
+        if frame.minY < bounds.minY { frame.origin.y = bounds.minY }
+        return frame
+    }
+
     public static func fitted(_ frame: CGRect, into bounds: CGRect) -> CGRect {
         guard bounds.width > 1, bounds.height > 1 else { return frame }
         var frame = frame

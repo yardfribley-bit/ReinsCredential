@@ -74,6 +74,12 @@ final class ClosurePresentationTests: XCTestCase {
             SplitFrameSanitizer.clampFrameText("0.000000, 2000.000000, 218.000000, 11488.000000, NO, NO", bounds: content),
             "0.000000, 0.000000, 218.000000, 588.000000, NO, NO"
         )
+        let parked = SplitFrameSanitizer.placed(
+            CGRect(x: 0, y: 5_089, width: 218, height: 24),
+            into: CGRect(x: 0, y: 0, width: 300, height: 588))
+        XCTAssertEqual(parked.height, 24)
+        XCTAssertGreaterThanOrEqual(parked.minY, 0)
+        XCTAssertLessThanOrEqual(parked.maxY, 588)
         XCTAssertNotNil(defaults.object(forKey: key))
         XCTAssertNotNil(defaults.object(forKey: "NSSplitView Subview Frames Document"))
     }

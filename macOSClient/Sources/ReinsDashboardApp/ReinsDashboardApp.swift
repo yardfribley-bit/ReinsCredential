@@ -258,10 +258,23 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
                 for subview in split.subviews {
                     let fitted = SplitFrameSanitizer.fitted(subview.frame, into: bounds)
                     if !framesMatch(subview.frame, fitted) { subview.frame = fitted }
+                    placeInside(subview)
                 }
             }
         }
         for child in view.subviews { clamp(child, window: window) }
+    }
+
+    /// Pulls a column's descendants back inside their parent. A document-sized
+    /// origin here is what left the headings thousands of points above the window.
+    private static func placeInside(_ view: NSView) {
+        let bounds = CGRect(origin: .zero, size: view.bounds.size)
+        guard bounds.height > 2, bounds.width > 2 else { return }
+        for child in view.subviews {
+            let placed = SplitFrameSanitizer.placed(child.frame, into: bounds)
+            if !framesMatch(child.frame, placed) { child.frame = placed }
+            placeInside(child)
+        }
     }
 
     private static func hostsSplit(_ view: NSView) -> Bool {
@@ -421,7 +434,19 @@ enum SplitFrameCap {
             guard target.height > 2 else { return frame }
             return SplitFrameSanitizer.fitted(frame, into: target)
         }
+        if ancestorIsSplit(view), let parent = view.superview, parent.bounds.height > 2, parent.bounds.width > 2 {
+            return SplitFrameSanitizer.placed(frame, into: CGRect(origin: .zero, size: parent.bounds.size))
+        }
         return frame
+    }
+
+    private static func ancestorIsSplit(_ view: NSView) -> Bool {
+        var parent = view.superview
+        while let current = parent {
+            if current is NSSplitView { return true }
+            parent = current.superview
+        }
+        return false
     }
 }
 
