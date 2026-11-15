@@ -163,6 +163,15 @@ enum DashboardSmoke {
         return best
     }
 
+    private static func accessibilityValueText(_ object: AnyObject) -> String {
+        guard let item = object as? NSObject else { return "" }
+        let selector = NSSelectorFromString("accessibilityValue")
+        guard item.responds(to: selector) else { return "" }
+        typealias Getter = @convention(c) (AnyObject, Selector) -> AnyObject?
+        let implementation = unsafeBitCast(item.method(for: selector), to: Getter.self)
+        return implementation(item, selector) as? String ?? ""
+    }
+
     private static func headingIsVisible(in view: NSView, window: NSWindow) -> Bool {
         let screenWindow = window.frame
         func isHeading(_ text: String) -> Bool {
@@ -172,7 +181,7 @@ enum DashboardSmoke {
         func walk(_ object: AnyObject, depth: Int) -> Bool {
             if depth > 14 { return false }
             let label = object.accessibilityLabel?() ?? ""
-            let value = (object.accessibilityValue?() as? String) ?? ""
+            let value = accessibilityValueText(object)
             let title = object.accessibilityTitle?() ?? ""
             let frame = object.accessibilityFrame?() ?? .null
             let onScreen = !frame.isNull && frame.intersects(screenWindow) && frame.width > 1 && frame.height > 1
@@ -236,7 +245,7 @@ enum DashboardSmoke {
         func walk(_ object: AnyObject, depth: Int) {
             if depth > 16 { return }
             let label = object.accessibilityLabel?() ?? ""
-            let value = (object.accessibilityValue?() as? String) ?? ""
+            let value = accessibilityValueText(object)
             let title = object.accessibilityTitle?() ?? ""
             consider(object.accessibilityFrame?() ?? .null, text: "\(label) \(value) \(title)")
             if let children = object.accessibilityChildren?() {
