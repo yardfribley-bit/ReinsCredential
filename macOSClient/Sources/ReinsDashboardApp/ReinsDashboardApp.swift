@@ -245,19 +245,10 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
         if let split = view as? NSSplitView {
             if split.frame.height > limit + 1 {
                 var frame = split.frame
-                frame.size.height = limit
-                frame.origin.y = 0
+                let parentHeight = split.superview?.bounds.height ?? limit
+                frame.size.height = min(limit, parentHeight > 2 ? parentHeight : limit)
+                if frame.origin.y < 0 || frame.maxY > parentHeight + 1 { frame.origin.y = 0 }
                 split.frame = frame
-            }
-            var ancestor = split.superview
-            while let host = ancestor, host !== host.window?.contentView {
-                if host.frame.height > limit + 1 {
-                    var frame = host.frame
-                    frame.size.height = limit
-                    frame.origin.y = 0
-                    host.frame = frame
-                }
-                ancestor = host.superview
             }
             let height = min(split.bounds.height > 2 ? split.bounds.height : limit, limit)
             if height > 2 {

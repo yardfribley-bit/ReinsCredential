@@ -172,8 +172,20 @@ enum DashboardSmoke {
         return implementation(item, selector) as? String ?? ""
     }
 
+    private static func screenFrame(of object: AnyObject, window: NSWindow) -> NSRect {
+        let reported = object.accessibilityFrame?() ?? .null
+        if !reported.isNull, reported.width > 1, reported.height > 1, reported.height <= window.frame.height + 2,
+           window.frame.contains(CGPoint(x: reported.midX, y: reported.midY)) {
+            return reported
+        }
+        guard let view = object as? NSView, let host = view.window else { return .null }
+        let local = host.convertToScreen(view.convert(view.bounds, to: nil))
+        guard local.width > 1, local.height > 1, local.height <= window.frame.height + 2,
+              window.frame.contains(CGPoint(x: local.midX, y: local.midY)) else { return .null }
+        return local
+    }
+
     private static func headingIsVisible(in view: NSView, window: NSWindow) -> Bool {
-        let screenWindow = window.frame
         func isHeading(_ text: String) -> Bool {
             text.localizedCaseInsensitiveContains("Runtime security") || text.contains("运行时安全")
                 || text.localizedCaseInsensitiveContains("Local monitor") || text.contains("本地监控")
@@ -183,9 +195,8 @@ enum DashboardSmoke {
             let label = object.accessibilityLabel?() ?? ""
             let value = accessibilityValueText(object)
             let title = object.accessibilityTitle?() ?? ""
-            let frame = object.accessibilityFrame?() ?? .null
-            let onScreen = !frame.isNull && frame.intersects(screenWindow) && frame.width > 1 && frame.height > 1
-            if onScreen && (isHeading(label) || isHeading(value) || isHeading(title)) { return true }
+            let frame = screenFrame(of: object, window: window)
+            if !frame.isNull && (isHeading(label) || isHeading(value) || isHeading(title)) { return true }
             if let children = object.accessibilityChildren?() {
                 for child in children {
                     if walk(child as AnyObject, depth: depth + 1) { return true }
@@ -247,7 +258,7 @@ enum DashboardSmoke {
             let label = object.accessibilityLabel?() ?? ""
             let value = accessibilityValueText(object)
             let title = object.accessibilityTitle?() ?? ""
-            consider(object.accessibilityFrame?() ?? .null, text: "\(label) \(value) \(title)")
+            consider(screenFrame(of: object, window: window), text: "\(label) \(value) \(title)")
             if let children = object.accessibilityChildren?() {
                 for child in children { walk(child as AnyObject, depth: depth + 1) }
             }
