@@ -78,7 +78,7 @@ make
 make check
 make integration
 
-# Client: C++ serializer interoperability + Swift model/import/store/web dashboard tests
+# Client: C++ serializer interoperability, Swift tests, and the web-dashboard executable
 macOSClient/scripts/check.sh
 
 # Local web dashboard. Loopback only. Does not start the collector.

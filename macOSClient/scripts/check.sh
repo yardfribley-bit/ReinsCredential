@@ -9,4 +9,7 @@ trap 'rm -rf "$test_dir"' EXIT
   -I "$repo_dir" "$client_dir/Tests/Interop/emit_evidence.cpp" \
   "$repo_dir/EvidenceStore.cpp" -framework CoreServices -o "$test_dir/emit-evidence"
 "$test_dir/emit-evidence" > "$test_dir/backend.jsonl"
+# The executable is not a test dependency. Build it explicitly, then run the
+# suite, which includes WebDashboardTests.
+/usr/bin/swift build --package-path "$client_dir" --product web-dashboard
 REINS_BACKEND_FIXTURE="$test_dir/backend.jsonl" /usr/bin/swift test --package-path "$client_dir" "$@"

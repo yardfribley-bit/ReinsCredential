@@ -1,5 +1,14 @@
 import Foundation
 
+enum WebUTF8 {
+    static func data(_ string: String) -> Data {
+        var data = Data()
+        data.reserveCapacity(string.utf8.count)
+        data.append(contentsOf: string.utf8)
+        return data
+    }
+}
+
 /// Loopback gate for the local evidence page. The socket is bound to
 /// 127.0.0.1, and each request is still refused unless the TCP peer and the
 /// Host header are both loopback. There is no URL token.

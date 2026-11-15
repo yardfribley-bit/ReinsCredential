@@ -301,7 +301,10 @@ final class WebDashboardTests: XCTestCase {
         }
         if connected == 0 { return true }
         if errno != EINPROGRESS { return false }
-        var pollSet = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        var pollSet = pollfd()
+        pollSet.fd = fd
+        pollSet.events = Int16(POLLOUT)
+        pollSet.revents = 0
         let waited = poll(&pollSet, nfds_t(1), 300)
         if waited <= 0 { return false }
         var error: Int32 = 0

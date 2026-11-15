@@ -82,7 +82,9 @@ public final class WebDashboardServer: @unchecked Sendable {
     private func handle(client: Int32, peer: sockaddr_in) {
         defer { Darwin.close(client) }
         _ = fcntl(client, F_SETFD, FD_CLOEXEC)
-        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        var timeout = timeval()
+        timeout.tv_sec = 2
+        timeout.tv_usec = 0
         let timeoutLength = socklen_t(MemoryLayout<timeval>.size)
         _ = setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, timeoutLength)
         _ = setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, timeoutLength)
@@ -180,7 +182,8 @@ public final class WebDashboardServer: @unchecked Sendable {
     private static func readHeaders(_ fd: Int32) -> Data {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 2048)
-        let marker = Data([13, 10, 13, 10])
+        var marker = Data()
+        marker.append(contentsOf: [UInt8(13), 10, 13, 10])
         while data.count < 8192 {
             let count = Darwin.read(fd, &buffer, min(buffer.count, 8192 - data.count))
             if count < 0 && errno == EINTR { continue }
@@ -205,9 +208,9 @@ public final class WebDashboardServer: @unchecked Sendable {
     }
 
     private static func http(status: Int, reason: String, type: String, body: String) -> Data {
-        let payload = Data(body.utf8)
+        let payload = WebUTF8.data(body)
         let header = "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(type)\r\nContent-Length: \(payload.count)\r\nCache-Control: no-store\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; script-src 'none'; base-uri 'none'; form-action 'self'\r\n\r\n"
-        var data = Data(header.utf8)
+        var data = WebUTF8.data(header)
         data.append(payload)
         return data
     }
@@ -298,7 +301,10 @@ public enum WebDashboardHTTP {
         }
         if connected != 0 {
             if errno != EINPROGRESS { throw WebDashboardError.socket("connect", errno) }
-            var pollSet = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+            var pollSet = pollfd()
+            pollSet.fd = fd
+            pollSet.events = Int16(POLLOUT)
+            pollSet.revents = 0
             let waited = poll(&pollSet, nfds_t(1), Int32(timeoutMilliseconds))
             if waited <= 0 { throw WebDashboardError.socket("connect", waited == 0 ? ETIMEDOUT : errno) }
             var error: Int32 = 0
@@ -307,14 +313,16 @@ public enum WebDashboardHTTP {
             if error != 0 { throw WebDashboardError.socket("connect", error) }
         }
         guard fcntl(fd, F_SETFL, flags) >= 0 else { throw WebDashboardError.socket("fcntl", errno) }
-        var timeout = timeval(tv_sec: timeoutMilliseconds / 1000, tv_usec: suseconds_t((timeoutMilliseconds % 1000) * 1000))
+        var timeout = timeval()
+        timeout.tv_sec = time_t(timeoutMilliseconds / 1000)
+        timeout.tv_usec = suseconds_t((timeoutMilliseconds % 1000) * 1000)
         let timeoutLength = socklen_t(MemoryLayout<timeval>.size)
         _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, timeoutLength)
         _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, timeoutLength)
         var header = "\(method) \(path) HTTP/1.1\r\nConnection: close\r\nContent-Length: 0\r\n"
         if let hostHeader { header += "Host: \(hostHeader)\r\n" }
         header += "\r\n"
-        try writeAll(fd, Data(header.utf8))
+        try writeAll(fd, WebUTF8.data(header))
         let data = try readAll(fd, limit: 8_000_000)
         guard let text = String(data: data, encoding: .utf8), let marker = text.range(of: "\r\n\r\n") else {
             throw WebDashboardError.malformedResponse

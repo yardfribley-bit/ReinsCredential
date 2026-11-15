@@ -1,3 +1,4 @@
+import EvidenceCore
 import Foundation
 
 /// Display redaction for the web page. EvidenceRedaction already hides

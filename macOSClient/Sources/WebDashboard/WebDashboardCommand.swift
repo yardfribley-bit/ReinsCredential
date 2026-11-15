@@ -56,7 +56,7 @@ public enum WebDashboardCommand {
     public static func main() -> Never {
         let args = Array(CommandLine.arguments.dropFirst())
         if args.contains("-h") || args.contains("--help") {
-            FileHandle.standardOutput.write(Data(usageText + "\n").utf8)
+            FileHandle.standardOutput.write(WebUTF8.data(usageText + "\n"))
             exit(0)
         }
         do {
@@ -71,13 +71,13 @@ public enum WebDashboardCommand {
         } catch let error as WebDashboardError {
             var message = "web-dashboard: \(error)\n"
             if case .usage = error { message += usageText + "\n" }
-            FileHandle.standardError.write(Data(message.utf8))
+            FileHandle.standardError.write(WebUTF8.data(message))
             switch error {
             case .usage: exit(2)
             default: exit(1)
             }
         } catch {
-            FileHandle.standardError.write(Data("web-dashboard: \(error)\n".utf8))
+            FileHandle.standardError.write(WebUTF8.data("web-dashboard: \(error)\n"))
             exit(1)
         }
     }
@@ -96,7 +96,7 @@ public enum WebDashboardCommand {
         只读证据日志，不启动采集。Ctrl-C 结束，或另开终端运行 web-dashboard stop --port \(server.boundPort)。
 
         """
-        FileHandle.standardOutput.write(Data(banner.utf8))
+        FileHandle.standardOutput.write(WebUTF8.data(banner))
         signal(SIGINT, SIG_IGN)
         signal(SIGTERM, SIG_IGN)
         let signals = [SIGINT, SIGTERM].map { sig -> DispatchSourceSignal in
@@ -117,6 +117,6 @@ public enum WebDashboardCommand {
             if case .socket = error { throw WebDashboardError.notRunning(port) }
             throw error
         }
-        FileHandle.standardOutput.write(Data("已停止 http://127.0.0.1:\(port)/\n".utf8))
+        FileHandle.standardOutput.write(WebUTF8.data("已停止 http://127.0.0.1:\(port)/\n"))
     }
 }

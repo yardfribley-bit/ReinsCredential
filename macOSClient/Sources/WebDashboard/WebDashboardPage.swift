@@ -1,3 +1,4 @@
+import EvidenceCore
 import Foundation
 
 struct WebBoardQuery: Equatable {
@@ -55,76 +56,77 @@ enum WebDashboardPage {
         let boardTitle = query.view == "events" ? riskTitle(query.risk) : "证据链"
         let count = query.view == "events" ? listedRecords.count : listedChains.count
         let countLabel = query.view == "events" ? "\(count) 条记录" : "\(count) 条证据链"
+        let listHTML = listMarkup(query: query, listedRecords: listedRecords, listedChains: listedChains,
+                                  selectedRecord: selectedRecord, selectedChain: selectedChain,
+                                  storeHasRecords: !snapshot.records.isEmpty, live: snapshot.live)
+        let detailHTML = query.view == "events"
+            ? eventDetail(selectedRecord)
+            : chainDetail(selectedChain, records: snapshot.records)
+        let glossary = WebHTML.text(EvidenceChainExport.glossaryText)
+        return documentHead()
+            + sidebar(snapshot: snapshot, sections: sections, total: chainPool.count, query: query)
+            + toolbar(snapshot: snapshot, query: query, boardTitle: boardTitle, countLabel: countLabel)
+            + listHTML
+            + "<p class=\"glossary\">" + glossary + "</p></main>"
+            + "<section class=\"detail\" aria-label=\"详情\">" + detailHTML + "</section></body></html>\n"
+            + "<!-- http://127.0.0.1:\(port)/ -->\n"
+    }
 
-        var body = """
-        <!DOCTYPE html>
-        <html lang="zh-Hans">
-        <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="refresh" content="2">
-        <meta name="referrer" content="no-referrer">
-        <title>ReinsCredential</title>
-        <style>
-        \(css)
-        </style>
-        </head>
-        <body>
-        <aside>
-          <header class="brand">
-            <p class="mark">ReinsCredential</p>
-            <h2>运行时安全</h2>
-            <p class="quiet">本机 Agent 监控</p>
-          </header>
-          <nav aria-label="所属 Agent">
-            <h2>所属 Agent</h2>
-            \(agentLinks(sections: sections, total: chainPool.count, query: query))
-          </nav>
-          <footer class="mode">
-            <p><strong>\(snapshot.live ? "本机实时监控" : "日志快照")</strong></p>
-            <p class="quiet">\(WebHTML.text(statusCopy(snapshot)))</p>
-            <p class="quiet">每 2 秒自动刷新。只读，不启动采集。</p>
-          </footer>
-        </aside>
-        <main>
-          <div class="toolbar">
-            \(datasetNotice(snapshot))
-            <div class="title-row">
-              <h2>\(WebHTML.escape(boardTitle))</h2>
-              <p class="count">\(WebHTML.escape(countLabel))</p>
-            </div>
-            <div class="switch" role="tablist" aria-label="视图">
-              \(viewLink("证据链", view: "chains", query: query))
-              \(viewLink("事件", view: "events", query: query))
-            </div>
-            <div class="filters">
-              \(riskLink("全部证据", risk: "all", query: query))
-              \(riskLink("高风险", risk: "high", query: query))
-              \(riskLink("中风险", risk: "medium", query: query))
-              \(riskLink("低风险", risk: "low", query: query))
-            </div>
-            <form method="get" action="/">
-              <input type="hidden" name="view" value="\(WebHTML.attr(query.view))">
-              <input type="hidden" name="agent" value="\(WebHTML.attr(query.agent))">
-              <input type="hidden" name="risk" value="\(WebHTML.attr(query.risk))">
-              <label>搜索 Agent、文件、目的地或结论
-                <input type="search" name="q" value="\(WebHTML.attr(query.search))" maxlength="200">
-              </label>
-            </form>
-            \(banners(snapshot))
-          </div>
-          \(query.view == "events"
-            ? eventList(listedRecords, selected: selectedRecord, query: query, storeHasRecords: !snapshot.records.isEmpty, live: snapshot.live)
-            : chainList(sections: listedChains.groupedByOwningAgent(), selected: selectedChain, query: query, storeHasRecords: !snapshot.records.isEmpty, live: snapshot.live))
-          <p class="glossary">\(WebHTML.text(EvidenceChainExport.glossaryText))</p>
-        </main>
-        <section class="detail" aria-label="详情">
-          \(query.view == "events" ? eventDetail(selectedRecord) : chainDetail(selectedChain, records: snapshot.records))
-        </section>
-        </body>
-        </html>
-        """
-        return body + "\n<!-- http://127.0.0.1:\(port)/ -->\n"
+    private static func documentHead() -> String {
+        "<!DOCTYPE html><html lang=\"zh-Hans\"><head><meta charset=\"utf-8\">"
+            + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            + "<meta http-equiv=\"refresh\" content=\"2\">"
+            + "<meta name=\"referrer\" content=\"no-referrer\"><title>ReinsCredential</title><style>"
+            + css
+            + "</style></head><body>"
+    }
+
+    private static func sidebar(snapshot: WebDashboardSnapshot, sections: [EvidenceChainSection], total: Int,
+                                query: WebBoardQuery) -> String {
+        let mode = snapshot.live ? "本机实时监控" : "日志快照"
+        let agents = agentLinks(sections: sections, total: total, query: query)
+        let status = WebHTML.text(statusCopy(snapshot))
+        return "<aside><header class=\"brand\"><p class=\"mark\">ReinsCredential</p><h2>运行时安全</h2>"
+            + "<p class=\"quiet\">本机 Agent 监控</p></header><nav aria-label=\"所属 Agent\"><h2>所属 Agent</h2>"
+            + agents
+            + "</nav><footer class=\"mode\"><p><strong>" + mode + "</strong></p><p class=\"quiet\">"
+            + status
+            + "</p><p class=\"quiet\">每 2 秒自动刷新。只读，不启动采集。</p></footer></aside>"
+    }
+
+    private static func toolbar(snapshot: WebDashboardSnapshot, query: WebBoardQuery, boardTitle: String,
+                                countLabel: String) -> String {
+        let chains = viewLink("证据链", view: "chains", query: query)
+        let events = viewLink("事件", view: "events", query: query)
+        let filters = riskLink("全部证据", risk: "all", query: query)
+            + riskLink("高风险", risk: "high", query: query)
+            + riskLink("中风险", risk: "medium", query: query)
+            + riskLink("低风险", risk: "low", query: query)
+        return "<main><div class=\"toolbar\">"
+            + datasetNotice(snapshot)
+            + "<div class=\"title-row\"><h2>" + WebHTML.escape(boardTitle) + "</h2><p class=\"count\">"
+            + WebHTML.escape(countLabel) + "</p></div>"
+            + "<div class=\"switch\" role=\"tablist\" aria-label=\"视图\">" + chains + events + "</div>"
+            + "<div class=\"filters\">" + filters + "</div>"
+            + "<form method=\"get\" action=\"/\">"
+            + "<input type=\"hidden\" name=\"view\" value=\"" + WebHTML.attr(query.view) + "\">"
+            + "<input type=\"hidden\" name=\"agent\" value=\"" + WebHTML.attr(query.agent) + "\">"
+            + "<input type=\"hidden\" name=\"risk\" value=\"" + WebHTML.attr(query.risk) + "\">"
+            + "<label>搜索 Agent、文件、目的地或结论<input type=\"search\" name=\"q\" value=\""
+            + WebHTML.attr(query.search) + "\" maxlength=\"200\"></label></form>"
+            + banners(snapshot)
+            + "</div>"
+    }
+
+    private static func listMarkup(query: WebBoardQuery, listedRecords: [EvidenceRecord], listedChains: [EvidenceChain],
+                                   selectedRecord: EvidenceRecord?, selectedChain: EvidenceChain?,
+                                   storeHasRecords: Bool, live: Bool) -> String {
+        if query.view == "events" {
+            return eventList(listedRecords, selected: selectedRecord, query: query,
+                             storeHasRecords: storeHasRecords, live: live)
+        }
+        return chainList(sections: listedChains.groupedByOwningAgent(), selected: selectedChain, query: query,
+                         storeHasRecords: storeHasRecords, live: live)
     }
 
     static func snapshotJSON(_ snapshot: WebDashboardSnapshot) -> String {
@@ -266,7 +268,7 @@ enum WebDashboardPage {
         if records.isEmpty { return emptyState(query: query, storeHasRecords: storeHasRecords, live: live, chainsView: false) }
         var html = "<table><thead><tr><th>风险</th><th>时间</th><th>检测项</th><th>进程 / 资源</th></tr></thead><tbody>"
         for record in records {
-            let href = query.replacing(view: "events", event: record.id.uuidString, chain: nil).url()
+            let href = query.replacing(view: "events", chain: nil, event: record.id.uuidString).url()
             let current = selected?.id == record.id ? " aria-current=\"true\"" : ""
             let process = record.summary.isEmpty ? (record.processTree.first?.name ?? "未归因") : record.summary
             let resource = record.targetResource.isEmpty ? "无文件资源" : record.targetResource

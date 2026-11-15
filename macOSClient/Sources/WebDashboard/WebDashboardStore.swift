@@ -1,5 +1,7 @@
 import Darwin
+import EvidenceCore
 import Foundation
+import RuntimeCore
 
 public struct WebDashboardSources: Sendable, Equatable {
     public var evidenceFiles: [URL]

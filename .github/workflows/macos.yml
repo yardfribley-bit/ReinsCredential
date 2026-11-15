@@ -14,7 +14,7 @@ jobs:
         run: make check
       - name: Backend integration and short-read recall
         run: make integration
-      - name: Swift client checks
+      - name: Swift client and web dashboard
         run: macOSClient/scripts/check.sh
       - name: Render evidence-chain snapshots
         run: |
