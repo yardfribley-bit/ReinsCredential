@@ -1002,7 +1002,9 @@ def live_field_rounds(directory, binary, secret, ca):
         hellos = [record for record in _closes_on(records, tls_hello_port)
                   if record.get("upload_verdict") == "not_visible" and "tls_handshake_body_not_visible" in (record.get("transfer_outcome") or "")]
         if len(hellos) != 2:
-            raise SystemExit(f"field rounds tls handshakes {len(hellos)}, want 2")
+            seen = [(record.get("upload_verdict"), record.get("evidence_basis"), record.get("transfer_outcome"))
+                    for record in _closes_on(records, tls_hello_port)]
+            raise SystemExit(f"field rounds tls handshakes {len(hellos)}, want 2; saw {seen}")
         if any(record.get("upload_verdict") == "uploaded" for record in _closes_on(records, tls_hello_port)):
             raise SystemExit("field rounds counted a handshake as uploaded")
         if any(record.get("upload_verdict") == "not_found" and "tls_handshake" in (record.get("transfer_outcome") or "") for record in records):

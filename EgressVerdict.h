@@ -117,8 +117,9 @@ constexpr uint64_t kFlowTxSlack = 65536;
 // It is not a body detector: handshake records are classified by content type.
 constexpr uint64_t kTlsHandshakeAllowance = 1024;
 // Ordinary HTTP request framing above the file. The acceptance POST is about
-// 130 bytes over a 37-byte body. A TLS ClientHello is not framing.
-constexpr uint64_t kHttpFraming = 512;
+// 130 bytes over a 37-byte body (tx_sum 167). A larger flight with no HTTP
+// flag and no application-data record is a handshake, not that POST.
+constexpr uint64_t kHttpFraming = 192;
 // Without a TLS record parse, a send this far above the file is still only a
 // handshake. The acceptance handshake is about 1615 bytes. Application data
 // in that test adds 2085 more and clears this ceiling.

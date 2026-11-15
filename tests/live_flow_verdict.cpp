@@ -364,6 +364,12 @@ int main() {
     auto handshake_holding = Seen(canary, {handshake_counter});
     handshake_holding.window_settled = false;
     assert(CloseLiveAccess(handshake_holding).defer);
+    // A few hundred bytes and no HTTP flag is a handshake, not the 167-byte POST.
+    const auto small_tls = CloseLiveAccess(Seen(canary, {Tcp("192.168.1.11:54831", 0, 400, true)}));
+    assert(small_tls.verdict == UploadVerdict::NotVisible);
+    assert(small_tls.verdict != UploadVerdict::Uploaded);
+    assert(small_tls.verdict != UploadVerdict::NotFound);
+    assert(small_tls.transfer_outcome == "tls_handshake_body_not_visible");
     // The acceptance POST is HTTP-sized and still uploads.
     const auto short_post = CloseLiveAccess(Seen(canary, {Tcp("192.168.1.11:54629", 0, 167, true)}));
     assert(short_post.verdict == UploadVerdict::Uploaded);
