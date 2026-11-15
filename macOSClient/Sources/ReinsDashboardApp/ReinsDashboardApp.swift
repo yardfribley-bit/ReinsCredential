@@ -116,6 +116,7 @@ final class DashboardAppDelegate: NSObject, NSApplicationDelegate {
                 forKey: "NSSplitView Subview Frames SidebarNavigationSplitView")
         }
         SplitWriteGuard.install()
+        SplitFrameCap.install()
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -334,6 +335,53 @@ extension UserDefaults {
             if result.changed { stored = result.stored }
         }
         reins_setObject(stored, forKey: key)
+    }
+}
+
+/// Rejects a split-column frame taller than the hosting window at the moment
+/// AppKit or SwiftUI assigns it. The stored defaults key is a separate path.
+enum SplitFrameCap {
+    private static var installed = false
+
+    static func install() {
+        guard !installed else { return }
+        guard swizzle("setFrame:", "reins_setFrame:"), swizzle("setFrameSize:", "reins_setFrameSize:") else { return }
+        installed = true
+    }
+
+    private static func swizzle(_ originalName: String, _ replacementName: String) -> Bool {
+        let cls: AnyClass = NSView.self
+        guard let original = class_getInstanceMethod(cls, NSSelectorFromString(originalName)),
+              let replacement = class_getInstanceMethod(cls, NSSelectorFromString(replacementName)) else { return false }
+        method_exchangeImplementations(original, replacement)
+        return true
+    }
+
+    static func capped(_ frame: NSRect, view: NSView) -> NSRect {
+        let inSplit = view is NSSplitView || view.superview is NSSplitView
+        guard inSplit else { return frame }
+        let window = view.window ?? view.superview?.window
+        guard let window, window.canBecomeMain, window.frame.height > 2 else { return frame }
+        let content = window.contentLayoutRect.height
+        let limit = min(window.frame.height, content > 2 ? content : window.frame.height)
+        guard frame.height > limit + 1 else { return frame }
+        var frame = frame
+        frame.size.height = limit
+        return frame
+    }
+}
+
+extension NSView {
+    @objc(reins_setFrame:)
+    func reins_setFrame(_ frame: NSRect) {
+        reins_setFrame(SplitFrameCap.capped(frame, view: self))
+    }
+
+    @objc(reins_setFrameSize:)
+    func reins_setFrameSize(_ size: NSSize) {
+        var next = frame
+        next.size = size
+        reins_setFrameSize(SplitFrameCap.capped(next, view: self).size)
     }
 }
 
