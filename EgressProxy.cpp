@@ -734,7 +734,9 @@ struct Session {
         proc.known = true;
         proc.identity = node.identity;
         proc.root = root;
-        proc.actor = actor;
+        const bool incoming_app = actor.owning_agent && !actor.owning_agent->bundle.empty();
+        const bool have_app = proc.actor.owning_agent && !proc.actor.owning_agent->bundle.empty();
+        if (!have_app || incoming_app) proc.actor = actor;
         // A dying process can fail one descriptor listing. That must not erase
         // an earlier complete listing, or a measured small send becomes 看不到.
         const bool listing_ok = activity.descriptors_complete && activity.identity_validated;
