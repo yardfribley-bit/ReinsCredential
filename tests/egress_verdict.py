@@ -938,14 +938,17 @@ def live_field_rounds(directory, binary, secret, ca):
                 ("loopback", [str(binary), "short", str(secret), "127.0.0.1", str(loop_server.port), str(directory / "go")], "not_found"),
                 ("post-a", [str(binary), "short", str(secret), host, str(http_server.port), str(directory / "go")], "uploaded"),
                 ("post-b", [str(binary), "short", str(secret), host, str(http_server.port), str(directory / "go")], "uploaded"),
-                ("tls-body", [sys.executable, str(script), str(secret), host, str(tls_body_port), "tls-body"], "uploaded"),
-                ("tls-hello", [sys.executable, str(script), str(secret), host, str(tls_hello_port), "tls-hello"], "not_visible"),
+                ("tls-body", [sys.executable, str(script), str(secret), host, str(tls_body_port), "tls-body", str(directory / "go")], "uploaded"),
+                ("tls-hello", [sys.executable, str(script), str(secret), host, str(tls_hello_port), "tls-hello", str(directory / "go")], "not_visible"),
             ]
             for index, (name, command, _kind) in enumerate(steps):
                 ready = directory / "go"
-                ready.write_text("go\n")
+                if ready.exists():
+                    ready.unlink()
                 before = log.read_text() if log.exists() else ""
                 agent = subprocess.Popen(command)
+                time.sleep(0.4)
+                ready.write_text("go\n")
                 try:
                     agent.wait(timeout=8)
                 except subprocess.TimeoutExpired:
@@ -999,10 +1002,16 @@ def live_field_rounds(directory, binary, secret, ca):
 
 
 FIELD_CASE = """import os, socket, ssl, sys, time
-path, host, port_text, kind = sys.argv[1:]
+path, host, port_text, kind = sys.argv[1:5]
+ready = sys.argv[5] if len(sys.argv) > 5 else ""
 port = int(port_text)
 held = os.open(path, os.O_RDONLY)
 try:
+    if ready:
+        for _ in range(80):
+            if os.path.exists(ready):
+                break
+            time.sleep(0.05)
     body = open(path, "rb").read()
     raw = socket.create_connection((host, port), timeout=5)
     if kind == "tls-hello":
