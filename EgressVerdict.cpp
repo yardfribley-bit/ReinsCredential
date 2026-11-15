@@ -361,7 +361,9 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
                 body_note = ";handshake_tx=" + std::to_string(handshake_tx) +
                     ";tls_app_bytes=" + std::to_string(flow.tls_app_bytes);
             }
-        } else if (flow.failed && !attempt && delta < lower) {
+        } else if (!flow.established && !flow.loopback && delta < lower && !attempt) {
+            // SYN_SENT and a refused connect are attempts. Port 443 does not
+            // turn a connect that sent no bytes into a TLS handshake.
             attempt = &flow;
         }
     }
@@ -462,7 +464,8 @@ LiveClose CloseLiveAccess(const LiveAccessView& view) {
     if (measured_offhost && measured_offhost->kind == LiveFlowKind::TcpMeasured &&
         !measured_offhost->plaintext_http &&
         !(measured_offhost->tls_app_data && measured_offhost->tls_app_bytes > 0) &&
-        (measured_offhost->tls_handshake || TlsShaped(*measured_offhost) ||
+        (measured_offhost->tls_handshake ||
+         (TlsShaped(*measured_offhost) && TxDelta(*measured_offhost) > 0) ||
          InUnparsedHandshakeBand(view.file_bytes, TxDelta(*measured_offhost))) &&
         !(measured_offhost->preexisting && TxDelta(*measured_offhost) == 0)) {
         result.verdict = UploadVerdict::NotVisible;
