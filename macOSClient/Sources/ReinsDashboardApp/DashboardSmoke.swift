@@ -162,7 +162,7 @@ enum DashboardSmoke {
     private static func contentPixels(_ view: NSView) throws -> Pixels {
         let width = Int(view.bounds.width.rounded(.down))
         let height = Int(view.bounds.height.rounded(.down))
-        guard width > 300, height > 200,
+        guard width > 40, height > 40,
               let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
                                           bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                           colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
